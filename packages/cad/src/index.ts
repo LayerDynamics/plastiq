@@ -81,3 +81,12 @@ export {
   initSketchSolver,
   solveSketch,
 } from "./sketch/solver.js";
+export {
+  type ComponentPose,
+  type MateRef,
+  type Mate,
+  type JointKind,
+  type AssemblyVerdict,
+  type MateSolveResult,
+  solveMates,
+} from "./assembly/solver.js";
