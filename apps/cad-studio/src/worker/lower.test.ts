@@ -1,5 +1,5 @@
 import { beforeAll, describe, expect, it } from "vitest";
-import { initOcct, isSimManifest, makeBox, mm, type Occt, type Solid } from "@mechx/cad";
+import { initOcct, isSimManifest, makeBox, mm, type Occt, type Solid } from "@plastiq/cad";
 import { lowerAssembly } from "./lower.js";
 import type { AssemblyModel } from "../assembly/model.js";
 

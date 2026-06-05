@@ -1,4 +1,4 @@
-// Geometry Web Worker (SPEC-5 FR-5): runs @mechx/cad (opencascade.js) off the
+// Geometry Web Worker (SPEC-5 FR-5): runs @plastiq/cad (opencascade.js) off the
 // main thread. It lazily inits OCCT, then on each build request rebuilds the
 // document's feature tree, tags its tessellation (FR-6), and posts the result
 // back as transferable typed arrays so the UI thread never blocks on OCCT.
@@ -11,7 +11,7 @@ import {
   initOcct,
   type Occt,
   type TaggedMesh,
-} from "@mechx/cad";
+} from "@plastiq/cad";
 import { rebuildDocument, rebuildTagged } from "./rebuild.js";
 import { lowerAssembly } from "./lower.js";
 import type { TransferMesh, WorkerRequest, WorkerResponse } from "./protocol.js";

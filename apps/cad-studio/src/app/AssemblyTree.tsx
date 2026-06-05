@@ -6,7 +6,7 @@
 import { useState } from "react";
 import { useCadStore } from "../store/store.js";
 import type { AssemblyMate } from "../assembly/model.js";
-import type { JointKind } from "@mechx/cad";
+import type { JointKind } from "@plastiq/cad";
 
 const MATE_KINDS: AssemblyMate["kind"][] = [
   "coincident",

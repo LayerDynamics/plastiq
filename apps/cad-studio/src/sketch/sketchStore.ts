@@ -6,7 +6,7 @@
 // round-trip.
 
 import { create } from "zustand";
-import { solveSketch, type SolveResult } from "@mechx/cad";
+import { solveSketch, type SolveResult } from "@plastiq/cad";
 import { centeredView, type View2D } from "./transform2d.js";
 import { buildConstraints, type ConstraintKind } from "./hit.js";
 import { buildDimension, measure, type DimensionKind } from "./dim.js";

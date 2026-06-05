@@ -1,12 +1,12 @@
-// Native↔wasm cross-target parity — a BONUS check, no longer a requirement.
+// Frozen-wasm determinism regression guard (formerly native↔wasm parity).
 //
 // SPEC-3 (ADR-0011) moved the sim to f64 and made the client render-only (D-5),
-// so cross-target bit-identity is not required — same-binary reproducibility is
-// (see crates/sim/tests/determinism.rs). But disciplined f64 (IEEE +−×÷, libm
-// transcendentals, no FMA contraction) is in fact bit-identical native↔wasm, so
-// this gate still passes and we keep it as a free signal. If it ever diverges,
-// demote it (tolerance) rather than block — only same-binary repro is binding.
-// Both sides are checked against the one shared golden fixture.
+// so cross-target bit-identity is not required — same-binary reproducibility is.
+// In Plastiq the sim is a FROZEN PREBUILT wasm (no Rust crates), so there is no
+// native side to compare against; instead we keep the original golden snapshot
+// (copied from the monorepo's crates/sim/tests/fixtures) vendored under
+// packages/sim/test/fixtures and assert the frozen wasm still reproduces it
+// byte-for-byte — a determinism/regression guard on the vendored binary itself.
 
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -17,9 +17,10 @@ import { initSim, PredictionSim, type InputSample } from "./index.js";
 
 // Vitest runs with the repo root as cwd (root vitest.config.ts).
 const WASM_PATH = resolve(process.cwd(), "packages/sim/src/pkg/mechx_sim_bg.wasm");
-const GOLDEN_PATH = resolve(process.cwd(), "crates/sim/tests/fixtures/golden_snapshot.bin");
+const GOLDEN_PATH = resolve(process.cwd(), "packages/sim/test/fixtures/golden_snapshot.bin");
 
-// Must match `crates/sim/tests/golden.rs` exactly.
+// Mirrors the monorepo's `crates/sim/tests/golden.rs` parameters exactly (the
+// fixture was generated there; the frozen wasm must still reproduce it).
 const TICKS = 300;
 const SEED = 0x004d_4543_4858n;
 

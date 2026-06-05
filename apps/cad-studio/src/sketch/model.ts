@@ -7,7 +7,7 @@
 // Geometry is derived: the solved point positions feed `rebuild.ts`'s profile
 // (line/arc/circle wire), never stored as a dumb polyline.
 
-import type { Constraint as SolverConstraint, SolverPoint } from "@mechx/cad";
+import type { Constraint as SolverConstraint, SolverPoint } from "@plastiq/cad";
 
 export type DatumPlaneId = "XY" | "XZ" | "YZ";
 

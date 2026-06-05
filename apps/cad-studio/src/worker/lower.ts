@@ -19,7 +19,7 @@ import {
   type Solid,
   type JointBinding,
   type SimManifest,
-} from "@mechx/cad";
+} from "@plastiq/cad";
 import type { AssemblyModel, Vec3 } from "../assembly/model.js";
 
 const DEFAULT_MATERIAL = "structural-steel";

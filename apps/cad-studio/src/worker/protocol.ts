@@ -1,8 +1,8 @@
 // Geometry worker RPC protocol (SPEC-5 FR-5). The main thread posts a build
-// request with the document; the worker rebuilds it through @mechx/cad and posts
+// request with the document; the worker rebuilds it through @plastiq/cad and posts
 // back a tagged mesh in transferable typed-array form (or a typed error).
 
-import type { FaceGroup, SimManifest } from "@mechx/cad";
+import type { FaceGroup, SimManifest } from "@plastiq/cad";
 import type { CadDocument } from "../store/types.js";
 
 type Vec3 = [number, number, number];

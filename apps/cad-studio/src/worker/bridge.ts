@@ -3,7 +3,7 @@
 // SimManifest (M4.5). Concurrent calls are matched by request id.
 
 import GeometryWorker from "./geometry.worker.js?worker";
-import type { SimManifest } from "@mechx/cad";
+import type { SimManifest } from "@plastiq/cad";
 import type { CadDocument } from "../store/types.js";
 import type { ExportFormat, TransferMesh, WorkerResponse } from "./protocol.js";
 

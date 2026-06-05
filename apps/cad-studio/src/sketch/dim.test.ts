@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { solveSketch } from "@mechx/cad";
+import { solveSketch } from "@plastiq/cad";
 import { buildDimension, canDimension, measure } from "./dim.js";
 import { toSolverInput, type SketchModel } from "./model.js";
 

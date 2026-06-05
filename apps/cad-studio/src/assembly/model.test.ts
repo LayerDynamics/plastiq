@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { solveMates } from "@mechx/cad";
+import { solveMates } from "@plastiq/cad";
 import {
   applyJointDrives,
   driveJoint,

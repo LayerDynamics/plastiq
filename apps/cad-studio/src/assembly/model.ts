@@ -8,7 +8,7 @@
 // M1.3 Euler placement. `toAssemblyInput` bridges this id-based model to the
 // kernel's index-based solveMates input.
 
-import type { ComponentPose, JointKind, Mate, MateRef } from "@mechx/cad";
+import type { ComponentPose, JointKind, Mate, MateRef } from "@plastiq/cad";
 
 export type Vec3 = [number, number, number];
 export type Quat = [number, number, number, number]; // x,y,z,w

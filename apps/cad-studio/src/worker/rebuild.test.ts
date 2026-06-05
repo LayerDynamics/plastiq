@@ -1,5 +1,5 @@
 import { beforeAll, describe, expect, it } from "vitest";
-import { exportStep, initOcct, makeBox, mm, type Occt, type Solid } from "@mechx/cad";
+import { exportStep, initOcct, makeBox, mm, type Occt, type Solid } from "@plastiq/cad";
 import type { CadDocument } from "../store/types.js";
 import type { Profile } from "../sketch/profile.js";
 import { rebuildDocument, rebuildTagged } from "./rebuild.js";

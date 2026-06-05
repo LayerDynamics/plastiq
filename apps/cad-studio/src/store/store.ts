@@ -5,8 +5,8 @@
 // and persistence (M5) layer on top of these reducers.
 
 import { create } from "zustand";
-import { solveMates, type EdgeRef, type FaceRef, type MateSolveResult } from "@mechx/cad";
-import type { JointKind } from "@mechx/cad";
+import { solveMates, type EdgeRef, type FaceRef, type MateSolveResult } from "@plastiq/cad";
+import type { JointKind } from "@plastiq/cad";
 import {
   emptyAssembly,
   localToWorld,

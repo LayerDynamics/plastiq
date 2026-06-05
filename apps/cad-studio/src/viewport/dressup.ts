@@ -5,7 +5,7 @@
 //
 // Pure functions over picks + SelectionRefs, so they unit-test in Node.
 
-import type { EdgeRef, FaceRef, SpinePath } from "@mechx/cad";
+import type { EdgeRef, FaceRef, SpinePath } from "@plastiq/cad";
 import type { NewFeature } from "../store/store.js";
 import type { SelectionRefs } from "../store/store.js";
 import type { Pick } from "../store/types.js";

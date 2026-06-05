@@ -1,5 +1,5 @@
 // Feature-tree → solid evaluation (SPEC-5). Replays an editor document's feature
-// list through the @mechx/cad kernel into one Solid, then tags its tessellation
+// list through the @plastiq/cad kernel into one Solid, then tags its tessellation
 // (FR-6) for the viewport. This is the editor's deterministic "rebuild"; it runs
 // inside the geometry worker (FR-5) but is a pure function of (oc, document) so
 // it is unit-tested in Node with real OCCT.
@@ -44,7 +44,7 @@ import {
   type Solid,
   type TaggedMesh,
   type TessellateOptions,
-} from "@mechx/cad";
+} from "@plastiq/cad";
 import type { CadDocument, EditorFeature } from "../store/types.js";
 import { extractProfile, isProfile, type Profile } from "../sketch/profile.js";
 import type { SketchModel } from "../sketch/model.js";
