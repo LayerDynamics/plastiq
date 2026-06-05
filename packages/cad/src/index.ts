@@ -70,3 +70,14 @@ export {
   circularPattern,
 } from "./action/index.js";
 export { type SpinePath, type SpineSegment, buildSpineWire } from "./sketch/spine.js";
+
+// R5 — sketch constraint solver (planegcs) + 3D assembly mate solver.
+export {
+  type SolverPoint,
+  type SolverCircle,
+  type Constraint,
+  type SketchVerdict,
+  type SolveResult,
+  initSketchSolver,
+  solveSketch,
+} from "./sketch/solver.js";
