@@ -11,6 +11,7 @@
   },
   "dependencies": {
     "@dimforge/rapier3d": "^0.19.3",
+    "@dimforge/rapier3d-compat": "^0.19.3",
     "ammojs-typed": "^1.0.6",
     "cannon-es": "^0.20.0"
   }
