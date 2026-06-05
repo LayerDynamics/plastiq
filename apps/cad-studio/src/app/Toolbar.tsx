@@ -218,11 +218,16 @@ function DressUpMenu(): React.JSX.Element {
   const picks = useCadStore((s) => s.picks);
   const refs = useCadStore((s) => s.selectionRefs);
   const addFeature = useCadStore((s) => s.addFeature);
+  const setStatus = useCadStore((s) => s.setStatus);
 
   const edgeCount = picks.filter((p) => p.kind === "edge").length;
   const faceCount = picks.filter((p) => p.kind === "face").length;
-  const apply = (f: NewFeature | null): void => {
+  // A builder returns null when the current selection can't be turned into the
+  // feature (e.g. picked edges/faces didn't resolve). Surface that instead of
+  // silently doing nothing (CADStudio.md §5.5).
+  const apply = (f: NewFeature | null, what: string): void => {
     if (f) addFeature(f);
+    else setStatus(`${what}: select the edges/faces it needs first`);
   };
   const btn =
     "rounded px-1.5 py-0.5 text-xs text-[#9ab] enabled:hover:bg-[#1b2230] disabled:opacity-40";
@@ -238,7 +243,7 @@ function DressUpMenu(): React.JSX.Element {
         className={btn}
         disabled={edgeCount === 0}
         title="Fillet selected edges"
-        onClick={() => apply(filletFeature(picks, refs, FILLET_R))}
+        onClick={() => apply(filletFeature(picks, refs, FILLET_R), "Fillet")}
       >
         Fillet
       </button>
@@ -247,7 +252,7 @@ function DressUpMenu(): React.JSX.Element {
         className={btn}
         disabled={edgeCount === 0}
         title="Chamfer selected edges"
-        onClick={() => apply(chamferFeature(picks, refs, CHAMFER_D))}
+        onClick={() => apply(chamferFeature(picks, refs, CHAMFER_D), "Chamfer")}
       >
         Chamfer
       </button>
@@ -256,7 +261,7 @@ function DressUpMenu(): React.JSX.Element {
         className={btn}
         disabled={faceCount === 0}
         title="Shell, opening selected faces"
-        onClick={() => apply(shellFeature(picks, refs, SHELL_T))}
+        onClick={() => apply(shellFeature(picks, refs, SHELL_T), "Shell")}
       >
         Shell
       </button>
@@ -265,7 +270,7 @@ function DressUpMenu(): React.JSX.Element {
         className={btn}
         disabled={faceCount === 0}
         title="Draft the selected face"
-        onClick={() => apply(draftFeature(picks, refs, DRAFT_A))}
+        onClick={() => apply(draftFeature(picks, refs, DRAFT_A), "Draft")}
       >
         Draft
       </button>
@@ -273,7 +278,7 @@ function DressUpMenu(): React.JSX.Element {
         type="button"
         className={btn}
         title="Two-sided pad of the active profile"
-        onClick={() => apply(extrudeTwoSidedFeature(0.02, 0.02))}
+        onClick={() => apply(extrudeTwoSidedFeature(0.02, 0.02), "Pad")}
       >
         Pad±
       </button>
@@ -282,7 +287,7 @@ function DressUpMenu(): React.JSX.Element {
         className={btn}
         disabled={faceCount === 0}
         title="Extrude the active profile up to the selected face"
-        onClick={() => apply(extrudeToFaceFeature(picks, refs))}
+        onClick={() => apply(extrudeToFaceFeature(picks, refs), "Extrude to face")}
       >
         Ext→Face
       </button>
@@ -291,7 +296,7 @@ function DressUpMenu(): React.JSX.Element {
         className={btn}
         disabled={edgeCount === 0}
         title="Extrude the active profile along the selected edge"
-        onClick={() => apply(extrudeAlongEdgeFeature(picks, refs, 0.02))}
+        onClick={() => apply(extrudeAlongEdgeFeature(picks, refs, 0.02), "Extrude along edge")}
       >
         Ext∥Edge
       </button>
@@ -325,6 +330,19 @@ function CombineMenu(): React.JSX.Element {
         }
       >
         Pattern
+      </button>
+      <button
+        type="button"
+        className={btn}
+        title="Circular pattern about Z (full turn)"
+        onClick={() =>
+          addFeature({
+            type: "circularPattern",
+            params: { az: 1, count: 4, angle: Math.PI * 2 },
+          })
+        }
+      >
+        Circular
       </button>
       <button
         type="button"

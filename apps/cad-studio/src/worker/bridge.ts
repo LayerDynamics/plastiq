@@ -15,34 +15,55 @@ export interface LowerOutcome {
   localCom: [number, number, number];
 }
 
+/** A hung OCCT op should fail, not block the UI forever (CADStudio.md §5.6). The
+ *  default is generous: the first build also pays the ~50MB OCCT wasm load. */
+const DEFAULT_TIMEOUT_MS = 120_000;
+
+interface Pending {
+  resolve: (res: WorkerResponse) => void;
+  reject: (e: Error) => void;
+  timer: ReturnType<typeof setTimeout>;
+  op: string;
+}
+
 export class GeometryClient {
   private readonly worker: Worker;
+  private readonly timeoutMs: number;
   private seq = 0;
-  private readonly pending = new Map<
-    number,
-    { resolve: (res: WorkerResponse) => void; reject: (e: Error) => void }
-  >();
+  private readonly pending = new Map<number, Pending>();
 
-  constructor() {
-    this.worker = new GeometryWorker();
+  /** `worker` is injectable for tests; defaults to the real geometry worker. */
+  constructor(opts?: { worker?: Worker; timeoutMs?: number }) {
+    this.worker = opts?.worker ?? new GeometryWorker();
+    this.timeoutMs = opts?.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     this.worker.onmessage = (ev: MessageEvent<WorkerResponse>): void => {
       const res = ev.data;
       const p = this.pending.get(res.id);
       if (!p) return;
+      clearTimeout(p.timer);
       this.pending.delete(res.id);
       if (res.ok) p.resolve(res);
       else p.reject(new Error(res.error));
     };
     this.worker.onerror = (e: ErrorEvent): void => {
-      for (const [, p] of this.pending) p.reject(new Error(e.message));
+      for (const [, p] of this.pending) {
+        clearTimeout(p.timer);
+        p.reject(new Error(e.message));
+      }
       this.pending.clear();
     };
   }
 
   private send(message: Record<string, unknown>): Promise<WorkerResponse> {
     const id = ++this.seq;
+    const op = String(message["op"] ?? "?");
     return new Promise((resolve, reject) => {
-      this.pending.set(id, { resolve, reject });
+      const timer = setTimeout(() => {
+        if (this.pending.delete(id)) {
+          reject(new Error(`geometry worker timed out after ${this.timeoutMs}ms (op: ${op})`));
+        }
+      }, this.timeoutMs);
+      this.pending.set(id, { resolve, reject, timer, op });
       this.worker.postMessage({ ...message, id });
     });
   }
@@ -68,6 +89,7 @@ export class GeometryClient {
   }
 
   dispose(): void {
+    for (const [, p] of this.pending) clearTimeout(p.timer);
     this.worker.terminate();
     this.pending.clear();
   }

@@ -1,8 +1,9 @@
 // Feature-tree panel (SPEC-5 FR-3/FR-22/FR-27): the editable build history.
 // Renders the document's features in rebuild order with a per-type icon,
 // click-to-select (synced to the 3D selection), double-click-to-rename, inline
-// hover actions, status badges (suppressed / errored), drag-free reorder, and a
-// right-click CONTEXT MENU (edit / suppress / roll back / delete — FR-27).
+// hover actions, status badges (suppressed / errored), keyboard/arrow-button
+// reorder (no drag-and-drop), and a right-click CONTEXT MENU (edit / suppress /
+// roll back / delete — FR-27).
 
 import { useEffect, useState } from "react";
 import { useCadStore } from "../store/store.js";

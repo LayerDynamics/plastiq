@@ -752,6 +752,9 @@ export class SceneController {
     if (w === 0 || h === 0) return;
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
+    // Re-apply devicePixelRatio so moving to a different-density monitor stays
+    // crisp (it can change without a code path other than a resize; §5.8).
+    this.renderer.setPixelRatio(globalThis.devicePixelRatio || 1);
     this.renderer.setSize(w, h, false);
   }
 
