@@ -1,0 +1,17 @@
+{
+  "name": "mechx-sim-wasm",
+  "type": "module",
+  "description": "WebAssembly bindings exposing mechx-sim to the client for prediction.",
+  "version": "0.1.0",
+  "license": "UNLICENSED",
+  "files": [
+    "mechx_sim_bg.wasm",
+    "mechx_sim.js",
+    "mechx_sim.d.ts"
+  ],
+  "main": "mechx_sim.js",
+  "types": "mechx_sim.d.ts",
+  "sideEffects": [
+    "./snippets/*"
+  ]
+}

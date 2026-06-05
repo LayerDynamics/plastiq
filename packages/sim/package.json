@@ -1,0 +1,15 @@
+{
+  "name": "@plastiq/sim",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "description": "Frozen prebuilt WASM deterministic sim (mechx-sim-wasm) for client-side prediction. Vendored as a binary artifact; NOT rebuilt in this repo (no Rust crates).",
+  "devDependencies": {
+    "@types/node": "^25.9.1"
+  }
+}
