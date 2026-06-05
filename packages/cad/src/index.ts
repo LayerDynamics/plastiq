@@ -56,4 +56,9 @@ export {
   mirror,
   extrude,
   revolve,
+  type DraftOptions,
+  fillet,
+  chamfer,
+  shell,
+  draft,
 } from "./action/index.js";
