@@ -18,7 +18,7 @@ export interface RecoverySnapshot {
   savedAt: number;
 }
 
-const KEY = "cad-studio:recovery";
+const KEY = "plastiq:recovery";
 
 interface KeyValue {
   getItem(k: string): string | null;

@@ -4,7 +4,7 @@
 
 import type { BlobStore } from "./types.js";
 
-const DB_NAME = "mechx-cad-studio";
+const DB_NAME = "plastiq-cad-studio";
 const STORE = "kv";
 const KEY = "project-db";
 

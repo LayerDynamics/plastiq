@@ -1,10 +1,10 @@
 // Assembly → SimManifest lowering (SPEC-5 M4.5, FR-35). Maps the editor's
-// AssemblyModel onto the EXISTING, tested SPEC-4 lowering path (Component
-// hierarchy → exportForSim + lowerJoints) — it does NOT author a new manifest
-// format. Every instance becomes one body posed into the COM frame; lowerable
-// joints (revolute → hinge, fixed → fixed) become constraints; non-lowerable
-// kinds (prismatic/cylindrical/ball/planar) are skipped with a logged note (no
-// mechx_sim V1 equivalent, Q8). Runs in the geometry worker (needs OCCT).
+// AssemblyModel onto the @plastiq/cad lowering path (Component hierarchy →
+// exportForSim + lowerJoints). Every instance becomes one body posed into the
+// COM frame; lowerable joints (revolute → hinge, fixed → fixed) become
+// constraints; non-lowerable kinds (prismatic/cylindrical/ball/planar) are
+// skipped with a logged note (no physics-layer equivalent). Runs in the geometry
+// worker (needs OCCT).
 
 import {
   Component,
@@ -27,7 +27,7 @@ const DEFAULT_MATERIAL = "structural-steel";
 /** Result of a lowering attempt: the manifest + any joints that couldn't lower. */
 export interface LowerResult {
   manifest: SimManifest;
-  /** Joint ids skipped because their kind has no mechx_sim V1 equivalent. */
+  /** Joint ids skipped because their kind has no physics-layer equivalent. */
   skippedJoints: string[];
   /** The shared part's local centre of mass (for the simulate render-back). */
   localCom: Vec3;

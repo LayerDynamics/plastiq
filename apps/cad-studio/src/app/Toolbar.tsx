@@ -523,7 +523,7 @@ export function Toolbar(): React.JSX.Element {
       aria-label="Editor toolbar"
       className="flex items-center gap-3 border-b border-[#222a36] bg-black/40 px-3 py-2"
     >
-      <span className="text-sm font-bold text-[#dfe]">MechX CAD Studio</span>
+      <span className="text-sm font-bold text-[#dfe]">Plastiq</span>
       <div className="mx-1 h-4 w-px bg-[#2a3444]" />
       <ProjectsMenu />
       <div className="mx-1 h-4 w-px bg-[#2a3444]" />

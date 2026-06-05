@@ -286,7 +286,7 @@ function ExportToSim(): React.JSX.Element {
       data-testid="export-sim"
       onClick={() => void onExport()}
       className="mt-2 w-full rounded border border-[#3a6b3a] bg-[#1c2a14] px-2 py-1 text-[11px] text-[#cfe6a0] hover:bg-[#24341a]"
-      title="Lower the assembly to a mechx_sim manifest"
+      title="Lower the assembly to a physics sim manifest"
     >
       ⤓ Export to Sim
     </button>

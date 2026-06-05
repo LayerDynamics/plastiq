@@ -1,5 +1,5 @@
 // In-editor Simulate (SPEC-5 M6.1, FR-41). Spawns the model's SimManifest into
-// the in-browser mechx_sim (@plastiq/sim) and steps it under gravity; each frame
+// the in-browser physics engine (@plastiq/sim) and steps it under gravity; each frame
 // the live body poses are mapped back to the render groups. This is transient
 // VIEW state — it never writes to the document, so "return to edit" is just
 // re-deriving the render from the (untouched) document.
