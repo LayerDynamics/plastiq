@@ -1,0 +1,157 @@
+// Tagged tessellation — mesh a solid into ONE buffer partitioned into per-face
+// render groups, plus per-edge polylines and per-corner points, each carrying a
+// persistent signature (face outward normal; edge's two adjacent-face normals).
+//
+// Built directly on OCCT (BRepMesh_IncrementalMesh + BRep_Tool.Triangulation).
+// All OCCT temporaries are freed; the only retained data is plain JS arrays.
+
+import type { TopoDS_Edge, TopoDS_Shape } from "opencascade.js";
+
+import type { Occt } from "../oc/init.js";
+import type { Solid } from "../solid/solid.js";
+import {
+  MESH_PURPOSE,
+  adjacentFaceNormals,
+  nodeWorld,
+  normalFromTriangulation,
+  shapeEnums,
+} from "./normals.js";
+import type {
+  FaceGroup,
+  TaggedEdge,
+  TaggedMesh,
+  TessellateOptions,
+  VertexPoint,
+} from "./tagged.js";
+
+const DEFAULT_DEFLECTION = 1e-4; // 0.1 mm
+const DEFAULT_ANGULAR = 0.5;
+
+/** Discretize an edge into a flat world-space polyline `[x,y,z, …]`. */
+function discretizeEdge(oc: Occt, edge: TopoDS_Edge, deflection: number): number[] {
+  const curve = new oc.BRepAdaptor_Curve_2(edge);
+  const sampler = new oc.GCPnts_UniformDeflection_2(curve, deflection, false);
+  const positions: number[] = [];
+  if (sampler.IsDone() && sampler.NbPoints() >= 2) {
+    const n = sampler.NbPoints();
+    for (let i = 1; i <= n; i++) {
+      const p = sampler.Value(i);
+      positions.push(p.X(), p.Y(), p.Z());
+      p.delete();
+    }
+  } else {
+    // Degenerate sampler: fall back to the curve endpoints.
+    const u0 = curve.FirstParameter();
+    const u1 = curve.LastParameter();
+    for (const u of [u0, u1]) {
+      const p = curve.Value(u);
+      positions.push(p.X(), p.Y(), p.Z());
+      p.delete();
+    }
+  }
+  sampler.delete();
+  curve.delete();
+  return positions;
+}
+
+/**
+ * Tessellate `solid` into a tagged mesh. The solid is meshed in place (OCCT
+ * caches the triangulation on the shape); only plain-JS arrays are returned.
+ */
+export function tessellateTagged(
+  oc: Occt,
+  solid: Solid,
+  opts?: TessellateOptions,
+): TaggedMesh {
+  const deflection = opts?.deflection ?? DEFAULT_DEFLECTION;
+  const angular = opts?.angularDeflection ?? DEFAULT_ANGULAR;
+  const shape: TopoDS_Shape = solid.shape;
+
+  const mesher = new oc.BRepMesh_IncrementalMesh_2(shape, deflection, false, angular, false);
+  mesher.delete();
+
+  const vertices: number[] = [];
+  const indices: number[] = [];
+  const faceGroups: FaceGroup[] = [];
+
+  // --- Faces: per-face render groups + outward-normal signature.
+  const S = shapeEnums(oc);
+  const fexp = new oc.TopExp_Explorer_2(shape, S.TopAbs_FACE, S.TopAbs_SHAPE);
+  let faceId = 0;
+  for (; fexp.More(); fexp.Next()) {
+    const face = oc.TopoDS.Face_1(fexp.Current());
+    const loc = new oc.TopLoc_Location_1();
+    const handle = oc.BRep_Tool.Triangulation(face, loc, MESH_PURPOSE);
+    if (handle.IsNull()) {
+      handle.delete();
+      loc.delete();
+      face.delete();
+      continue;
+    }
+    const tri = handle.get();
+    const identity = loc.IsIdentity();
+    const trsf = loc.Transformation();
+    const reversed = face.Orientation_1() === oc.TopAbs_Orientation.TopAbs_REVERSED;
+
+    const base = vertices.length / 3;
+    const nbNodes = tri.NbNodes();
+    for (let i = 1; i <= nbNodes; i++) {
+      const w = nodeWorld(tri, i, identity, trsf);
+      vertices.push(w[0], w[1], w[2]);
+    }
+
+    const start = indices.length;
+    const nbTri = tri.NbTriangles();
+    for (let i = 1; i <= nbTri; i++) {
+      const t = tri.Triangle(i);
+      const n1 = base + (t.Value(1) - 1);
+      const n2 = base + (t.Value(2) - 1);
+      const n3 = base + (t.Value(3) - 1);
+      // Flip winding for REVERSED faces so the triangle normal points outward.
+      if (reversed) indices.push(n1, n3, n2);
+      else indices.push(n1, n2, n3);
+      t.delete();
+    }
+    const count = indices.length - start;
+    const normal = normalFromTriangulation(tri, identity, trsf, reversed);
+    faceGroups.push({ start, count, faceId, normal });
+    faceId++;
+
+    trsf.delete();
+    handle.delete();
+    loc.delete();
+    face.delete();
+  }
+  fexp.delete();
+
+  // --- Edges: world polylines + two adjacent-face normals (EdgeRef signature).
+  const edges: TaggedEdge[] = [];
+  const edgeFaceMap = new oc.TopTools_IndexedDataMapOfShapeListOfShape_1();
+  oc.TopExp.MapShapesAndAncestors(shape, S.TopAbs_EDGE, S.TopAbs_FACE, edgeFaceMap);
+  const edgeCount = edgeFaceMap.Extent();
+  for (let i = 1; i <= edgeCount; i++) {
+    const edge = oc.TopoDS.Edge_1(edgeFaceMap.FindKey(i));
+    const positions = discretizeEdge(oc, edge, deflection);
+    const faceList = edgeFaceMap.FindFromIndex(i);
+    const faceNormals = adjacentFaceNormals(oc, faceList);
+    edges.push({ edgeId: i - 1, positions, faceNormals });
+    edge.delete();
+  }
+  edgeFaceMap.delete();
+
+  // --- Vertices: unique B-rep corners.
+  const vertexPoints: VertexPoint[] = [];
+  const vertMap = new oc.TopTools_IndexedDataMapOfShapeListOfShape_1();
+  oc.TopExp.MapShapesAndAncestors(shape, S.TopAbs_VERTEX, S.TopAbs_EDGE, vertMap);
+  const vertCount = vertMap.Extent();
+  for (let i = 1; i <= vertCount; i++) {
+    const vertex = oc.TopoDS.Vertex_1(vertMap.FindKey(i));
+    const p = oc.BRep_Tool.Pnt(vertex);
+    vertexPoints.push({ vertexId: i - 1, position: [p.X(), p.Y(), p.Z()] });
+    p.delete();
+    vertex.delete();
+  }
+  vertMap.delete();
+
+  return { vertices, indices, faceGroups, edges, vertexPoints };
+}

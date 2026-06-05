@@ -27,3 +27,17 @@ export {
   planeYAxis,
   planePointToWorld,
 } from "./env/plane.js";
+
+// R3 — tagged tessellation, persistent EdgeRef/FaceRef, interchange I/O.
+export {
+  type FaceRef,
+  type EdgeRef,
+  type FaceGroup,
+  type TaggedEdge,
+  type VertexPoint,
+  type TaggedMesh,
+  type TessellateOptions,
+} from "./mesh/tagged.js";
+export { tessellateTagged } from "./mesh/tessellate.js";
+export { resolveFaceRef, resolveEdgeRef, resolveEdgeDirection } from "./mesh/resolve.js";
+export { exportStep, importStep, exportIges, exportGltf } from "./io/index.js";
