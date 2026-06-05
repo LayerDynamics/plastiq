@@ -12,3 +12,18 @@
 
 /** Kernel version, surfaced for tooling/diagnostics. */
 export const CAD_KERNEL_VERSION = "0.1.0" as const;
+
+// R2 — engine, units, geometry core.
+export { initOcct, type Occt } from "./oc/init.js";
+export { mm, cm, m, inch, deg, rad, toMm, toDeg } from "./unit/index.js";
+export { Solid } from "./solid/solid.js";
+export { makeBox, makeBoxAt } from "./solid/primitives.js";
+export {
+  type DatumPlane,
+  planeXY,
+  planeXZ,
+  planeYZ,
+  offsetPlane,
+  planeYAxis,
+  planePointToWorld,
+} from "./env/plane.js";
