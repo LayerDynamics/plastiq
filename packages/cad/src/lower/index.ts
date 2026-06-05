@@ -3,9 +3,11 @@
 export {
   type ManifestBody,
   type ManifestConstraint,
+  type HullCollider,
   type SimManifest,
   isSimManifest,
 } from "./manifest.js";
+export { type ConvexHull, convexHull } from "./hull.js";
 export { type MassProperties, massProperties } from "./massprops.js";
 export {
   type Placement,

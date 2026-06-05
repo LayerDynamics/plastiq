@@ -57,8 +57,13 @@ describe("exportForSim", () => {
     expect(manifest.bodies[0]!.com[0]).toBeCloseTo(mm(10), 6);
     // Body i2 is shifted +100mm in x → COM x = 100 + 10 = 110mm.
     expect(manifest.bodies[1]!.com[0]).toBeCloseTo(mm(110), 6);
-    // Half-extents = half the 20mm box.
-    expect(manifest.bodies[0]!.halfExtents[0]).toBeCloseTo(mm(10), 6);
+    // The collider is the part's actual convex hull (a 20mm box → 8 corners,
+    // 12 triangles), centred on the COM so corner coords are ±10mm.
+    const hull = manifest.bodies[0]!.hull;
+    expect(hull.points.length / 3).toBe(8);
+    expect(hull.faces).toHaveLength(12);
+    const maxAbsX = Math.max(...hull.points.filter((_, i) => i % 3 === 0).map(Math.abs));
+    expect(maxAbsX).toBeCloseTo(mm(10), 6);
     part.delete();
   });
 });

@@ -95,8 +95,11 @@ export {
 export {
   type ManifestBody,
   type ManifestConstraint,
+  type HullCollider,
   type SimManifest,
   isSimManifest,
+  type ConvexHull,
+  convexHull,
   type MassProperties,
   massProperties,
   type Placement,

@@ -27,11 +27,9 @@ class RapierEngine implements PhysicsEngine {
         .setTranslation(b.com[0], b.com[1], b.com[2])
         .setRotation({ x: b.orientation[0], y: b.orientation[1], z: b.orientation[2], w: b.orientation[3] });
       const body = world.createRigidBody(desc);
-      const collider = RAPIER.ColliderDesc.cuboid(
-        b.halfExtents[0],
-        b.halfExtents[1],
-        b.halfExtents[2],
-      ).setMass(b.mass);
+      const collider = RAPIER.ColliderDesc.convexHull(new Float32Array(b.hull.points));
+      if (!collider) throw new Error(`rapier: degenerate convex hull for body '${b.id}'`);
+      collider.setMass(b.mass);
       world.createCollider(collider, body);
       this.bodies.push(body);
       byId.set(b.id, body);

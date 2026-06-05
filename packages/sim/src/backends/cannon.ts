@@ -19,9 +19,11 @@ class CannonEngine implements PhysicsEngine {
 
     const byId = new Map<string, CANNON.Body>();
     for (const b of manifest.bodies) {
-      const shape = new CANNON.Box(
-        new CANNON.Vec3(b.halfExtents[0], b.halfExtents[1], b.halfExtents[2]),
-      );
+      const vertices: CANNON.Vec3[] = [];
+      for (let k = 0; k < b.hull.points.length; k += 3) {
+        vertices.push(new CANNON.Vec3(b.hull.points[k]!, b.hull.points[k + 1]!, b.hull.points[k + 2]!));
+      }
+      const shape = new CANNON.ConvexPolyhedron({ vertices, faces: b.hull.faces });
       const body = new CANNON.Body({
         mass: b.fixed ? 0 : b.mass,
         shape,

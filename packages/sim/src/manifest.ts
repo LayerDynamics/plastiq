@@ -2,12 +2,20 @@
 // exportForSim and consumed here. Structurally identical to the kernel's type
 // (kept in sync deliberately; the two packages stay decoupled — no import).
 
+/** A convex-hull collider in the body's local frame (centred at the COM). */
+export interface HullCollider {
+  /** Flat hull vertices `[x0,y0,z0, …]` (COM-relative). */
+  points: number[];
+  /** Triangular faces as index triples into `points`/3. */
+  faces: number[][];
+}
+
 export interface ManifestBody {
   id: string;
   mass: number;
   com: [number, number, number];
   orientation: [number, number, number, number];
-  halfExtents: [number, number, number];
+  hull: HullCollider;
   fixed?: boolean;
 }
 

@@ -35,9 +35,16 @@ class AmmoEngine implements PhysicsEngine {
 
     const byId = new Map<string, Ammo.btRigidBody>();
     for (const b of manifest.bodies) {
-      const shape = new m.btBoxShape(
-        new m.btVector3(b.halfExtents[0], b.halfExtents[1], b.halfExtents[2]),
-      );
+      const shape = new m.btConvexHullShape();
+      for (let k = 0; k < b.hull.points.length; k += 3) {
+        shape.addPoint(
+          new m.btVector3(b.hull.points[k]!, b.hull.points[k + 1]!, b.hull.points[k + 2]!),
+          true,
+        );
+      }
+      // Bullet's default convex margin (~0.04 m) inflates mm-scale CAD parts and
+      // makes them rest visibly above surfaces — shrink it to 1 mm.
+      shape.setMargin(0.001);
       const transform = new m.btTransform();
       transform.setIdentity();
       transform.setOrigin(new m.btVector3(b.com[0], b.com[1], b.com[2]));

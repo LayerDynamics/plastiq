@@ -3,6 +3,14 @@
 // (consumer, via spawnManifest). It is plain JSON: bodies are box-collider rigid
 // bodies posed by their world centre of mass; constraints are hinge/fixed joints.
 
+/** A convex-hull collider in the body's local frame (centred at the COM). */
+export interface HullCollider {
+  /** Flat hull vertices `[x0,y0,z0, …]` (SI metres, COM-relative). */
+  readonly points: number[];
+  /** Triangular faces as index triples into `points`/3. */
+  readonly faces: number[][];
+}
+
 export interface ManifestBody {
   /** Render-group / instance id (body order in the manifest = spawn order). */
   readonly id: string;
@@ -12,8 +20,8 @@ export interface ManifestBody {
   readonly com: readonly [number, number, number];
   /** World orientation (quaternion x,y,z,w) at spawn. */
   readonly orientation: readonly [number, number, number, number];
-  /** Local box-collider half-extents (from the part's bounding box). */
-  readonly halfExtents: readonly [number, number, number];
+  /** The part's actual convex-hull collider (from its tessellation). */
+  readonly hull: HullCollider;
   /** A fixed body is static (does not fall). */
   readonly fixed?: boolean;
 }
@@ -46,7 +54,8 @@ export function isSimManifest(x: unknown): x is SimManifest {
     const body = b as Record<string, unknown>;
     if (typeof body["id"] !== "string" || typeof body["mass"] !== "number") return false;
     if (!Array.isArray(body["com"]) || !Array.isArray(body["orientation"])) return false;
-    if (!Array.isArray(body["halfExtents"])) return false;
+    const hull = body["hull"] as Record<string, unknown> | undefined;
+    if (!hull || !Array.isArray(hull["points"]) || !Array.isArray(hull["faces"])) return false;
   }
   return true;
 }

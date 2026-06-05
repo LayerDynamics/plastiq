@@ -31,7 +31,9 @@ e2e/cad-studio    no-mock Playwright end-to-end tests
   backends, selectable at runtime:
   [Rapier](https://rapier.rs/), [ammo.js](https://github.com/kripken/ammo.js)
   (Bullet), and [cannon-es](https://pmndrs.github.io/cannon-es/). It spawns the
-  kernel's `SimManifest` and steps it under gravity.
+  kernel's `SimManifest` and steps it under gravity. Each body's collider is the
+  part's **convex hull**, computed from its real tessellation (exact for convex
+  parts; concave dynamics would need convex decomposition, a future step).
 
 The editor uses React + Zustand + Tailwind + three.js, with `@plastiq/cad`
 running in a Web Worker (the OCCT wasm stays in the worker chunk) and the sketch
