@@ -61,4 +61,12 @@ export {
   chamfer,
   shell,
   draft,
+  type ExtrudeToFaceOptions,
+  extrudeToFace,
+  type LoftOptions,
+  loft,
+  sweep,
+  linearPattern,
+  circularPattern,
 } from "./action/index.js";
+export { type SpinePath, type SpineSegment, buildSpineWire } from "./sketch/spine.js";

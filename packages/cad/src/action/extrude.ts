@@ -4,9 +4,11 @@ import type { TopoDS_Shape } from "opencascade.js";
 
 import type { Occt } from "../oc/init.js";
 import type { Vec3 } from "../math/index.js";
-import { normalize, scale } from "../math/index.js";
+import { dot, normalize, scale, sub } from "../math/index.js";
 import { Solid } from "../solid/solid.js";
 import type { Sketch } from "../sketch/sketch.js";
+import { resolveFaceRef } from "../mesh/resolve.js";
+import type { FaceRef } from "../mesh/tagged.js";
 
 export interface ExtrudeOptions {
   /** Extrude this far in the OPPOSITE direction too (two-sided pad). */
@@ -58,4 +60,42 @@ export function extrude(
   v.delete();
   baseFace.delete();
   return new Solid(oc, shape);
+}
+
+export interface ExtrudeToFaceOptions {
+  /** Override the extrude direction (default: the sketch plane normal). */
+  readonly direction?: Vec3;
+}
+
+/**
+ * Extrude a sketch profile from its plane up to the picked face of `base`. The
+ * pad height is the distance from the sketch plane to the target face's centroid
+ * projected onto the extrude direction. Returns the PAD; the caller fuses it.
+ */
+export function extrudeToFace(
+  oc: Occt,
+  sketch: Sketch,
+  base: Solid,
+  toFace: FaceRef,
+  opts?: ExtrudeToFaceOptions,
+): Solid {
+  const dir = normalize(opts?.direction ?? sketch.plane.normal);
+  const face = resolveFaceRef(oc, base, toFace);
+  if (!face) throw new Error("extrudeToFace: the target face did not resolve on the body");
+
+  const props = new oc.GProp_GProps_1();
+  oc.BRepGProp.SurfaceProperties_1(face, props, false, false);
+  const com = props.CentreOfMass();
+  const centroid: Vec3 = [com.X(), com.Y(), com.Z()];
+  com.delete();
+  props.delete();
+  face.delete();
+
+  const signed = dot(sub(centroid, sketch.plane.origin), dir);
+  if (Math.abs(signed) < 1e-9) {
+    throw new Error("extrudeToFace: the target face lies on the sketch plane");
+  }
+  return extrude(oc, sketch, Math.abs(signed), {
+    direction: signed >= 0 ? dir : scale(dir, -1),
+  });
 }
