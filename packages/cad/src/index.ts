@@ -90,3 +90,27 @@ export {
   type MateSolveResult,
   solveMates,
 } from "./assembly/solver.js";
+
+// R6 — assembly → SimManifest lowering.
+export {
+  type ManifestBody,
+  type ManifestConstraint,
+  type SimManifest,
+  isSimManifest,
+  type MassProperties,
+  massProperties,
+  type Placement,
+  type MaterialLibrary,
+  IDENTITY_PLACEMENT,
+  Body,
+  makeBody,
+  Component,
+  defaultLibrary,
+  type Joint,
+  type JointBinding,
+  makeJoint,
+  isLowerable,
+  lowerJoints,
+  type ExportOptions,
+  exportForSim,
+} from "./lower/index.js";
