@@ -1,0 +1,32 @@
+{
+  "name": "plastiq",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Plastiq — an interactive, parametric, in-browser CAD editor (React + three.js) on the @plastiq/cad kernel.",
+  "packageManager": "pnpm@10.32.1",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev": "pnpm --filter @plastiq/cad-studio run dev",
+    "build": "pnpm --filter @plastiq/cad-studio run build",
+    "typecheck": "pnpm -r --if-present run typecheck",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "e2e": "playwright test",
+    "lint": "eslint apps packages --max-warnings 0",
+    "format": "prettier --write ."
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@playwright/test": "^1.60.0",
+    "@types/node": "^25.9.1",
+    "eslint": "^10.4.0",
+    "prettier": "^3.8.3",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.60.0",
+    "vite": "^8.0.0",
+    "vitest": "^4.1.7"
+  }
+}

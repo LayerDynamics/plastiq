@@ -1,0 +1,27 @@
+// CAD Studio entrypoint (SPEC-5): mounts the React editor shell.
+import { StrictMode } from "react";
+import { createRoot } from "react-dom/client";
+import { App } from "./app/App.js";
+import { useCadStore } from "./store/store.js";
+import { useSketchStore } from "./sketch/sketchStore.js";
+import { useProjectsStore } from "./persistence/projectsStore.js";
+import { defaultDocument } from "./store/seed.js";
+import "./index.css";
+
+// Seed a default model so a fresh session renders geometry immediately (M0.5).
+useCadStore.getState().loadDocument(defaultDocument());
+
+// Expose the stores for strict E2E driving (the sketch slice / document /
+// projects), the same test seam as the three.js scene. Harmless in production.
+(globalThis as { __sketchStore?: typeof useSketchStore }).__sketchStore = useSketchStore;
+(globalThis as { __cadStore?: typeof useCadStore }).__cadStore = useCadStore;
+(globalThis as { __projectsStore?: typeof useProjectsStore }).__projectsStore = useProjectsStore;
+
+const root = document.getElementById("root");
+if (!root) throw new Error("CAD Studio: #root element missing");
+
+createRoot(root).render(
+  <StrictMode>
+    <App />
+  </StrictMode>,
+);

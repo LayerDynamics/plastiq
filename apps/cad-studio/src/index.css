@@ -1,0 +1,23 @@
+@import "tailwindcss";
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: #0b0d12;
+  color: #cfe;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  overflow: hidden;
+}
+
+/* Accessibility (NFR-5): a clearly visible keyboard focus ring on every
+   interactive control. Only on :focus-visible, so mouse clicks don't ring. */
+:focus-visible {
+  outline: 2px solid #4ea1ff;
+  outline-offset: 1px;
+  border-radius: 2px;
+}
