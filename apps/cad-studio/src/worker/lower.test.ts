@@ -30,15 +30,15 @@ describe("lowerAssembly — assembly → SimManifest (SPEC-5 M4.5)", () => {
     const { manifest, localCom } = lowerAssembly(oc, box, assembly, "test:asm");
     expect(isSimManifest(manifest)).toBe(true);
     expect(manifest.bodies).toHaveLength(2);
-    expect(manifest.bodies.map((b) => b.name)).toEqual(["i0", "i1"]);
+    expect(manifest.bodies.map((b) => b.id)).toEqual(["i0", "i1"]);
     // The shared part's local COM = the 20mm box centre (10,10,10) mm.
     expect(localCom[0]).toBeCloseTo(mm(10), 6);
     expect(localCom[2]).toBeCloseTo(mm(10), 6);
-    // translation = world COM: i0 at origin → (10,10,10) mm; i1 offset +80 mm in x.
-    expect(manifest.bodies[0]!.translation[0]).toBeCloseTo(mm(10), 6);
-    expect(manifest.bodies[1]!.translation[0]).toBeCloseTo(mm(90), 6);
-    // body-frame COM is the origin (shape is COM-centred).
-    expect(manifest.bodies[0]!.mass.com).toEqual([0, 0, 0]);
+    // com = world centre of mass: i0 at origin → (10,10,10) mm; i1 offset +80 mm in x.
+    expect(manifest.bodies[0]!.com[0]).toBeCloseTo(mm(10), 6);
+    expect(manifest.bodies[1]!.com[0]).toBeCloseTo(mm(90), 6);
+    // Each body carries a positive mass (volume × steel density).
+    expect(manifest.bodies[0]!.mass).toBeGreaterThan(0);
   });
 
   it("lowers a revolute joint to a hinge constraint between the two bodies", () => {

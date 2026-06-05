@@ -63,7 +63,7 @@ export function tessellateTagged(
   solid: Solid,
   opts?: TessellateOptions,
 ): TaggedMesh {
-  const deflection = opts?.deflection ?? DEFAULT_DEFLECTION;
+  const deflection = opts?.linearDeflection ?? DEFAULT_DEFLECTION;
   const angular = opts?.angularDeflection ?? DEFAULT_ANGULAR;
   const shape: TopoDS_Shape = solid.shape;
 
@@ -114,7 +114,7 @@ export function tessellateTagged(
     }
     const count = indices.length - start;
     const normal = normalFromTriangulation(tri, identity, trsf, reversed);
-    faceGroups.push({ start, count, faceId, normal });
+    faceGroups.push({ start, count, faceId, normal: [normal[0], normal[1], normal[2]] });
     faceId++;
 
     trsf.delete();
@@ -133,8 +133,15 @@ export function tessellateTagged(
     const edge = oc.TopoDS.Edge_1(edgeFaceMap.FindKey(i));
     const positions = discretizeEdge(oc, edge, deflection);
     const faceList = edgeFaceMap.FindFromIndex(i);
-    const faceNormals = adjacentFaceNormals(oc, faceList);
-    edges.push({ edgeId: i - 1, positions, faceNormals });
+    const [na, nb] = adjacentFaceNormals(oc, faceList);
+    edges.push({
+      edgeId: i - 1,
+      positions,
+      faceNormals: [
+        [na[0], na[1], na[2]],
+        [nb[0], nb[1], nb[2]],
+      ],
+    });
     edge.delete();
   }
   edgeFaceMap.delete();

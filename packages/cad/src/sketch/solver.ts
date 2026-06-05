@@ -219,9 +219,17 @@ export function solveSketch(
 
   const freedom = gcs.gcs.dof();
   const conflicting = gcs.has_gcs_conflicting_constraints();
+  // A redundant constraint over-determines the sketch (e.g. a dimension added to
+  // an already fully-constrained shape) — surface it as over-constrained too, so
+  // the editor can auto-demote it to a driven/reference dimension (FR-19).
+  const redundant = gcs.has_gcs_redundant_constraints();
   const failed = status === SolveStatus.Failed || status === SolveStatus.SuccessfulSolutionInvalid;
   const verdict: SketchVerdict =
-    conflicting || failed ? "over-constrained" : freedom > 0 ? "under-constrained" : "well-constrained";
+    conflicting || redundant || failed
+      ? "over-constrained"
+      : freedom > 0
+        ? "under-constrained"
+        : "well-constrained";
 
   return { points: solvedPoints, radii, verdict, freedom };
 }

@@ -1,8 +1,14 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { initSketchSolver } from "@plastiq/cad";
 import { useSketchStore } from "./sketchStore.js";
 import type { CircleEntity, LineEntity } from "./model.js";
 
 const s = () => useSketchStore.getState();
+
+// planegcs (the sketch solver) loads its wasm asynchronously; init once.
+beforeAll(async () => {
+  await initSketchSolver();
+}, 120_000);
 
 beforeEach(() => {
   s().enterSketch("XY");

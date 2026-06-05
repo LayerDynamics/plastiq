@@ -1,12 +1,20 @@
 // CAD Studio entrypoint (SPEC-5): mounts the React editor shell.
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
+import { initSketchSolver } from "@plastiq/cad";
+// Vite-resolved URL of the planegcs (sketch solver) wasm.
+import planegcsWasmUrl from "@salusoft89/planegcs/dist/planegcs_dist/planegcs.wasm?url";
 import { App } from "./app/App.js";
 import { useCadStore } from "./store/store.js";
 import { useSketchStore } from "./sketch/sketchStore.js";
 import { useProjectsStore } from "./persistence/projectsStore.js";
 import { defaultDocument } from "./store/seed.js";
 import "./index.css";
+
+// Load the sketch-solver wasm before the editor can sketch (solveSketch is
+// synchronous, so planegcs must already be initialised). It's a small wasm; the
+// heavier OCCT kernel loads lazily in the geometry worker afterwards.
+void initSketchSolver({ wasmUrl: planegcsWasmUrl });
 
 // Seed a default model so a fresh session renders geometry immediately (M0.5).
 useCadStore.getState().loadDocument(defaultDocument());

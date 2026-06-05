@@ -75,7 +75,11 @@ export function resolveEdgeRef(oc: Occt, solid: Solid, ref: EdgeRef): TopoDS_Edg
 }
 
 /** The unit tangent direction of the edge matching `ref` (start→end). */
-export function resolveEdgeDirection(oc: Occt, solid: Solid, ref: EdgeRef): Vec3 {
+export function resolveEdgeDirection(
+  oc: Occt,
+  solid: Solid,
+  ref: EdgeRef,
+): [number, number, number] {
   const edge = resolveEdgeRef(oc, solid, ref);
   if (!edge) throw new Error("resolveEdgeDirection: no edge matched the EdgeRef signature");
   const curve = new oc.BRepAdaptor_Curve_2(edge);
@@ -86,5 +90,5 @@ export function resolveEdgeDirection(oc: Occt, solid: Solid, ref: EdgeRef): Vec3
   p1.delete();
   curve.delete();
   edge.delete();
-  return dir;
+  return [dir[0], dir[1], dir[2]];
 }

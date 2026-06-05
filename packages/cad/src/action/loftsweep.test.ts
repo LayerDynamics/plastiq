@@ -42,8 +42,11 @@ describe("sweep", () => {
   it("sweeps a circle along a straight spine into a cylinder", () => {
     const profile = Sketch.circle(planeXY(), 0, 0, mm(10));
     const solid = sweep(oc, profile, {
-      start: [0, 0, 0],
-      segments: [{ kind: "line", to: [0, 0, mm(100)] }],
+      kind: "polyline",
+      points: [
+        [0, 0, 0],
+        [0, 0, mm(100)],
+      ],
     });
     expect(solid.volume()).toBeCloseTo(Math.PI * mm(10) ** 2 * mm(100), 8);
     solid.delete();

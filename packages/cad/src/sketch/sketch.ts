@@ -6,13 +6,7 @@
 // `toWire(oc)` / `toFace(oc)`. Coordinates are plane-space (u along xAxis, v along
 // the in-plane Y axis); the wire auto-closes back to the start point.
 
-import type {
-  TopoDS_Edge,
-  TopoDS_Face,
-  TopoDS_Wire,
-  GeomAbs_Shape,
-  Handle_Geom_Curve,
-} from "opencascade.js";
+import type { TopoDS_Edge, TopoDS_Face, TopoDS_Wire, GeomAbs_Shape } from "opencascade.js";
 
 import type { Occt } from "../oc/init.js";
 import type { Vec3 } from "../math/index.js";
@@ -113,11 +107,13 @@ export class Sketch {
       const m = pnt(oc, this.world(throughUV));
       const b = pnt(oc, this.world(bUV));
       const arc = new oc.GC_MakeArcOfCircle_4(a, m, b);
-      const handle = arc.Value();
+      const trimmed = arc.Value();
+      // Upcast Handle_Geom_TrimmedCurve → Handle_Geom_Curve for MakeEdge.
+      const handle = new oc.Handle_Geom_Curve_2(trimmed.get());
       const edgeMaker = new oc.BRepBuilderAPI_MakeEdge_24(handle);
       const edge = edgeMaker.Edge();
       wireMaker.Add_1(edge);
-      trash.push(a, m, b, arc, handle, edgeMaker, edge);
+      trash.push(a, m, b, arc, trimmed, handle, edgeMaker, edge);
     };
     const addSpline = (aUV: UV, throughUVs: readonly UV[]): void => {
       const pts = [aUV, ...throughUVs];
@@ -135,13 +131,13 @@ export class Sketch {
         oc.GeomAbs_Shape.GeomAbs_C2 as unknown as GeomAbs_Shape,
         1e-6,
       );
-      const curve = toBspline.Curve();
-      const edgeMaker = new oc.BRepBuilderAPI_MakeEdge_24(
-        curve as unknown as Handle_Geom_Curve,
-      );
+      const bspline = toBspline.Curve();
+      // Upcast Handle_Geom_BSplineCurve → Handle_Geom_Curve for MakeEdge.
+      const curve = new oc.Handle_Geom_Curve_2(bspline.get());
+      const edgeMaker = new oc.BRepBuilderAPI_MakeEdge_24(curve);
       const edge = edgeMaker.Edge();
       wireMaker.Add_1(edge);
-      trash.push(arr, ...made, toBspline, curve, edgeMaker, edge);
+      trash.push(arr, ...made, toBspline, bspline, curve, edgeMaker, edge);
     };
 
     let current: UV = startUV;

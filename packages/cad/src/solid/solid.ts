@@ -28,6 +28,14 @@ export class Solid {
     return new Solid(this.oc, dup);
   }
 
+  /** Whether the B-rep shape passes OCCT's validity checks. */
+  isValid(): boolean {
+    const analyzer = new this.oc.BRepCheck_Analyzer(this.shape, true, false);
+    const valid = analyzer.IsValid_2();
+    analyzer.delete();
+    return valid;
+  }
+
   /** Volume in cubic metres (closed-shape volume properties). */
   volume(): number {
     const props = new this.oc.GProp_GProps_1();

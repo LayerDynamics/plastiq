@@ -7,16 +7,18 @@
 // rebuild: the transient integer id is only valid for the current mesh, while
 // the signature re-resolves the same topology after upstream edits.
 
-import type { Vec3 } from "../math/index.js";
+// Public tagged-mesh types use MUTABLE [x,y,z] tuples to match the app's
+// worker/protocol contract (which transfers them as plain arrays).
+type V3 = [number, number, number];
 
 /** A persistent reference to a face: its outward unit normal signature. */
 export interface FaceRef {
-  readonly normal: Vec3;
+  readonly normal: V3;
 }
 
 /** A persistent reference to an edge: the two adjacent faces' normals. */
 export interface EdgeRef {
-  readonly faceNormals: readonly [Vec3, Vec3];
+  readonly faceNormals: readonly [V3, V3];
 }
 
 /** One face's triangles as a contiguous range of the shared index buffer. */
@@ -28,7 +30,7 @@ export interface FaceGroup {
   /** Transient face id, stable within this mesh (its render-group order). */
   readonly faceId: number;
   /** The face's outward unit normal — its persistent FaceRef signature. */
-  readonly normal: Vec3;
+  readonly normal: V3;
 }
 
 /** One B-rep edge as a world-space polyline plus its persistent signature. */
@@ -37,13 +39,13 @@ export interface TaggedEdge {
   /** Flat `[x0,y0,z0, x1,y1,z1, …]` polyline vertices in SI metres. */
   readonly positions: number[];
   /** The two adjacent faces' normals — the persistent EdgeRef signature. */
-  readonly faceNormals: readonly [Vec3, Vec3];
+  readonly faceNormals: readonly [V3, V3];
 }
 
 /** One B-rep corner vertex. */
 export interface VertexPoint {
   readonly vertexId: number;
-  readonly position: Vec3;
+  readonly position: V3;
 }
 
 /** The full tagged tessellation of a solid. */
@@ -60,7 +62,7 @@ export interface TaggedMesh {
 /** Tessellation quality knobs. */
 export interface TessellateOptions {
   /** Linear deflection in SI metres (smaller = finer). Default 1e-4 (0.1 mm). */
-  readonly deflection?: number;
+  readonly linearDeflection?: number;
   /** Angular deflection in radians. Default 0.5. */
   readonly angularDeflection?: number;
 }

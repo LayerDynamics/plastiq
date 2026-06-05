@@ -1,7 +1,12 @@
-import { describe, expect, it } from "vitest";
-import { solveSketch } from "@plastiq/cad";
+import { beforeAll, describe, expect, it } from "vitest";
+import { initSketchSolver, solveSketch } from "@plastiq/cad";
 import { buildDimension, canDimension, measure } from "./dim.js";
 import { toSolverInput, type SketchModel } from "./model.js";
+
+// planegcs (the sketch solver) loads its wasm asynchronously; init once.
+beforeAll(async () => {
+  await initSketchSolver();
+}, 120_000);
 
 const model: SketchModel = {
   plane: "XY",

@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
-import { solveSketch } from "@plastiq/cad";
+import { beforeAll, describe, expect, it } from "vitest";
+import { initSketchSolver, solveSketch } from "@plastiq/cad";
 import {
   emptySketch,
   perpDistance,
@@ -8,6 +8,11 @@ import {
   toSolverInput,
   type SketchModel,
 } from "./model.js";
+
+// planegcs (the sketch solver) loads its wasm asynchronously; init once.
+beforeAll(async () => {
+  await initSketchSolver();
+}, 120_000);
 
 // A two-segment open chain p0→p1→p2 with one horizontal constraint on p0→p1.
 function chain(): SketchModel {

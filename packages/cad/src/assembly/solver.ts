@@ -55,6 +55,8 @@ export interface MateSolveResult {
   poses: ComponentPose[];
   verdict: AssemblyVerdict;
   freedom: number;
+  /** L2 norm of the final mate residuals (≈0 when fully satisfied). */
+  residualNorm: number;
 }
 
 const DEFAULT_POINT: Vec3 = [0, 0, 0];
@@ -228,6 +230,7 @@ export function solveMates(components: ComponentPose[], mates: Mate[]): MateSolv
       poses,
       verdict: n === 0 ? "well-constrained" : "under-constrained",
       freedom: n,
+      residualNorm: 0,
     };
   }
 
@@ -270,5 +273,5 @@ export function solveMates(components: ComponentPose[], mates: Mate[]): MateSolv
   const verdict: AssemblyVerdict =
     residNorm > 1e-5 ? "over-constrained" : freedom > 0 ? "under-constrained" : "well-constrained";
 
-  return { poses, verdict, freedom };
+  return { poses, verdict, freedom, residualNorm: residNorm };
 }

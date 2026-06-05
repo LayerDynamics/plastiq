@@ -44,6 +44,9 @@ importers:
       '@plastiq/sim':
         specifier: workspace:*
         version: link:../../packages/sim
+      '@salusoft89/planegcs':
+        specifier: ^1.1.7
+        version: 1.1.7
       opencascade.js:
         specifier: 2.0.0-beta.b5ff984
         version: 2.0.0-beta.b5ff984(ws@8.21.0)
