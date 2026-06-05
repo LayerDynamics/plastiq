@@ -1,0 +1,78 @@
+# Custom (trimmed) opencascade.js build config for @plastiq/cad.
+#
+# The full prebuilt opencascade.js wasm is ~48 MB raw / ~14 MB gzip — far over a
+# reasonable web bundle budget. This config produces a minimal build containing
+# ONLY the OCCT symbols @plastiq/cad actually calls (enumerated from src/), so the
+# shipped kernel wasm can be a fraction of the full build.
+#
+# STATUS: development + tests run against the FULL prebuilt `opencascade.js` npm
+# package (the proven, complete OCCT). This trim is the build MECHANISM; running
+# it is a deferred, optional step (see scripts/build-occt.md). The symbol list
+# below is grown as the kernel's OCCT surface changes.
+#
+# Build:  just cad-occt   (Docker — see scripts/build-occt.md)
+# Format: https://ocjs.org/docs/app-dev-workflow/custom-builds
+
+mainBuild:
+  name: plastiq-occt.js
+  bindings:
+    # Primitives + extrude/revolve (solid/primitives.ts, action/extrude.ts, revolve.ts)
+    - symbol: BRepPrimAPI_MakeBox
+    - symbol: BRepPrimAPI_MakePrism
+    - symbol: BRepPrimAPI_MakeRevol
+    # Wire/face building for sketch profiles (sketch/sketch.ts, sketch/spine.ts)
+    - symbol: BRepBuilderAPI_MakeEdge
+    - symbol: BRepBuilderAPI_MakeWire
+    - symbol: BRepBuilderAPI_MakeFace
+    - symbol: BRepBuilderAPI_Copy
+    - symbol: GC_MakeArcOfCircle
+    - symbol: GC_MakeSegment
+    - symbol: GeomAPI_PointsToBSpline
+    - symbol: TColgp_Array1OfPnt
+    # Transforms (action/transform.ts)
+    - symbol: BRepBuilderAPI_Transform
+    # Booleans (action/boolean.ts)
+    - symbol: BRepAlgoAPI_Fuse
+    - symbol: BRepAlgoAPI_Cut
+    - symbol: BRepAlgoAPI_Common
+    # Dress-up (action/dressup.ts)
+    - symbol: BRepFilletAPI_MakeFillet
+    - symbol: BRepFilletAPI_MakeChamfer
+    - symbol: BRepOffsetAPI_MakeThickSolid
+    - symbol: BRepOffsetAPI_DraftAngle
+    # Loft / sweep (action/loft.ts)
+    - symbol: BRepOffsetAPI_ThruSections
+    - symbol: BRepOffsetAPI_MakePipe
+    # Topology exploration + casting (mesh/*, throughout)
+    - symbol: TopExp
+    - symbol: TopExp_Explorer
+    - symbol: TopoDS
+    - symbol: TopLoc_Location
+    - symbol: TopTools_ListOfShape
+    - symbol: TopTools_IndexedDataMapOfShapeListOfShape
+    - symbol: BRep_Tool
+    - symbol: BRepAdaptor_Curve
+    - symbol: GCPnts_UniformDeflection
+    # Tessellation (mesh/tessellate.ts)
+    - symbol: BRepMesh_IncrementalMesh
+    # Mass properties + bounding box + validity (solid/solid.ts, lower/massprops.ts)
+    - symbol: BRepGProp
+    - symbol: GProp_GProps
+    - symbol: Bnd_Box
+    - symbol: BRepBndLib
+    - symbol: BRepCheck_Analyzer
+    # Interchange (io/index.ts)
+    - symbol: STEPControl_Writer
+    - symbol: STEPControl_Reader
+    - symbol: IGESControl_Writer
+  emccFlags:
+    - -O3
+    - -flto
+    - --closure=1
+    - -sEXPORT_ES6=1
+    - -sMODULARIZE=1
+    - -sUSE_PTHREADS=0 # single-threaded so boolean/mesh algorithms are deterministic
+    - -sALLOW_MEMORY_GROWTH=1
+    - -sENVIRONMENT=web,node
+
+additionalBuilds: []
