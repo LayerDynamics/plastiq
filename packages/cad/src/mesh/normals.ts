@@ -5,6 +5,7 @@
 
 import type {
   TopoDS_Face,
+  TopoDS_Shape,
   Poly_Triangulation,
   gp_Trsf,
   TopTools_ListOfShape,
@@ -42,11 +43,7 @@ export function shapeEnums(oc: Occt): ShapeEnums {
  * derived from the triangulation, so resolution must mesh a freshly-built solid
  * before matching against it.
  */
-export function ensureMeshed(
-  oc: Occt,
-  shape: import("opencascade.js").TopoDS_Shape,
-  deflection = 1e-4,
-): void {
+export function ensureMeshed(oc: Occt, shape: TopoDS_Shape, deflection = 1e-4): void {
   const mesher = new oc.BRepMesh_IncrementalMesh_2(shape, deflection, false, 0.5, false);
   mesher.delete();
 }

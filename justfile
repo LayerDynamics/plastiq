@@ -11,6 +11,10 @@ install:
 typecheck:
     pnpm -r --if-present run typecheck
 
+# Lint the app + packages (e2e is excluded by eslint.config.js).
+lint:
+    pnpm exec eslint apps packages --max-warnings 0
+
 # Run the full unit/integration test suite (Vitest).
 test:
     pnpm exec vitest run

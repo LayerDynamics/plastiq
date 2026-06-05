@@ -9,7 +9,6 @@
 import type { TopoDS_Edge, TopoDS_Face } from "opencascade.js";
 
 import type { Occt } from "../oc/init.js";
-import type { Vec3 } from "../math/index.js";
 import { dot, normalize, sub } from "../math/index.js";
 import type { Solid } from "../solid/solid.js";
 import { adjacentFaceNormals, ensureMeshed, faceNormal, shapeEnums } from "./normals.js";
