@@ -60,8 +60,8 @@ export interface CadStore {
   simulating: boolean;
 
   // --- undo/redo history (M2.2): snapshots of the document only ---
-  past: CadDocument[];
-  future: CadDocument[];
+  past: HistorySnapshot[];
+  future: HistorySnapshot[];
 
   // --- selection / UI ---
   selectedFeatureId: FeatureId | null;
@@ -80,6 +80,9 @@ export interface CadStore {
   /** Rollback bar (FR-25): features at index ≥ this are skipped at rebuild
    * (null = no rollback, build everything). */
   rollbackIndex: number | null;
+  /** The id of the feature the rollback bar sits before, so the index can be
+   *  re-resolved after features are removed/reordered (CADStudio.md §5.3). */
+  rollbackBeforeId: string | null;
 
   // --- document actions ---
   addFeature: (f: NewFeature) => FeatureId;
@@ -153,21 +156,34 @@ export interface CadStore {
 /** Max retained undo steps. */
 const HISTORY_LIMIT = 100;
 
-/** A deep snapshot of just the document (features + params + assembly) for history. */
+/**
+ * A history snapshot: the document (features + params + assembly) PLUS the id
+ * counter, so undo/redo restore `nextSeq` too — otherwise re-creating a feature
+ * after an undo skips ids (CADStudio.md §5.2).
+ */
+export interface HistorySnapshot {
+  features: EditorFeature[];
+  params: Record<string, number>;
+  assembly: AssemblyModel;
+  nextSeq: number;
+}
+
 function snapshot(s: {
   features: EditorFeature[];
   params: Record<string, number>;
   assembly: AssemblyModel;
-}): CadDocument {
+  nextSeq: number;
+}): HistorySnapshot {
   return structuredClone({
     features: s.features,
     params: s.params,
     assembly: s.assembly,
-  }) as CadDocument;
+    nextSeq: s.nextSeq,
+  });
 }
 
 /** History patch to merge into a mutating `set`: push the prior doc, drop redo. */
-function pushHistory(s: CadStore): { past: CadDocument[]; future: CadDocument[] } {
+function pushHistory(s: CadStore): { past: HistorySnapshot[]; future: HistorySnapshot[] } {
   return { past: [...s.past, snapshot(s)].slice(-HISTORY_LIMIT), future: [] };
 }
 
@@ -177,6 +193,13 @@ function defaultName(type: string, seq: number): string {
 }
 
 const samePick = (a: Pick, b: Pick): boolean => a.kind === b.kind && a.id === b.id;
+
+/** Re-resolve the rollback bar's index from its anchor feature id (FR-25 / §5.3). */
+function reconcileRollback(features: EditorFeature[], anchorId: string | null): number | null {
+  if (anchorId === null) return null;
+  const idx = features.findIndex((f) => f.id === anchorId);
+  return idx >= 0 ? idx : null;
+}
 
 export const useCadStore = create<CadStore>((set, get) => ({
   features: [],
@@ -200,6 +223,7 @@ export const useCadStore = create<CadStore>((set, get) => ({
   errorFeatureId: null,
   selectionRefs: { faces: {}, edges: {} },
   rollbackIndex: null,
+  rollbackBeforeId: null,
 
   addFeature: (f) => {
     const seq = get().nextSeq;
@@ -235,11 +259,15 @@ export const useCadStore = create<CadStore>((set, get) => ({
     })),
 
   removeFeature: (id) =>
-    set((s) => ({
-      ...pushHistory(s),
-      features: s.features.filter((f) => f.id !== id),
-      selectedFeatureId: s.selectedFeatureId === id ? null : s.selectedFeatureId,
-    })),
+    set((s) => {
+      const features = s.features.filter((f) => f.id !== id);
+      return {
+        ...pushHistory(s),
+        features,
+        selectedFeatureId: s.selectedFeatureId === id ? null : s.selectedFeatureId,
+        rollbackIndex: reconcileRollback(features, s.rollbackBeforeId),
+      };
+    }),
 
   toggleSuppress: (id) =>
     set((s) => ({
@@ -255,7 +283,11 @@ export const useCadStore = create<CadStore>((set, get) => ({
       const [moved] = next.splice(from, 1);
       const clamped = Math.max(0, Math.min(to, next.length));
       next.splice(clamped, 0, moved!);
-      return { ...pushHistory(s), features: next };
+      return {
+        ...pushHistory(s),
+        features: next,
+        rollbackIndex: reconcileRollback(next, s.rollbackBeforeId),
+      };
     }),
 
   setParam: (name, value) =>
@@ -289,7 +321,11 @@ export const useCadStore = create<CadStore>((set, get) => ({
   setMeasureResult: (result) => set({ measureResult: result }),
   setErrorFeature: (id) => set({ errorFeatureId: id }),
   setSelectionRefs: (refs) => set({ selectionRefs: refs }),
-  setRollback: (index) => set({ rollbackIndex: index }),
+  setRollback: (index) =>
+    set((s) => ({
+      rollbackIndex: index,
+      rollbackBeforeId: index === null ? null : (s.features[index]?.id ?? null),
+    })),
 
   selectFeature: (id) => set({ selectedFeatureId: id }),
   setSelMode: (mode) => set({ selMode: mode, picks: [] }),
@@ -335,7 +371,7 @@ export const useCadStore = create<CadStore>((set, get) => ({
     return id;
   },
 
-  removeInstance: (id) =>
+  removeInstance: (id) => {
     set((s) => ({
       ...pushHistory(s),
       assembly: {
@@ -344,16 +380,23 @@ export const useCadStore = create<CadStore>((set, get) => ({
         mates: s.assembly.mates.filter((m) => m.a.instance !== id && m.b.instance !== id),
         joints: s.assembly.joints.filter((j) => j.parent !== id && j.child !== id),
       },
-    })),
+    }));
+    // Re-solve so the remaining instances settle under the changed constraints
+    // (consistent with addMate/removeMate; CADStudio.md §5.4).
+    get().solveAssembly();
+  },
 
-  toggleInstanceFixed: (id) =>
+  toggleInstanceFixed: (id) => {
     set((s) => ({
       ...pushHistory(s),
       assembly: {
         ...s.assembly,
         instances: s.assembly.instances.map((i) => (i.id === id ? { ...i, fixed: !i.fixed } : i)),
       },
-    })),
+    }));
+    // Grounding/un-grounding an instance changes which poses are free to move.
+    get().solveAssembly();
+  },
 
   addMate: (mate) => {
     set((s) => ({
@@ -473,6 +516,7 @@ export const useCadStore = create<CadStore>((set, get) => ({
         features: structuredClone(prev.features),
         params: structuredClone(prev.params),
         assembly: structuredClone(prev.assembly ?? emptyAssembly()),
+        nextSeq: prev.nextSeq,
         past: s.past.slice(0, -1),
         future: [snapshot(s), ...s.future].slice(0, HISTORY_LIMIT),
       };
@@ -486,6 +530,7 @@ export const useCadStore = create<CadStore>((set, get) => ({
         features: structuredClone(next.features),
         params: structuredClone(next.params),
         assembly: structuredClone(next.assembly ?? emptyAssembly()),
+        nextSeq: next.nextSeq,
         past: [...s.past, snapshot(s)].slice(-HISTORY_LIMIT),
         future: s.future.slice(1),
       };
@@ -498,14 +543,17 @@ export const useCadStore = create<CadStore>((set, get) => ({
   },
 
   loadDocument: (doc) => {
-    // Re-derive nextSeq from the loaded ids (features `f<n>` + instances `i<n>`)
-    // so newly created ids don't collide.
+    // Re-derive nextSeq from EVERY typed id minted off the shared counter —
+    // features `f<n>`, instances `i<n>`, mates `m<n>`, joints `j<n>`. Missing the
+    // mate/joint prefixes here let a reloaded assembly reissue a colliding id.
     const ids = [
       ...doc.features.map((f) => f.id),
       ...(doc.assembly?.instances ?? []).map((i) => i.id),
+      ...(doc.assembly?.mates ?? []).map((m) => m.id),
+      ...(doc.assembly?.joints ?? []).map((j) => j.id),
     ];
     const maxSeq = ids.reduce((m, id) => {
-      const n = /^[fi](\d+)$/.exec(id);
+      const n = /^[fimj](\d+)$/.exec(id);
       return n ? Math.max(m, Number(n[1])) : m;
     }, 0);
     const a = doc.assembly;
@@ -524,6 +572,7 @@ export const useCadStore = create<CadStore>((set, get) => ({
       selectedFeatureId: null,
       picks: [],
       rollbackIndex: null,
+      rollbackBeforeId: null,
     });
   },
 
@@ -549,5 +598,6 @@ export const useCadStore = create<CadStore>((set, get) => ({
       errorFeatureId: null,
       selectionRefs: { faces: {}, edges: {} },
       rollbackIndex: null,
+      rollbackBeforeId: null,
     }),
 }));

@@ -61,6 +61,26 @@ describe("CAD Studio store — document (FR-2)", () => {
     s().reorderFeature(c, 99); // clamp to end
     expect(s().features.map((f) => f.id)).toEqual([a, b, c]);
   });
+
+  it("the rollback bar follows its anchor feature across edits (CADStudio.md §5.3)", () => {
+    const f1 = s().addFeature({ type: "sketch" });
+    s().addFeature({ type: "extrude" });
+    const f3 = s().addFeature({ type: "fillet" });
+    s().setRollback(2); // roll back before f3 (index 2)
+    expect(s().rollbackIndex).toBe(2);
+
+    // Removing an earlier feature shifts f3 to index 1 — the bar must follow.
+    s().removeFeature(f1);
+    expect(s().rollbackIndex).toBe(1);
+
+    // Reordering keeps the bar on the same anchor feature.
+    s().reorderFeature(f3, 0);
+    expect(s().rollbackIndex).toBe(0);
+
+    // Removing the anchor feature itself clears the rollback.
+    s().removeFeature(f3);
+    expect(s().rollbackIndex).toBeNull();
+  });
 });
 
 describe("CAD Studio store — selection (FR-2/FR-8/FR-9)", () => {
@@ -146,6 +166,16 @@ describe("CAD Studio store — undo / redo (FR-23 / M2.2)", () => {
     s().undo();
     expect(s().features).toHaveLength(0);
   });
+
+  it("undo restores nextSeq so re-created features don't skip ids (CADStudio.md §5.2)", () => {
+    const f1 = s().addFeature({ type: "box", params: { dx: 0.06, dy: 0.04, dz: 0.03 } });
+    expect(f1).toBe("f1");
+    s().undo();
+    expect(s().features).toHaveLength(0);
+    // Re-creating continues from f1 (nextSeq was rolled back), not a skipped f2.
+    const again = s().addFeature({ type: "box", params: { dx: 0.06, dy: 0.04, dz: 0.03 } });
+    expect(again).toBe("f1");
+  });
 });
 
 describe("CAD Studio store — assembly (FR-33/FR-34 / M4)", () => {
@@ -187,6 +217,33 @@ describe("CAD Studio store — assembly (FR-33/FR-34 / M4)", () => {
     s().removeInstance(i1);
     expect(s().assembly.instances).toHaveLength(1);
     expect(s().assembly.mates).toHaveLength(0);
+  });
+
+  it("removeInstance re-solves the remaining assembly (CADStudio.md §5.4)", () => {
+    const i0 = s().addInstance(); // ground (fixed)
+    const i1 = s().addInstance(); // free
+    s().addMate({
+      id: "m2",
+      kind: "coincident",
+      a: { instance: i0, point: [0.03, 0, 0] },
+      b: { instance: i1, point: [-0.03, 0, 0] },
+    });
+    expect(s().assemblyResult).not.toBeNull();
+    // Removing the ground drops the mate AND re-solves: only the free i1 is left,
+    // unconstrained → 6 DOF. (Without the re-solve the result would be stale.)
+    s().removeInstance(i0);
+    expect(s().assemblyResult!.freedom).toBe(6);
+    expect(s().assemblyResult!.verdict).toBe("under-constrained");
+  });
+
+  it("toggleInstanceFixed re-solves the assembly (CADStudio.md §5.4)", () => {
+    s().addInstance(); // i0 ground
+    const i1 = s().addInstance(); // i1 free
+    // Grounding i1 too leaves no free DOF → a re-solve must run and report 0.
+    s().toggleInstanceFixed(i1);
+    expect(s().assemblyResult).not.toBeNull();
+    expect(s().assemblyResult!.freedom).toBe(0);
+    expect(s().assemblyResult!.verdict).toBe("well-constrained");
   });
 
   it("pick two instance faces → applyMate builds + solves a mate", () => {
@@ -263,6 +320,29 @@ describe("CAD Studio store — document I/O (FR-39 reproducible reload)", () => 
     // New features continue the sequence (no id collision).
     const next = s().addFeature({ type: "fillet" });
     expect(next).toBe("f3");
+  });
+
+  it("reloads an assembly with mates without reissuing a colliding id (CADStudio.md §5.1)", () => {
+    const i1 = s().addInstance(); // i1
+    const i2 = s().addInstance(); // i2
+    // A mate whose id (m3) is minted off the SAME shared counter as i1/i2 —
+    // exactly the document shape applyMate produces.
+    s().addMate({
+      id: "m3",
+      kind: "coincident",
+      a: { instance: i1, point: [0, 0, 0] },
+      b: { instance: i2, point: [0, 0, 0] },
+    });
+    const doc = s().toDocument();
+
+    s().reset();
+    s().loadDocument(doc);
+
+    // The mate survived the round-trip…
+    expect(s().assembly.mates.map((m) => m.id)).toContain("m3");
+    // …and nextSeq cleared the mate id, so the next minted m-id is m4, not a
+    // colliding m3. (With the old /^[fi]/ derivation this would be 3.)
+    expect(s().nextSeq).toBe(4);
   });
 
   it("the document is a deep copy (mutating it does not affect the store)", () => {
