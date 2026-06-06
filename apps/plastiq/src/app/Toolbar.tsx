@@ -132,6 +132,16 @@ function FeatureMenu(): React.JSX.Element {
     const model: SketchModel = { ...emptySketch("XY", offset), face: faceRef };
     enterSketch("XY", offset, undefined, model);
   };
+  // Extrude/Cut/Revolve consume an upstream sketch profile. Gate them on one
+  // existing, else clicking them appends a feature that hard-fails the whole
+  // rebuild ("no sketch profile upstream") and poisons every later rebuild.
+  const features = useCadStore((s) => s.features);
+  const hasProfile = features.some(
+    (f) =>
+      f.type === "sketch" &&
+      !f.suppressed &&
+      (f.data?.["profile"] != null || f.data?.["model"] != null),
+  );
   const btn = "rounded px-1.5 py-0.5 text-xs text-[#9ab] hover:bg-[#1b2230]";
   const btnDisabled = "rounded px-1.5 py-0.5 text-xs text-[#445] cursor-not-allowed";
   return (
@@ -200,21 +210,30 @@ function FeatureMenu(): React.JSX.Element {
       </button>
       <button
         type="button"
-        className={btn}
+        className={hasProfile ? btn : btnDisabled}
+        data-testid="add-extrude"
+        disabled={!hasProfile}
+        title={hasProfile ? "Extrude the active sketch profile" : "Draw & Finish a sketch first"}
         onClick={() => addFeature({ type: "extrude", params: { height: 0.02 } })}
       >
         Extrude
       </button>
       <button
         type="button"
-        className={btn}
+        className={hasProfile ? btn : btnDisabled}
+        data-testid="add-cut"
+        disabled={!hasProfile}
+        title={hasProfile ? "Cut with the active sketch profile" : "Draw & Finish a sketch first"}
         onClick={() => addFeature({ type: "cut", params: { depth: 0.05 } })}
       >
         Cut
       </button>
       <button
         type="button"
-        className={btn}
+        className={hasProfile ? btn : btnDisabled}
+        data-testid="add-revolve"
+        disabled={!hasProfile}
+        title={hasProfile ? "Revolve the active sketch profile" : "Draw & Finish a sketch first"}
         onClick={() => addFeature({ type: "revolve", params: { angle: Math.PI * 2, ay: 1 } })}
       >
         Revolve
