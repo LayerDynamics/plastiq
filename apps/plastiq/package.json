@@ -13,6 +13,8 @@
   "dependencies": {
     "@plastiq/cad": "workspace:*",
     "@plastiq/sim": "workspace:*",
+    "@react-three/drei": "^10.7.7",
+    "@react-three/fiber": "^9.6.1",
     "@salusoft89/planegcs": "^1.1.7",
     "opencascade.js": "2.0.0-beta.b5ff984",
     "react": "^19.0.0",
