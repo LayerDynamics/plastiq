@@ -10,6 +10,9 @@ import { Part } from "./Part.js";
 import { Picking } from "./Picking.js";
 import { TransformGizmo } from "./gizmos/transform.gizmo.js";
 import { ViewCubeGizmo } from "./gizmos/viewCube.gizmo.js";
+import { OriginGizmo } from "./gizmos/origin.gizmo.js";
+import { ObjectCenterGizmo } from "./gizmos/objectCenter.gizmo.js";
+import { PlaneGizmo } from "./gizmos/plane.gizmo.js";
 import { GRID_CENTER, GRID_CELL } from "./colors.js";
 import { buildPart, disposePart, type BuiltPart } from "../viewport/buildMesh.js";
 import { applyPlacement, findPlacement, placementFromFeature } from "../viewport/placement.js";
@@ -119,6 +122,9 @@ export function Scene({ mesh }: { mesh: TransferMesh | null }): React.JSX.Elemen
       <gridHelper args={[0.4, 40, GRID_CENTER, GRID_CELL]} rotation={[Math.PI / 2, 0, 0]} />
       <Part part={part} />
       <Picking part={part} />
+      <OriginGizmo />
+      <PlaneGizmo />
+      <ObjectCenterGizmo />
       <TransformGizmo part={part} />
       <ViewCubeGizmo />
       <OrbitControls makeDefault enableDamping target={[0, 0, 0.02]} />
