@@ -402,17 +402,38 @@ export function rebuildDocument(oc: Occt, doc: CadDocument): Solid | null {
   return solid;
 }
 
+/** A built part: its tagged mesh plus the solid's density-free mass properties
+ * (volume + centroid), read off the same build so the panel needs no rebuild. */
+export interface BuiltPart {
+  mesh: TaggedMesh;
+  /** Solid volume in m³. */
+  volume: number;
+  /** Geometric centre of mass (centroid) in SI metres. */
+  com: [number, number, number];
+}
+
+/** Rebuild + tag the document AND read the solid's volume/centroid before it is
+ * disposed (FR-6 + mass-properties readout); null if the document has no geometry. */
+export function rebuildTaggedWithProps(
+  oc: Occt,
+  doc: CadDocument,
+  opts: TessellateOptions,
+): BuiltPart | null {
+  const solid = rebuildDocument(oc, doc);
+  if (!solid) return null;
+  try {
+    const mesh = tessellateTagged(oc, solid, opts);
+    return { mesh, volume: solid.volume(), com: solid.centreOfMass() };
+  } finally {
+    solid.delete();
+  }
+}
+
 /** Rebuild + tag the document's tessellation (FR-6); null if no geometry. */
 export function rebuildTagged(
   oc: Occt,
   doc: CadDocument,
   opts: TessellateOptions,
 ): TaggedMesh | null {
-  const solid = rebuildDocument(oc, doc);
-  if (!solid) return null;
-  try {
-    return tessellateTagged(oc, solid, opts);
-  } finally {
-    solid.delete();
-  }
+  return rebuildTaggedWithProps(oc, doc, opts)?.mesh ?? null;
 }

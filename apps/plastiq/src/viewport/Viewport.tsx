@@ -283,6 +283,13 @@ export function Viewport(): React.JSX.Element {
           } else {
             store.setSelectionRefs({ faces: {}, edges: {} });
           }
+          // Surface the build's volume + centroid in the properties panel (or
+          // clear it when the document produced no geometry).
+          store.setMassProps(
+            mesh && mesh.volume != null && mesh.com
+              ? { volume: mesh.volume, com: mesh.com }
+              : null,
+          );
         }
       } catch (err) {
         if (!cancelled) {

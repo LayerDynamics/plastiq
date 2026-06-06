@@ -116,11 +116,40 @@ function FeatureEditor(): React.JSX.Element | null {
   );
 }
 
+/** Mass properties of the current build (FR readout): volume + centroid. Shown
+ * only once the part has geometry; density-free (mass needs a material). */
+function MassPropertiesSection(): React.JSX.Element | null {
+  const massProps = useCadStore((s) => s.massProps);
+  if (!massProps) return null;
+  const toMm = (v: number): string => (v / M_PER_MM).toFixed(2); // m → mm
+  const [cx, cy, cz] = massProps.com;
+  return (
+    <section data-testid="mass-properties">
+      <h3 className="mb-1 text-[11px] font-bold tracking-wide text-[#789]">MASS PROPERTIES</h3>
+      <dl className="space-y-0.5 text-xs">
+        <div className="flex items-center justify-between gap-2">
+          <dt className="text-[#789]">Volume</dt>
+          <dd data-testid="mp-volume" className="tabular-nums text-[#cfe]">
+            {(massProps.volume * 1e6).toFixed(2)} cm³
+          </dd>
+        </div>
+        <div className="flex items-center justify-between gap-2">
+          <dt className="text-[#789]">Centroid</dt>
+          <dd data-testid="mp-centroid" className="tabular-nums text-[#cfe]">
+            {toMm(cx)}, {toMm(cy)}, {toMm(cz)} mm
+          </dd>
+        </div>
+      </dl>
+    </section>
+  );
+}
+
 export function PropertiesPanel(): React.JSX.Element {
   return (
     <div data-testid="properties" className="space-y-4 text-sm text-[#9ab]">
       <FeatureEditor />
       <PlacementEditor />
+      <MassPropertiesSection />
     </div>
   );
 }

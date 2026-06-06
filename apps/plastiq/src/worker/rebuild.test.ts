@@ -2,7 +2,7 @@ import { beforeAll, describe, expect, it } from "vitest";
 import { exportStep, initOcct, makeBox, mm, type Occt, type Solid } from "@plastiq/cad";
 import type { CadDocument } from "../store/types.js";
 import type { Profile } from "../sketch/profile.js";
-import { rebuildDocument, rebuildTagged } from "./rebuild.js";
+import { rebuildDocument, rebuildTagged, rebuildTaggedWithProps } from "./rebuild.js";
 
 const INIT_TIMEOUT_MS = 120_000;
 
@@ -59,6 +59,27 @@ describe("CAD Studio rebuild (SPEC-5 M0.4)", () => {
     expect(mesh).not.toBeNull();
     expect(mesh!.faceGroups).toHaveLength(6);
     expect(mesh!.edges).toHaveLength(12);
+  });
+
+  it("rebuildTaggedWithProps reports the solid's volume + centroid alongside the mesh", () => {
+    const doc: CadDocument = {
+      features: [{ id: "f1", type: "box", params: { dx: mm(20), dy: mm(30), dz: mm(40) } }],
+      params: {},
+    };
+    const built = rebuildTaggedWithProps(oc, doc, { linearDeflection: mm(0.5) });
+    expect(built).not.toBeNull();
+    expect(built!.mesh.faceGroups).toHaveLength(6); // same tagged mesh as rebuildTagged
+    // 20×30×40 mm box → volume = 20·30·40 mm³; makeBox has a corner at the origin
+    // so the centroid sits at half-extents (mm 10, 15, 20).
+    expect(built!.volume).toBeCloseTo(mm(20) * mm(30) * mm(40), 12);
+    expect(built!.com[0]).toBeCloseTo(mm(10), 9);
+    expect(built!.com[1]).toBeCloseTo(mm(15), 9);
+    expect(built!.com[2]).toBeCloseTo(mm(20), 9);
+  });
+
+  it("rebuildTaggedWithProps returns null for a document with no geometry", () => {
+    const built = rebuildTaggedWithProps(oc, { features: [], params: {} }, { linearDeflection: mm(0.5) });
+    expect(built).toBeNull();
   });
 
   it("evaluates a sketch→extrude document", () => {
