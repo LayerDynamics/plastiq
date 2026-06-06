@@ -17,6 +17,7 @@ import { findPlacement, placementFromFeature, placementParams } from "./placemen
 import { useProjectsStore } from "../persistence/projectsStore.js";
 import { applyJointDrives, type AssemblyModel, type Quat, type Vec3 } from "../assembly/model.js";
 import { Simulator } from "../sim/simulator.js";
+import { explodeInstances } from "./explode.js";
 import { activeBackend, type BackendName } from "@plastiq/sim";
 
 /** The instance poses the scene renders: the mate-solved poses with any active
@@ -31,6 +32,15 @@ function instanceList(
     position: i.pose.position,
     orientation: i.pose.orientation,
   }));
+}
+
+/** The instance render poses with the active exploded-view spread applied (FR-33). */
+function explodedInstances(s: {
+  assembly: AssemblyModel;
+  jointDrive: Record<string, number>;
+  explodeFactor: number;
+}): { id: string; position: Vec3; orientation: Quat }[] {
+  return explodeInstances(instanceList(s.assembly, s.jointDrive), s.explodeFactor);
 }
 
 /** The features that actually build, honoring the rollback point (FR-25). */
@@ -100,6 +110,12 @@ export function Viewport(): React.JSX.Element {
     // One "frame" of playback advances this many fixed ticks (matches the RAF
     // loop's batch); the Step button advances exactly one such frame.
     const TICKS_PER_FRAME = 4;
+    // Render the assembly instances with the active exploded-view spread applied.
+    const renderInstances = (s: {
+      assembly: AssemblyModel;
+      jointDrive: Record<string, number>;
+      explodeFactor: number;
+    }): void => scene.setInstances(explodedInstances(s));
     const simBodies = (): { id: string; position: Vec3; orientation: Quat }[] => {
       const a = useCadStore.getState().assembly;
       return a.instances.length > 0
@@ -127,7 +143,7 @@ export function Viewport(): React.JSX.Element {
       simulator?.stop();
       simulator = null;
       const s = useCadStore.getState();
-      scene.setInstances(instanceList(s.assembly, s.jointDrive)); // re-derive from doc
+      renderInstances(s); // re-derive from doc
     };
     // E2E hook: deterministic manual control (no RAF). setBackend selects the
     // physics engine (rapier|ammo|cannon) for the next run; backend() reports the
@@ -167,7 +183,7 @@ export function Viewport(): React.JSX.Element {
     scene.setMeasuring(initial.measuring);
     scene.setMeasureHandler((result) => useCadStore.getState().setMeasureResult(result));
     scene.setSection(initial.section);
-    scene.setInstances(instanceList(initial.assembly, initial.jointDrive));
+    renderInstances(initial);
     // Mate authoring: a click on an instance face records a mate endpoint (M4.2).
     const syncMateMode = (on: boolean): void =>
       scene.setInstancePickHandler(on ? (p) => useCadStore.getState().addMatePick(p) : null);
@@ -204,8 +220,13 @@ export function Viewport(): React.JSX.Element {
         scene.setPlacement(placementFromFeature(findPlacement(s.features)));
       }
       // While simulating, the sim owns the instance poses — don't re-derive.
-      if (!s.simulating && (s.assembly !== prev.assembly || s.jointDrive !== prev.jointDrive)) {
-        scene.setInstances(instanceList(s.assembly, s.jointDrive));
+      if (
+        !s.simulating &&
+        (s.assembly !== prev.assembly ||
+          s.jointDrive !== prev.jointDrive ||
+          s.explodeFactor !== prev.explodeFactor)
+      ) {
+        renderInstances(s);
       }
       if (s.mateMode !== prev.mateMode) syncMateMode(s.mateMode);
       // Simulate (FR-41): start a RAF-driven sim, or stop and return to edit.
@@ -286,7 +307,7 @@ export function Viewport(): React.JSX.Element {
           // Re-render instances against the fresh geometry (setMesh reset it).
           {
             const st = useCadStore.getState();
-            scene.setInstances(instanceList(st.assembly, st.jointDrive));
+            scene.setInstances(explodedInstances(st));
           }
           setStatus(mesh ? "ready" : "empty");
           const store = useCadStore.getState();

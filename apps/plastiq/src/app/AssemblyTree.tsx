@@ -286,6 +286,33 @@ function JointsSection(): React.JSX.Element {
   );
 }
 
+/** Exploded view (FR-33): spread the instances apart from the assembly centroid
+ * to inspect how they fit. Shown only with ≥2 instances (a lone instance has
+ * nothing to explode). The factor is transient view state — it never edits the doc. */
+function ExplodeControl(): React.JSX.Element {
+  const explodeFactor = useCadStore((s) => s.explodeFactor);
+  const setExplodeFactor = useCadStore((s) => s.setExplodeFactor);
+  return (
+    <div data-testid="explode-control" className="mt-2 flex items-center gap-2">
+      <h3 className="text-[11px] font-bold tracking-wide text-[#789]">EXPLODE</h3>
+      <input
+        type="range"
+        data-testid="explode-slider"
+        min={0}
+        max={2}
+        step={0.05}
+        value={explodeFactor}
+        onChange={(e) => setExplodeFactor(Number(e.currentTarget.value))}
+        className="flex-1"
+        title="Spread the assembly apart"
+      />
+      <span className="w-8 text-right text-[10px] tabular-nums text-[#678]">
+        {explodeFactor.toFixed(1)}×
+      </span>
+    </div>
+  );
+}
+
 export function AssemblyTree(): React.JSX.Element {
   const instances = useCadStore((s) => s.assembly.instances);
   const mates = useCadStore((s) => s.assembly.mates);
@@ -351,6 +378,7 @@ export function AssemblyTree(): React.JSX.Element {
           ))}
         </ul>
       )}
+      {instances.length >= 2 && <ExplodeControl />}
       {instances.length >= 2 && <MatesSection />}
       {instances.length >= 2 && <JointsSection />}
       {instances.length >= 1 && <ExportToSim />}
