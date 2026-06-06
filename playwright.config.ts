@@ -11,10 +11,14 @@ export default defineConfig({
   timeout: 240_000,
   fullyParallel: false,
   workers: 1,
-  reporter: "list",
+  // In CI also emit an HTML report (uploaded as a CI artifact on failure).
+  reporter: process.env.CI ? [["list"], ["html", { open: "never" }]] : "list",
   use: {
     baseURL: "http://localhost:4177",
     launchOptions: { args: ["--no-sandbox"] },
+    // Capture diagnostics for failing runs (collected under test-results/).
+    trace: "retain-on-failure",
+    screenshot: "only-on-failure",
   },
   projects: [{ name: "cad-studio", use: { ...devices["Desktop Chrome"] } }],
   webServer: {
