@@ -40,6 +40,7 @@ export {
 } from "./mesh/tagged.js";
 export { tessellateTagged } from "./mesh/tessellate.js";
 export { resolveFaceRef, resolveEdgeRef, resolveEdgeDirection } from "./mesh/resolve.js";
+export { faceDatumPlane } from "./mesh/faceFrame.js";
 export { exportStep, importStep, exportIges, exportGltf } from "./io/index.js";
 
 // R4 — sketch profiles + feature operations.

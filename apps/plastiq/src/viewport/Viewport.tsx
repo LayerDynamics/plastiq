@@ -275,8 +275,38 @@ export function Viewport(): React.JSX.Element {
     // through an ortho camera locked to the sketch plane + the overlay's 2D view,
     // so the model behind the transparent overlay coincides with the sketch.
     const applySketchView = (s: ReturnType<typeof useSketchStore.getState>): void => {
-      const plane = s.active ? resolveDatumPlane(s.model.plane, s.model.offset ?? 0) : null;
-      scene.setSketchView(plane, s.view);
+      if (!s.active) {
+        scene.setSketchView(null, s.view);
+        return;
+      }
+      const face = s.model.face;
+      if (face) {
+        // On-face sketch: the main thread can't run OCCT, so ask the worker for
+        // the face frame, then shift it by the offset along the face normal.
+        const off = s.model.offset ?? 0;
+        const view = s.view;
+        void client.facePlane(useCadStore.getState().toDocument(), face).then((frame) => {
+          // Drop the result if the sketch was exited or its face changed meanwhile.
+          const cur = useSketchStore.getState();
+          if (!cur.active || cur.model.face !== face) return;
+          scene.setSketchView(
+            frame
+              ? {
+                  origin: [
+                    frame.origin[0] + frame.normal[0] * off,
+                    frame.origin[1] + frame.normal[1] * off,
+                    frame.origin[2] + frame.normal[2] * off,
+                  ],
+                  normal: frame.normal,
+                  xAxis: frame.xAxis,
+                }
+              : null,
+            view,
+          );
+        });
+        return;
+      }
+      scene.setSketchView(resolveDatumPlane(s.model.plane, s.model.offset ?? 0), s.view);
     };
     applySketchView(useSketchStore.getState());
     const unsubSketch = useSketchStore.subscribe((s, prev) => {

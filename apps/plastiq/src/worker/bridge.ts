@@ -3,9 +3,9 @@
 // SimManifest (M4.5). Concurrent calls are matched by request id.
 
 import GeometryWorker from "./geometry.worker.js?worker";
-import type { SimManifest } from "@plastiq/cad";
+import type { FaceRef, SimManifest } from "@plastiq/cad";
 import type { CadDocument } from "../store/types.js";
-import type { ExportFormat, TransferMesh, WorkerResponse } from "./protocol.js";
+import type { ExportFormat, PlaneFrame, TransferMesh, WorkerResponse } from "./protocol.js";
 
 /** Lowering result handed back to the UI (manifest + un-lowerable joints + COM). */
 export interface LowerOutcome {
@@ -86,6 +86,15 @@ export class GeometryClient {
     const res = await this.send({ op: "export", doc, format });
     if (!res.ok || res.op !== "export") throw new Error("export: unexpected worker response");
     return res.content;
+  }
+
+  /** Resolve a picked face on `doc` to a sketch datum frame for the "normal to"
+   * camera (M3 on-face sketching); null if there's no body or the face is gone. */
+  async facePlane(doc: CadDocument, face: FaceRef): Promise<PlaneFrame | null> {
+    const res = await this.send({ op: "facePlane", doc, face });
+    if (!res.ok || res.op !== "facePlane")
+      throw new Error("facePlane: unexpected worker response");
+    return res.plane;
   }
 
   dispose(): void {

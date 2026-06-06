@@ -7,17 +7,34 @@
 // Geometry is derived: the solved point positions feed `rebuild.ts`'s profile
 // (line/arc/circle wire), never stored as a dumb polyline.
 
-import type { Constraint as SolverConstraint, SolverPoint } from "@plastiq/cad";
+import type { Constraint as SolverConstraint, SolverPoint, FaceRef } from "@plastiq/cad";
 
 export type DatumPlaneId = "XY" | "XZ" | "YZ";
 
-/** A sketch's plane: a base datum (XY/XZ/YZ) shifted `offset` metres along its
- * normal. The compiled form stored on a sketch feature's `data.plane` and resolved
- * to a kernel DatumPlane at rebuild. Absent ⇒ XY at offset 0 (back-compat). */
-export interface SketchPlaneSpec {
+/** A sketch on a base datum (XY/XZ/YZ), shifted `offset` metres along its normal. */
+export interface SketchDatumSpec {
   base: DatumPlaneId;
   /** Distance along the base plane's normal, in SI metres. */
   offset: number;
+}
+
+/** A sketch on a MODEL FACE's plane, shifted `offset` metres along the face
+ * normal — re-resolved against the upstream solid at rebuild (parametric). */
+export interface SketchFacePlaneSpec {
+  kind: "face";
+  face: FaceRef;
+  offset: number;
+}
+
+/** A sketch feature's compiled `data.plane`, resolved to a kernel DatumPlane at
+ * rebuild. Absent ⇒ XY at offset 0 (back-compat with pre-plane documents). */
+export type SketchPlaneSpec = SketchDatumSpec | SketchFacePlaneSpec;
+
+/** Discriminate the face variant (it needs the solid to resolve, unlike a datum). */
+export function isFaceSketchPlane(
+  spec: SketchPlaneSpec | undefined,
+): spec is SketchFacePlaneSpec {
+  return spec != null && "kind" in spec && spec.kind === "face";
 }
 
 export interface SketchPoint {
@@ -108,6 +125,9 @@ export interface SketchModel {
   /** Offset of the sketch plane along its base normal, in SI metres (default 0).
    * Optional so documents saved before sketch offsets still load (back-compat). */
   offset?: number;
+  /** When set, the sketch is on this model FACE (offset along its normal) instead
+   * of the base datum; `plane` is then an inert placeholder. */
+  face?: FaceRef;
   points: SketchPoint[];
   entities: SketchEntity[];
   constraints: SketchConstraint[];

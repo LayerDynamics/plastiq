@@ -160,6 +160,40 @@ describe("CAD Studio rebuild (SPEC-5 M0.4)", () => {
     expect(comZ(m(50)) - comZ(0)).toBeCloseTo(m(50), 6);
   });
 
+  it("a sketch on a model FACE builds on that face, and its offset shifts along the face normal", () => {
+    const m = (x: number): number => mm(x);
+    const rect = loopProfile([
+      [0, 0],
+      [m(10), 0],
+      [m(10), m(10)],
+      [0, m(10)],
+    ]);
+    // Box 60×40×30 mm: its +Z top face sits at z = 30 mm. A sketch resolved on that
+    // face (via its FaceRef) then extruded must build at z≈30 mm — NOT the XY plane
+    // (which would put the solid's centroid near z≈10 mm).
+    const comZ = (faceOffset: number): number => {
+      const doc: CadDocument = {
+        features: [
+          { id: "f1", type: "box", params: { dx: m(60), dy: m(40), dz: m(30) } },
+          {
+            id: "f2",
+            type: "sketch",
+            deps: ["f1"],
+            data: { profile: rect, plane: { kind: "face", face: { normal: [0, 0, 1] }, offset: faceOffset } },
+          },
+          { id: "f3", type: "extrude", deps: ["f2"], params: { height: m(20) } },
+        ],
+        params: {},
+      };
+      return rebuildTaggedWithProps(oc, doc, { linearDeflection: mm(0.5) })!.com[2];
+    };
+    const onFace = comZ(0);
+    expect(onFace).toBeGreaterThan(m(15)); // on the 30 mm top face, not the XY plane (~10)
+    expect(onFace).toBeLessThan(m(45));
+    // A 10 mm face offset lifts the solid a further 10 mm along the face normal.
+    expect(comZ(m(10)) - onFace).toBeCloseTo(m(10), 6);
+  });
+
   it("box → sketch → cut subtracts a pocket from the current solid (FR-29)", () => {
     const m = (x: number): number => mm(x);
     const doc: CadDocument = {
