@@ -532,7 +532,7 @@ export function Sketcher(): React.JSX.Element | null {
   );
 
   return (
-    <div ref={hostRef} data-testid="sketcher" className="absolute inset-0 z-10 bg-[#0b0d12]/85">
+    <div ref={hostRef} data-testid="sketcher" className="absolute inset-0 z-10">
       <div className="absolute left-2 top-2 z-20 flex items-center gap-2 rounded border border-[#2a3444] bg-black/60 px-2 py-1 text-xs text-[#cfe]">
         <span className="font-bold">Sketch</span>
         <span className="text-[#789]">{plane}</span>
