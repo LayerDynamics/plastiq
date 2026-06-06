@@ -48,6 +48,7 @@ test("the status bar is a thin strip, not a stretched row (FR-4 regression)", as
   // (normally hidden) recovery banner rendered null, the layout grid's stretchy
   // `1fr` row fell onto the footer, ballooning it to ~130px. It must stay thin,
   // and the viewport must own the bulk of the height.
+
   expect(statusBox!.height).toBeLessThan(60);
   expect(viewportBox!.height).toBeGreaterThan(statusBox!.height * 4);
 });

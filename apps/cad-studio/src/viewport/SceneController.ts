@@ -128,7 +128,8 @@ export class SceneController {
     // (M5.3 project thumbnails).
     this.renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
     this.renderer.setPixelRatio(globalThis.devicePixelRatio || 1);
-    this.renderer.setSize(w || 1, h || 1, false);
+    // updateStyle=true so the canvas gets a CSS size (host px); see resize().
+    this.renderer.setSize(w || 1, h || 1, true);
     host.appendChild(this.renderer.domElement);
 
     // Rubber-band selection rectangle overlay (FR-10), hidden until a Shift-drag.
@@ -755,7 +756,11 @@ export class SceneController {
     // Re-apply devicePixelRatio so moving to a different-density monitor stays
     // crisp (it can change without a code path other than a resize; §5.8).
     this.renderer.setPixelRatio(globalThis.devicePixelRatio || 1);
-    this.renderer.setSize(w, h, false);
+    // updateStyle=true: set the canvas CSS size to the host's CSS px while the
+    // drawing buffer stays w·dpr × h·dpr. With updateStyle=false the canvas had
+    // no CSS size, so on a HiDPI display (dpr=2) it displayed at the 2× buffer
+    // size and the scene rendered off the visible viewport (blank canvas).
+    this.renderer.setSize(w, h, true);
   }
 
   private tick(): void {
