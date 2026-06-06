@@ -34,7 +34,7 @@ export function buildSpineWire(oc: Occt, path: SpinePath): TopoDS_Wire {
     // build a degenerate edge from it that corrupts the swept solid. A spine of
     // ENTIRELY coincident points leaves no real segment and is rejected below —
     // the points.length check alone can't catch a 2-identical-point spine.
-    if (Math.hypot(p1[0] - p0[0], p1[1] - p0[1], p1[2] - p0[2]) < 1e-9) continue;
+    if (Math.hypot(p1[0] - p0[0], p1[1] - p0[1], p1[2] - p0[2]) < 1e-7) continue;
     const a = pnt(oc, p0);
     const b = pnt(oc, p1);
     const em = new oc.BRepBuilderAPI_MakeEdge_3(a, b);
