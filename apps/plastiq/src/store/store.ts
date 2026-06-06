@@ -91,6 +91,9 @@ export interface CadStore {
   /** Section view (FR-14): a clip plane cutting the model along an axis at
    *  fraction `t` of its extent, or null when off. Transient view state. */
   section: { axis: "x" | "y" | "z"; t: number } | null;
+  /** Exploded-view factor (FR-33): instances are spread from the assembly centroid
+   *  by this fraction of their offset (0 = assembled). Transient view state. */
+  explodeFactor: number;
   /** Rollback bar (FR-25): features at index ≥ this are skipped at rebuild
    * (null = no rollback, build everything). */
   rollbackIndex: number | null;
@@ -122,6 +125,8 @@ export interface CadStore {
   setMassProps: (props: { volume: number; com: [number, number, number] } | null) => void;
   /** Enable/adjust the section clip plane, or disable it (null) (FR-14). */
   setSection: (section: { axis: "x" | "y" | "z"; t: number } | null) => void;
+  /** Set the exploded-view factor (0 = assembled) (FR-33). */
+  setExplodeFactor: (factor: number) => void;
   /** Set the rollback point (index, or null to build everything) (FR-25). */
   setRollback: (index: number | null) => void;
 
@@ -257,6 +262,7 @@ export const useCadStore = create<CadStore>((set, get) => ({
   selectionRefs: { faces: {}, edges: {} },
   massProps: null,
   section: null,
+  explodeFactor: 0,
   rollbackIndex: null,
   rollbackBeforeId: null,
 
@@ -360,6 +366,8 @@ export const useCadStore = create<CadStore>((set, get) => ({
   setMassProps: (props) => set({ massProps: props }),
 
   setSection: (section) => set({ section }),
+
+  setExplodeFactor: (factor) => set({ explodeFactor: Math.max(0, factor) }),
   setRollback: (index) =>
     set((s) => ({
       rollbackIndex: index,
@@ -662,6 +670,7 @@ export const useCadStore = create<CadStore>((set, get) => ({
       selectionRefs: { faces: {}, edges: {} },
       massProps: null,
       section: null,
+      explodeFactor: 0,
       rollbackIndex: null,
       rollbackBeforeId: null,
     }),
