@@ -313,6 +313,46 @@ function ExplodeControl(): React.JSX.Element {
   );
 }
 
+/** Interference / clash check (FR-33): a button to test whether any instances
+ * overlap, plus a verdict listing the clashing pairs by name (bounding-box
+ * broad-phase). Shown only with ≥2 instances. */
+function ClearanceControl(): React.JSX.Element {
+  const interferences = useCadStore((s) => s.interferences);
+  const instances = useCadStore((s) => s.assembly.instances);
+  const checkInterference = useCadStore((s) => s.checkInterference);
+  const nameOf = (id: string): string => instances.find((i) => i.id === id)?.name ?? id;
+  return (
+    <div data-testid="clearance-control" className="mt-2">
+      <div className="mb-1 flex items-center gap-1">
+        <h3 className="flex-1 text-[11px] font-bold tracking-wide text-[#789]">CLEARANCE</h3>
+        <button
+          type="button"
+          data-testid="check-interference"
+          onClick={checkInterference}
+          className="rounded border border-[#2a3444] px-1.5 py-0.5 text-[11px] text-[#9ab] hover:bg-[#1b2230]"
+          title="Check whether any instances overlap (bounding-box)"
+        >
+          Check
+        </button>
+      </div>
+      {interferences != null &&
+        (interferences.length === 0 ? (
+          <span data-testid="interference-verdict" className="text-[10px] text-[#7bc47b]">
+            No interference
+          </span>
+        ) : (
+          <ul data-testid="interference-verdict" className="space-y-0.5 text-[10px] text-[#ff9a6b]">
+            {interferences.map((c) => (
+              <li key={`${c.a}-${c.b}`} data-testid="interference-row">
+                {nameOf(c.a)} ↔ {nameOf(c.b)}
+              </li>
+            ))}
+          </ul>
+        ))}
+    </div>
+  );
+}
+
 export function AssemblyTree(): React.JSX.Element {
   const instances = useCadStore((s) => s.assembly.instances);
   const mates = useCadStore((s) => s.assembly.mates);
@@ -379,6 +419,7 @@ export function AssemblyTree(): React.JSX.Element {
         </ul>
       )}
       {instances.length >= 2 && <ExplodeControl />}
+      {instances.length >= 2 && <ClearanceControl />}
       {instances.length >= 2 && <MatesSection />}
       {instances.length >= 2 && <JointsSection />}
       {instances.length >= 1 && <ExportToSim />}
