@@ -5,9 +5,11 @@ import type { CircleEntity, LineEntity } from "./model.js";
 
 const s = () => useSketchStore.getState();
 
-// planegcs (the sketch solver) loads its wasm asynchronously; init once.
+// planegcs (the sketch solver) loads its wasm asynchronously; init once, then
+// mark the store ready (the app does this in main.tsx; the sketcher is gated on it).
 beforeAll(async () => {
   await initSketchSolver();
+  useSketchStore.getState().setSolverReady(true);
 }, 120_000);
 
 beforeEach(() => {

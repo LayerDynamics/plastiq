@@ -1,5 +1,6 @@
-// cannon-es physics backend (pure JS — no wasm). Box-collider rigid bodies posed
-// by world COM; hinge/fixed constraints become Hinge/Lock constraints.
+// cannon-es physics backend (pure JS — no wasm). Rigid bodies posed by world COM,
+// each carrying one or more convex-hull shapes (a compound collider for a
+// decomposed concave part); hinge/fixed constraints become Hinge/Lock constraints.
 
 import * as CANNON from "cannon-es";
 
@@ -18,15 +19,10 @@ class CannonEngine implements PhysicsEngine {
     this.world = world;
 
     const byId = new Map<string, CANNON.Body>();
+    const origin = new CANNON.Vec3(0, 0, 0);
     for (const b of manifest.bodies) {
-      const vertices: CANNON.Vec3[] = [];
-      for (let k = 0; k < b.hull.points.length; k += 3) {
-        vertices.push(new CANNON.Vec3(b.hull.points[k]!, b.hull.points[k + 1]!, b.hull.points[k + 2]!));
-      }
-      const shape = new CANNON.ConvexPolyhedron({ vertices, faces: b.hull.faces });
       const body = new CANNON.Body({
         mass: b.fixed ? 0 : b.mass,
-        shape,
         position: new CANNON.Vec3(b.com[0], b.com[1], b.com[2]),
         quaternion: new CANNON.Quaternion(
           b.orientation[0],
@@ -35,6 +31,17 @@ class CannonEngine implements PhysicsEngine {
           b.orientation[3],
         ),
       });
+      // Add each convex piece as a shape at zero offset (pieces are already in
+      // the body's COM-centred frame).
+      for (const piece of b.colliders) {
+        const vertices: CANNON.Vec3[] = [];
+        for (let k = 0; k < piece.points.length; k += 3) {
+          vertices.push(new CANNON.Vec3(piece.points[k]!, piece.points[k + 1]!, piece.points[k + 2]!));
+        }
+        body.addShape(new CANNON.ConvexPolyhedron({ vertices, faces: piece.faces }), origin);
+      }
+      // Recompute the inertia tensor now that all pieces are attached.
+      body.updateMassProperties();
       world.addBody(body);
       this.bodies.push(body);
       byId.set(b.id, body);
@@ -43,7 +50,12 @@ class CannonEngine implements PhysicsEngine {
     for (const c of manifest.constraints) {
       const a = byId.get(c.bodyA);
       const b = byId.get(c.bodyB);
-      if (!a || !b) continue;
+      if (!a || !b) {
+        console.warn(
+          `cannon: dropping ${c.kind} constraint — missing body (bodyA='${c.bodyA}'${a ? "" : " [missing]"}, bodyB='${c.bodyB}'${b ? "" : " [missing]"})`,
+        );
+        continue;
+      }
       const pivotA = new CANNON.Vec3(
         c.origin[0] - a.position.x,
         c.origin[1] - a.position.y,

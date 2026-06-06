@@ -17,6 +17,7 @@ import { findPlacement, placementFromFeature, placementParams } from "./placemen
 import { useProjectsStore } from "../persistence/projectsStore.js";
 import { applyJointDrives, type AssemblyModel, type Quat, type Vec3 } from "../assembly/model.js";
 import { Simulator } from "../sim/simulator.js";
+import { activeBackend, type BackendName } from "@plastiq/sim";
 
 /** The instance poses the scene renders: the mate-solved poses with any active
  * joint drives applied (motion preview, FR-36). */
@@ -92,6 +93,10 @@ export function Viewport(): React.JSX.Element {
     // The render groups the sim drives: the assembly instances, or one identity
     // body for a bare part (matching the worker's synthesized body0).
     let simulator: Simulator | null = null;
+    // Which physics backend the next sim run uses (default Rapier). Selectable at
+    // runtime — the pluggable design's whole point; the E2E suite drives ammo and
+    // cannon through here to prove all three engines run in the browser.
+    let simBackend: BackendName | undefined;
     const simBodies = (): { id: string; position: Vec3; orientation: Quat }[] => {
       const a = useCadStore.getState().assembly;
       return a.instances.length > 0
@@ -112,7 +117,7 @@ export function Viewport(): React.JSX.Element {
         localCom,
         bodies.map((b) => b.id),
       );
-      return simulator.start();
+      return simulator.start(simBackend);
     };
     const stopSimulator = (): void => {
       scene.setSimulation(null);
@@ -121,7 +126,9 @@ export function Viewport(): React.JSX.Element {
       const s = useCadStore.getState();
       scene.setInstances(instanceList(s.assembly, s.jointDrive)); // re-derive from doc
     };
-    // E2E hook: deterministic manual control (no RAF) — start/step/poseOf/stop.
+    // E2E hook: deterministic manual control (no RAF). setBackend selects the
+    // physics engine (rapier|ammo|cannon) for the next run; backend() reports the
+    // active one after start.
     (
       globalThis as {
         __cadStudioSimulate?: {
@@ -129,6 +136,8 @@ export function Viewport(): React.JSX.Element {
           step: (n: number) => void;
           poseOf: (id: string) => { position: Vec3; orientation: Quat } | null;
           stop: () => void;
+          setBackend: (name: BackendName) => void;
+          backend: () => BackendName | null;
         };
       }
     ).__cadStudioSimulate = {
@@ -140,6 +149,10 @@ export function Viewport(): React.JSX.Element {
       },
       poseOf: (id) => simulator?.poses().find((p) => p.id === id) ?? null,
       stop: stopSimulator,
+      setBackend: (name) => {
+        simBackend = name;
+      },
+      backend: () => activeBackend(),
     };
 
     const initial = useCadStore.getState();

@@ -3,11 +3,12 @@
 // document's feature tree, tags its tessellation (FR-6), and posts the result
 // back as transferable typed arrays so the UI thread never blocks on OCCT.
 
-import wasmUrl from "opencascade.js/dist/opencascade.full.wasm?url";
+import wasmUrl from "@plastiq/cad/vendor/occt/plastiq-occt.wasm?url";
 import {
   exportGltf,
   exportIges,
   exportStep,
+  initDecomposer,
   initOcct,
   type Occt,
   type TaggedMesh,
@@ -51,6 +52,9 @@ ctx.onmessage = (ev: MessageEvent<WorkerRequest>): void => {
         // Simulate works on the modelled part directly.
         const solid = rebuildDocument(oc, req.doc);
         if (!solid) throw new Error("lower: the document has no geometry to instance");
+        // A concave part is decomposed into convex pieces during lowering; make
+        // sure the V-HACD decomposer's wasm is ready before exportForSim runs.
+        await initDecomposer();
         try {
           const assembly = req.doc.assembly ?? { instances: [], mates: [], joints: [] };
           const effective =

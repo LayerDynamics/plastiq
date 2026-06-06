@@ -1,6 +1,6 @@
 // R6 — pluggable physics: every backend spawns a manifest and steps under gravity.
 
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { PredictionSim, initSim } from "./prediction.js";
 import type { BackendName } from "./engine.js";
@@ -29,6 +29,35 @@ function boxHull(h: number): HullCollider {
   return boxHullXYZ(h, h, h);
 }
 
+/**
+ * An L-shaped compound collider built from TWO box pieces (a 0.1×0.05×0.05 foot
+ * and a 0.05×0.05×0.05 upright), expressed in a frame centred on the L. This is a
+ * genuine multi-piece compound — the shape a concave part decomposes into.
+ */
+function lCompound(): HullCollider[] {
+  // Foot: half (0.05,0.025,0.025) at centre (0,0,-0.025) → vol 2.5e-4.
+  // Upright: half (0.025,0.025,0.025) at centre (-0.025,0,0.025) → vol 1.25e-4.
+  // Volume-weighted COM = (-1/120, 0, -1/120) ≈ (-0.008333,0,-0.008333). Re-centre
+  // both pieces on it so the body origin = COM (the manifest invariant: pieces are
+  // COM-local), making readback identical across all three backends.
+  const sx = 1 / 120;
+  const sz = 1 / 120;
+  const foot = shiftHull(boxHullXYZ(0.05, 0.025, 0.025), 0 + sx, 0, -0.025 + sz);
+  const upright = shiftHull(boxHullXYZ(0.025, 0.025, 0.025), -0.025 + sx, 0, 0.025 + sz);
+  return [foot, upright];
+}
+
+/** Translate every vertex of a hull collider by (dx,dy,dz). */
+function shiftHull(h: HullCollider, dx: number, dy: number, dz: number): HullCollider {
+  const points = h.points.slice();
+  for (let k = 0; k < points.length; k += 3) {
+    points[k]! += dx;
+    points[k + 1]! += dy;
+    points[k + 2]! += dz;
+  }
+  return { points, faces: h.faces.map((f) => [...f]) };
+}
+
 function restManifest(): SimManifest {
   return {
     version: 1,
@@ -36,9 +65,25 @@ function restManifest(): SimManifest {
     gravity: [0, 0, -9.81],
     bodies: [
       // A fixed 2×2×0.1 m ground slab; its top surface is at z = 0.05.
-      { id: "ground", mass: 0, com: [0, 0, 0], orientation: [0, 0, 0, 1], hull: boxHullXYZ(1, 1, 0.05), fixed: true },
+      { id: "ground", mass: 0, com: [0, 0, 0], orientation: [0, 0, 0, 1], colliders: [boxHullXYZ(1, 1, 0.05)], fixed: true },
       // A 0.1 m cube dropped from z = 0.5.
-      { id: "cube", mass: 1, com: [0, 0, 0.5], orientation: [0, 0, 0, 1], hull: boxHull(0.05) },
+      { id: "cube", mass: 1, com: [0, 0, 0.5], orientation: [0, 0, 0, 1], colliders: [boxHull(0.05)] },
+    ],
+    constraints: [],
+  };
+}
+
+/** Drop the L-shaped COMPOUND collider onto the ground (exercises multi-piece). */
+function compoundRestManifest(): SimManifest {
+  return {
+    version: 1,
+    source: "test",
+    gravity: [0, 0, -9.81],
+    bodies: [
+      { id: "ground", mass: 0, com: [0, 0, 0], orientation: [0, 0, 0, 1], colliders: [boxHullXYZ(1, 1, 0.05)], fixed: true },
+      // The L's lowest point (foot bottom) is at local z = -0.05; spawn its COM
+      // at z = 0.5 so the foot bottom starts at 0.45 and falls onto the slab top.
+      { id: "ell", mass: 1, com: [0, 0, 0.5], orientation: [0, 0, 0, 1], colliders: lCompound() },
     ],
     constraints: [],
   };
@@ -49,7 +94,7 @@ function dropManifest(): SimManifest {
     version: 1,
     source: "test",
     gravity: [0, 0, -9.81],
-    bodies: [{ id: "b0", mass: 1, com: [0, 0, 1], orientation: [0, 0, 0, 1], hull: boxHull(0.05) }],
+    bodies: [{ id: "b0", mass: 1, com: [0, 0, 1], orientation: [0, 0, 0, 1], colliders: [boxHull(0.05)] }],
     constraints: [],
   };
 }
@@ -60,14 +105,48 @@ function hingeManifest(): SimManifest {
     source: "test",
     gravity: [0, 0, -9.81],
     bodies: [
-      { id: "a", mass: 1, com: [0, 0, 0], orientation: [0, 0, 0, 1], hull: boxHull(0.05), fixed: true },
-      { id: "b", mass: 1, com: [0.1, 0, 0], orientation: [0, 0, 0, 1], hull: boxHull(0.05) },
+      { id: "a", mass: 1, com: [0, 0, 0], orientation: [0, 0, 0, 1], colliders: [boxHull(0.05)], fixed: true },
+      { id: "b", mass: 1, com: [0.1, 0, 0], orientation: [0, 0, 0, 1], colliders: [boxHull(0.05)] },
     ],
     constraints: [{ kind: "hinge", bodyA: "a", bodyB: "b", origin: [0.05, 0, 0], axis: [0, 1, 0] }],
   };
 }
 
+/** A ground slab + three 0.1 m cubes stacked vertically, dropped to settle. */
+function pileManifest(): SimManifest {
+  return {
+    version: 1,
+    source: "test",
+    gravity: [0, 0, -9.81],
+    bodies: [
+      { id: "ground", mass: 0, com: [0, 0, 0], orientation: [0, 0, 0, 1], colliders: [boxHullXYZ(1, 1, 0.05)], fixed: true },
+      { id: "c0", mass: 1, com: [0, 0, 0.12], orientation: [0, 0, 0, 1], colliders: [boxHull(0.05)] },
+      { id: "c1", mass: 1, com: [0, 0, 0.3], orientation: [0, 0, 0, 1], colliders: [boxHull(0.05)] },
+      { id: "c2", mass: 1, com: [0, 0, 0.5], orientation: [0, 0, 0, 1], colliders: [boxHull(0.05)] },
+    ],
+    constraints: [],
+  };
+}
+
+/** Two bodies + a hinge whose bodyB names a body that doesn't exist. */
+function badConstraintManifest(): SimManifest {
+  return {
+    version: 1,
+    source: "test",
+    gravity: [0, 0, -9.81],
+    bodies: [
+      { id: "a", mass: 1, com: [0, 0, 0], orientation: [0, 0, 0, 1], colliders: [boxHull(0.05)], fixed: true },
+      { id: "b", mass: 1, com: [0.1, 0, 0], orientation: [0, 0, 0, 1], colliders: [boxHull(0.05)] },
+    ],
+    constraints: [{ kind: "hinge", bodyA: "a", bodyB: "nonexistent", origin: [0.05, 0, 0], axis: [0, 1, 0] }],
+  };
+}
+
 const BACKENDS: BackendName[] = ["rapier", "cannon", "ammo"];
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 describe.each(BACKENDS)("physics backend: %s", (backend) => {
   it("drops a free body under gravity (~½gt² over 1s)", async () => {
@@ -117,5 +196,78 @@ describe.each(BACKENDS)("physics backend: %s", (backend) => {
     expect(cubeZ).toBeGreaterThan(0.085);
     expect(cubeZ).toBeLessThan(0.13);
     sim.dispose();
+  });
+
+  it("a 2-piece COMPOUND collider falls and rests on the ground (decomposed-part collision works)", async () => {
+    await initSim({ backend });
+    const sim = new PredictionSim(120, 1n);
+    expect(sim.spawnManifest(JSON.stringify(compoundRestManifest()))).toBe(2);
+
+    for (let i = 0; i < 300; i++) sim.stepDynamics();
+    const ellZ = sim.bodyPosition(1)[2];
+
+    // The L rests on its foot: foot bottom (local z = -0.05 + 1/120 ≈ -0.04167)
+    // sits on the slab top (z = 0.05), so the COM rests at ≈ 0.0917. This only
+    // holds if BOTH compound pieces collide and the COM-frame readback is intact —
+    // it did not tunnel (would be far negative) or hover (would still be ~0.5).
+    expect(ellZ).toBeGreaterThan(0.08);
+    expect(ellZ).toBeLessThan(0.125);
+    sim.dispose();
+  });
+
+  it("settles a multi-body stack on the ground (contact between bodies resolves)", async () => {
+    await initSim({ backend });
+    const sim = new PredictionSim(120, 1n);
+    expect(sim.spawnManifest(JSON.stringify(pileManifest()))).toBe(4);
+
+    for (let i = 0; i < 600; i++) sim.stepDynamics();
+    // Bodies 1..3 are the cubes (0 is the fixed ground).
+    const zs = [sim.bodyPosition(1)[2], sim.bodyPosition(2)[2], sim.bodyPosition(3)[2]];
+
+    // Every cube came to rest in a band above the ground top: none tunnelled
+    // through the slab or each other (z > 0.08) and none stayed aloft / launched
+    // (z < 0.45 — they fell from 0.12/0.3/0.5). The pile has real HEIGHT — they did
+    // not all collapse onto z≈0.10, which only holds if body-body contact resolves
+    // and pushes them apart. (We don't assert strict stacking order: cannon-es's
+    // soft convex contacts let the cubes interpenetrate and reshuffle, unlike the
+    // firmer Rapier/Bullet stacks.)
+    for (const z of zs) {
+      expect(z).toBeGreaterThan(0.08);
+      expect(z).toBeLessThan(0.45);
+    }
+    const spread = Math.max(...zs) - Math.min(...zs);
+    expect(spread).toBeGreaterThan(0.04); // contact gives the pile height
+    expect(spread).toBeLessThan(0.3); // but they piled near the ground, not scattered
+    sim.dispose();
+  });
+
+  it("warns (does not silently drop) a constraint that references a missing body", async () => {
+    await initSim({ backend });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const sim = new PredictionSim(60, 1n);
+
+    // The bodies still spawn; the dangling hinge is dropped WITH a warning.
+    expect(sim.spawnManifest(JSON.stringify(badConstraintManifest()))).toBe(2);
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0]![0]).toContain("nonexistent");
+    expect(warn.mock.calls[0]![0]).toContain(backend);
+    sim.dispose();
+  });
+
+  it("disposes cleanly and can re-spawn (resource cleanup is sound)", async () => {
+    await initSim({ backend });
+    const first = new PredictionSim(60, 1n);
+    expect(first.spawnManifest(JSON.stringify(restManifest()))).toBe(2);
+    for (let i = 0; i < 30; i++) first.stepDynamics();
+    first.dispose(); // frees the world (and, for ammo, every body explicitly)
+
+    // Re-initialise the same backend and spawn a fresh world — no crash, no
+    // dangling state from the freed engine.
+    await initSim({ backend });
+    const second = new PredictionSim(60, 1n);
+    expect(second.spawnManifest(JSON.stringify(dropManifest()))).toBe(1);
+    for (let i = 0; i < 30; i++) second.stepDynamics();
+    expect(second.bodyPosition(0)[2]).toBeLessThan(1); // the new world still simulates
+    second.dispose();
   });
 });

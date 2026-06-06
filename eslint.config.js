@@ -6,6 +6,7 @@ export default tseslint.config(
   {
     ignores: [
       "e2e/**",
+      "**/vendor/**",
       "**/dist/**",
       "**/pkg/**",
       "**/generated/**",

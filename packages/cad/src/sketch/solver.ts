@@ -72,6 +72,15 @@ export function initSketchSolver(opts?: { wasmUrl?: string }): Promise<void> {
   return initPromise;
 }
 
+/**
+ * True once {@link initSketchSolver} has loaded the planegcs wasm and the shared
+ * solver exists — i.e. `solveSketch` is safe to call. The UI gates entering the
+ * sketcher on this so a synchronous solve never races the (small, fast) wasm load.
+ */
+export function sketchSolverReady(): boolean {
+  return wrapper !== null;
+}
+
 const px = (i: number): string => `p${i}`;
 const cx = (i: number): string => `c${i}`;
 

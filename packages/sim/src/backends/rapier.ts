@@ -1,11 +1,12 @@
 // Rapier physics backend (@dimforge/rapier3d-compat — self-contained wasm, runs
-// in node and the browser). Each manifest body becomes a box-collider rigid body
-// placed at its world COM; hinge/fixed constraints become impulse joints.
+// in node and the browser). Each manifest body becomes a rigid body placed at its
+// world COM, carrying one or more convex-hull colliders (a compound collider for
+// a decomposed concave part); hinge/fixed constraints become impulse joints.
 
 import RAPIER from "@dimforge/rapier3d-compat";
 
 import type { PhysicsBackend, PhysicsEngine, PhysicsPose } from "../engine.js";
-import type { SimManifest } from "../manifest.js";
+import { hullVolume, type SimManifest } from "../manifest.js";
 
 let ready = false;
 
@@ -27,10 +28,16 @@ class RapierEngine implements PhysicsEngine {
         .setTranslation(b.com[0], b.com[1], b.com[2])
         .setRotation({ x: b.orientation[0], y: b.orientation[1], z: b.orientation[2], w: b.orientation[3] });
       const body = world.createRigidBody(desc);
-      const collider = RAPIER.ColliderDesc.convexHull(new Float32Array(b.hull.points));
-      if (!collider) throw new Error(`rapier: degenerate convex hull for body '${b.id}'`);
-      collider.setMass(b.mass);
-      world.createCollider(collider, body);
+      // One density shared across all pieces so the body's total mass is exactly
+      // b.mass and its centre of mass stays at the (COM-centred) body origin.
+      const totalVolume = b.colliders.reduce((sum, c) => sum + hullVolume(c), 0);
+      const density = totalVolume > 0 ? b.mass / totalVolume : 0;
+      for (const piece of b.colliders) {
+        const collider = RAPIER.ColliderDesc.convexHull(new Float32Array(piece.points));
+        if (!collider) throw new Error(`rapier: degenerate convex hull for body '${b.id}'`);
+        collider.setDensity(density);
+        world.createCollider(collider, body);
+      }
       this.bodies.push(body);
       byId.set(b.id, body);
     }
@@ -38,7 +45,12 @@ class RapierEngine implements PhysicsEngine {
     for (const c of manifest.constraints) {
       const a = byId.get(c.bodyA);
       const b = byId.get(c.bodyB);
-      if (!a || !b) continue;
+      if (!a || !b) {
+        console.warn(
+          `rapier: dropping ${c.kind} constraint — missing body (bodyA='${c.bodyA}'${a ? "" : " [missing]"}, bodyB='${c.bodyB}'${b ? "" : " [missing]"})`,
+        );
+        continue;
+      }
       const ta = a.translation();
       const tb = b.translation();
       const anchorA = { x: c.origin[0] - ta.x, y: c.origin[1] - ta.y, z: c.origin[2] - ta.z };

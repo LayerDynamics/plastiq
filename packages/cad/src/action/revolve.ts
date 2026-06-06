@@ -16,6 +16,10 @@ export function revolve(
   axis: Vec3,
   angle: number,
 ): Solid {
+  // A zero revolution angle sweeps nothing — OCCT returns an invalid shape; reject.
+  if (!Number.isFinite(angle) || angle === 0) {
+    throw new Error("revolve: angle must be non-zero");
+  }
   const face = sketch.toFace(oc);
   const o = new oc.gp_Pnt_3(origin[0], origin[1], origin[2]);
   const d = new oc.gp_Dir_4(axis[0], axis[1], axis[2]);

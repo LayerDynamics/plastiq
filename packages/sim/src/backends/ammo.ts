@@ -1,5 +1,7 @@
-// ammo.js (Bullet) physics backend, via ammojs-typed (wasm). Box-collider rigid
-// bodies posed by world COM; hinge/fixed constraints become bt hinge/fixed joints.
+// ammo.js (Bullet) physics backend, via ammojs-typed (wasm). Rigid bodies posed
+// by world COM, each carrying a btCompoundShape of one or more convex-hull
+// children (a compound collider for a decomposed concave part); hinge/fixed
+// constraints become bt hinge/fixed joints.
 
 import Ammo from "ammojs-typed";
 
@@ -14,12 +16,16 @@ class AmmoEngine implements PhysicsEngine {
   private world: Ammo.btDiscreteDynamicsWorld | null = null;
   private bodies: Ammo.btRigidBody[] = [];
   private readonly tmp: Ammo.btTransform;
+  // Reused identity transform for compound child shapes (freed in dispose()).
+  private readonly childTransform: Ammo.btTransform;
 
   constructor(
     private readonly mod: AmmoModule,
     private readonly timestep: number,
   ) {
     this.tmp = new mod.btTransform();
+    this.childTransform = new mod.btTransform();
+    this.childTransform.setIdentity();
   }
 
   spawn(manifest: SimManifest): number {
@@ -34,17 +40,24 @@ class AmmoEngine implements PhysicsEngine {
     this.world = world;
 
     const byId = new Map<string, Ammo.btRigidBody>();
+    const childTransform = this.childTransform;
     for (const b of manifest.bodies) {
-      const shape = new m.btConvexHullShape();
-      for (let k = 0; k < b.hull.points.length; k += 3) {
-        shape.addPoint(
-          new m.btVector3(b.hull.points[k]!, b.hull.points[k + 1]!, b.hull.points[k + 2]!),
-          true,
-        );
+      // A compound of one convex-hull child per piece (all at identity offset —
+      // the pieces are already in the body's COM-centred frame).
+      const shape = new m.btCompoundShape(true);
+      for (const piece of b.colliders) {
+        const hull = new m.btConvexHullShape();
+        for (let k = 0; k < piece.points.length; k += 3) {
+          hull.addPoint(
+            new m.btVector3(piece.points[k]!, piece.points[k + 1]!, piece.points[k + 2]!),
+            true,
+          );
+        }
+        // Bullet's default convex margin (~0.04 m) inflates mm-scale CAD parts
+        // and makes them rest visibly above surfaces — shrink it to 1 mm.
+        hull.setMargin(0.001);
+        shape.addChildShape(childTransform, hull);
       }
-      // Bullet's default convex margin (~0.04 m) inflates mm-scale CAD parts and
-      // makes them rest visibly above surfaces — shrink it to 1 mm.
-      shape.setMargin(0.001);
       const transform = new m.btTransform();
       transform.setIdentity();
       transform.setOrigin(new m.btVector3(b.com[0], b.com[1], b.com[2]));
@@ -65,7 +78,12 @@ class AmmoEngine implements PhysicsEngine {
     for (const c of manifest.constraints) {
       const a = byId.get(c.bodyA);
       const b = byId.get(c.bodyB);
-      if (!a || !b) continue;
+      if (!a || !b) {
+        console.warn(
+          `ammo: dropping ${c.kind} constraint — missing body (bodyA='${c.bodyA}'${a ? "" : " [missing]"}, bodyB='${c.bodyB}'${b ? "" : " [missing]"})`,
+        );
+        continue;
+      }
       const ta = a.getWorldTransform().getOrigin();
       const tb = b.getWorldTransform().getOrigin();
       const pivotA = new m.btVector3(c.origin[0] - ta.x(), c.origin[1] - ta.y(), c.origin[2] - ta.z());
@@ -107,7 +125,19 @@ class AmmoEngine implements PhysicsEngine {
 
   dispose(): void {
     const m = this.mod;
-    if (this.world) m.destroy(this.world);
+    const world = this.world;
+    if (world) {
+      // Bullet objects are manually-managed wasm allocations — free each body
+      // explicitly (remove from the world, then destroy) rather than relying on
+      // destroy(world) to cascade, then free the world and the cached transform.
+      for (const body of this.bodies) {
+        world.removeRigidBody(body);
+        m.destroy(body);
+      }
+      m.destroy(world);
+    }
+    m.destroy(this.tmp);
+    m.destroy(this.childTransform);
     this.world = null;
     this.bodies = [];
   }
@@ -117,7 +147,14 @@ export class AmmoBackend implements PhysicsBackend {
   readonly name = "ammo" as const;
 
   async init(): Promise<void> {
-    if (!A) A = await Ammo();
+    if (A) return;
+    // ammojs-typed's emscripten factory ends with `this.Ammo = b` (a legacy
+    // attach-to-global). Under ESM strict mode — how vite bundles it for the
+    // browser — the factory runs with `this === undefined`, so that line throws
+    // "Cannot set properties of undefined (setting 'Ammo')". Node's non-strict
+    // CJS tolerates it. Invoke it with a bound throwaway `this` so the attach is a
+    // harmless no-op in both environments.
+    A = await (Ammo as unknown as (this: object) => Promise<AmmoModule>).call({});
   }
 
   createEngine(timestep: number): PhysicsEngine {
