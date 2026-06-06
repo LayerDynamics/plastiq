@@ -142,15 +142,16 @@ export function App(): React.JSX.Element {
   );
 
   return (
-    <div className="grid h-full grid-rows-[auto_1fr_auto] bg-[#0b0d12] text-[#cfe]">
+    <div className="grid h-full grid-cols-1 grid-rows-[auto_1fr_auto] bg-[#0b0d12] text-[#cfe]">
       {/* Toolbar + (optional) recovery banner share one grid row, so the `1fr`
           row is always the viewport — RecoveryBanner returning null must not let
-          the StatusBar fall into the stretchy row. */}
-      <div>
+          the StatusBar fall into the stretchy row. min-w-0 + overflow-x-auto keep
+          the dense toolbar from widening the page (it scrolls within its row). */}
+      <div className="min-w-0 overflow-x-auto">
         <Toolbar />
         <RecoveryBanner />
       </div>
-      <div className="flex min-h-0">
+      <div className="flex min-h-0 min-w-0">
         {leftOpen ? (
           <>
             <aside
@@ -183,7 +184,7 @@ export function App(): React.JSX.Element {
           </button>
         )}
 
-        <main id="viewport-root" aria-label="3D viewport" className="relative min-h-0 flex-1">
+        <main id="viewport-root" aria-label="3D viewport" className="relative min-h-0 min-w-0 flex-1">
           <Viewport />
           <Sketcher />
         </main>
