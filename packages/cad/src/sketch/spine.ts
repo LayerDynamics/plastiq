@@ -7,6 +7,14 @@ import type { Occt } from "../oc/init.js";
 
 type Point3 = readonly [number, number, number];
 
+/**
+ * Minimum spine-segment length, in metres (the kernel's SI length unit). Two
+ * points closer than 0.1 µm are treated as coincident — far below any real CAD
+ * feature (µm and up) yet comfortably above floating-point noise. Revisit if the
+ * kernel ever changes its length unit away from metres.
+ */
+const MIN_SEGMENT_LENGTH_M = 1e-7;
+
 /** A polyline sweep path through a sequence of world-space points. */
 export interface SpinePath {
   readonly kind: "polyline";
@@ -34,7 +42,7 @@ export function buildSpineWire(oc: Occt, path: SpinePath): TopoDS_Wire {
     // build a degenerate edge from it that corrupts the swept solid. A spine of
     // ENTIRELY coincident points leaves no real segment and is rejected below —
     // the points.length check alone can't catch a 2-identical-point spine.
-    if (Math.hypot(p1[0] - p0[0], p1[1] - p0[1], p1[2] - p0[2]) < 1e-7) continue;
+    if (Math.hypot(p1[0] - p0[0], p1[1] - p0[1], p1[2] - p0[2]) < MIN_SEGMENT_LENGTH_M) continue;
     const a = pnt(oc, p0);
     const b = pnt(oc, p1);
     const em = new oc.BRepBuilderAPI_MakeEdge_3(a, b);

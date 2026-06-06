@@ -321,37 +321,50 @@ describe.each(BACKENDS)("physics backend: %s", (backend) => {
 
   it("snapshot + restore preserves a CONSTRAINED body's swing (hinge) and replays it", async () => {
     await initSim({ backend });
-    const sim = new PredictionSim(60, 1n);
+    // Durations are expressed in sim-time (seconds) and converted at the engine's
+    // integration rate, so the counts track dt rather than baking in a step number.
+    const RATE_HZ = 60;
+    const sim = new PredictionSim(RATE_HZ, 1n);
+    const stepFor = (seconds: number): void => {
+      for (let i = 0; i < Math.round(seconds * RATE_HZ); i++) sim.stepDynamics();
+    };
     expect(sim.spawnManifest(JSON.stringify(pendulumManifest()))).toBe(2);
 
     // The arm (body 1) hangs 0.3 m out on a hinge and swings DOWN under gravity.
-    // Let it get well into its first swing so it carries real angular velocity.
+    // Snapshot a quarter-second in — well into the first swing, carrying real
+    // angular velocity.
     const armStartZ = sim.bodyPosition(1)[2];
-    for (let i = 0; i < 15; i++) sim.stepDynamics();
+    stepFor(0.25);
     const snap = sim.snapshot();
 
-    // Mid-swing the arm has substantial angular velocity. The free-fall replay
-    // test above can't catch this: a snapshot that dropped angular velocity (or
-    // the joint's contribution) would fail to reproduce the continued swing below.
+    // Mid-swing the arm is actively rotating. 0.1 rad/s is a deliberately loose
+    // "is it really turning" gate (a released pendulum reaches several rad/s) with
+    // wide margin; the PRECISE checks are the deterministic restore/replay
+    // comparisons below. A snapshot that dropped angular velocity could not
+    // reproduce the continued swing.
     const w = snap.bodies[1]!.angularVelocity;
     expect(Math.hypot(w[0], w[1], w[2])).toBeGreaterThan(0.1);
-    // It genuinely swung downward from its start — the test is non-trivial.
+    // It genuinely swung well down from its start (the 10 mm floor is far below
+    // the ~0.3 m it eventually drops).
     expect(sim.bodyPosition(1)[2]).toBeLessThan(armStartZ - 0.01);
 
     // Run forward and record where the swinging arm ends up.
-    for (let i = 0; i < 40; i++) sim.stepDynamics();
+    stepFor(0.67);
     const forward = sim.bodyPosition(1);
 
-    // Rewind: the arm returns to the exact captured pose...
+    // Rewind: the arm returns to the exact captured pose. restore writes the
+    // state directly, so this holds to FP precision independent of integrator
+    // parameters.
     sim.restore(snap);
     const restored = sim.bodyPosition(1);
     expect(restored[0]).toBeCloseTo(snap.bodies[1]!.position[0], 6);
     expect(restored[1]).toBeCloseTo(snap.bodies[1]!.position[1], 6);
     expect(restored[2]).toBeCloseTo(snap.bodies[1]!.position[2], 6);
 
-    // ...and re-stepping reproduces the same swing — only possible because pose
-    // AND angular velocity were captured and the hinge re-applies from there.
-    for (let i = 0; i < 40; i++) sim.stepDynamics();
+    // ...and re-stepping reproduces the same swing. This compares the replay
+    // against the forward run on the SAME engine, so it stays valid if integrator
+    // params change — it only fails if pose/angular-velocity capture is incomplete.
+    stepFor(0.67);
     const replay = sim.bodyPosition(1);
     expect(replay[0]).toBeCloseTo(forward[0], 3);
     expect(replay[1]).toBeCloseTo(forward[1], 3);
@@ -364,18 +377,23 @@ describe.each(BACKENDS)("physics backend: %s", (backend) => {
 
   it("snapshot + restore returns EVERY body in a multi-body contact scene to its exact state", async () => {
     await initSim({ backend });
-    const sim = new PredictionSim(120, 1n);
+    const RATE_HZ = 120; // finer step keeps the stacking contacts stable
+    const sim = new PredictionSim(RATE_HZ, 1n);
+    const stepFor = (seconds: number): void => {
+      for (let i = 0; i < Math.round(seconds * RATE_HZ); i++) sim.stepDynamics();
+    };
     expect(sim.spawnManifest(JSON.stringify(pileManifest()))).toBe(4);
 
     // Let the stack fall and begin settling (bodies in contact, still moving).
-    for (let i = 0; i < 200; i++) sim.stepDynamics();
+    stepFor(1.67);
     const snap = sim.snapshot();
     expect(snap.bodies).toHaveLength(4);
 
     // Step forward, then rewind: EVERY body (ground + 3 cubes) returns to its
-    // exact captured pose. The free-fall replay test only restores ONE body, so
-    // a backend that mishandled the i-th body's restore would slip through here.
-    for (let i = 0; i < 100; i++) sim.stepDynamics();
+    // exact captured pose. restore writes the state directly, so equality holds
+    // to FP precision regardless of integrator behaviour; the free-fall replay
+    // test only restores ONE body, so a mishandled i-th body would slip through.
+    stepFor(0.83);
     sim.restore(snap);
     for (let b = 0; b < 4; b++) {
       const p = sim.bodyPosition(b);
@@ -384,9 +402,10 @@ describe.each(BACKENDS)("physics backend: %s", (backend) => {
       expect(p[2]).toBeCloseTo(snap.bodies[b]!.position[2], 6);
     }
 
-    // The restored world keeps simulating sanely (no NaN / explosion): the cubes
-    // stay in the resting band above the ground top after stepping on.
-    for (let i = 0; i < 100; i++) sim.stepDynamics();
+    // The restored world keeps simulating sanely (no NaN / explosion). The band
+    // mirrors the settle test above — above the ground top (z>0.08) and below the
+    // drop heights (z<0.45) — wide margins that tolerate integrator changes.
+    stepFor(0.83);
     for (let b = 1; b < 4; b++) {
       const z = sim.bodyPosition(b)[2];
       expect(z).toBeGreaterThan(0.08);

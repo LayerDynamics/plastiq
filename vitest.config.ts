@@ -26,9 +26,14 @@ export default defineConfig({
         // Test files and type-only declarations carry no coverable logic.
         "**/*.{test,spec}.{ts,tsx}",
         "**/*.d.ts",
-        // Type-only / re-export barrels.
-        "**/index.ts",
         "apps/*/src/**/types.ts",
+        // PURE re-export barrels only (a version const at most) — listed by path,
+        // NOT a blanket **/index.ts: io/, math/, unit/, and persistence/ index
+        // files hold real, tested functions and must stay measured.
+        "packages/sim/src/index.ts",
+        "packages/cad/src/index.ts",
+        "packages/cad/src/action/index.ts",
+        "packages/cad/src/lower/index.ts",
         // Code the node unit-runner CANNOT execute — it runs only in the
         // Playwright e2e suite (a real browser): React components, the three.js
         // scene controller, the geometry worker entry, and the IndexedDB binding.
@@ -40,7 +45,7 @@ export default defineConfig({
         "apps/*/src/persistence/idb.ts",
       ],
       // Baseline floor, set a couple points below the measured current
-      // (stmts 82.5 / branch 70.6 / funcs 84.1 / lines 86.0) so the build fails
+      // (stmts 82.5 / branch 70.5 / funcs 83.1 / lines 85.9) so the build fails
       // on a real coverage regression while tolerating sub-2% run-to-run noise.
       // Ratchet these up as the remaining gaps (projectsStore, simulator class,
       // spline2d) get tests.
