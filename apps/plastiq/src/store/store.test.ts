@@ -263,6 +263,41 @@ describe("CAD Studio store — assembly (FR-33/FR-34 / M4)", () => {
     expect(s().assemblyResult!.residualNorm).toBeLessThan(1e-5);
   });
 
+  it("applyMate('distance', v) builds a distance mate carrying v (SI) and solves it", () => {
+    s().setSelectionRefs({ faces: { 1: { normal: [1, 0, 0] } }, edges: {} });
+    const i0 = s().addInstance(); // ground (fixed)
+    const i1 = s().addInstance(); // free
+    s().setMateMode(true);
+    s().addMatePick({ instanceId: i0, faceId: 1, worldPoint: [0.03, 0, 0] });
+    s().addMatePick({ instanceId: i1, faceId: 1, worldPoint: [0.05, 0, 0] });
+    s().applyMate("distance", 0.05); // 50 mm, passed in SI metres
+    const mates = s().assembly.mates;
+    expect(mates).toHaveLength(1);
+    expect(mates[0]).toMatchObject({ kind: "distance", value: 0.05 });
+    // The free instance was positioned to satisfy the separation (residual ≈ 0).
+    expect(s().assemblyResult!.residualNorm).toBeLessThan(1e-5);
+  });
+
+  it("setMateValue updates a distance mate's scalar and re-solves; bad id is a no-op", () => {
+    s().setSelectionRefs({ faces: { 1: { normal: [1, 0, 0] } }, edges: {} });
+    const i0 = s().addInstance();
+    const i1 = s().addInstance();
+    s().setMateMode(true);
+    s().addMatePick({ instanceId: i0, faceId: 1, worldPoint: [0.03, 0, 0] });
+    s().addMatePick({ instanceId: i1, faceId: 1, worldPoint: [0.05, 0, 0] });
+    s().applyMate("distance", 0.05);
+    const id = s().assembly.mates[0]!.id;
+
+    s().setMateValue(id, 0.12); // retarget to 120 mm
+    expect(s().assembly.mates[0]).toMatchObject({ kind: "distance", value: 0.12 });
+    expect(s().assemblyResult!.residualNorm).toBeLessThan(1e-5);
+
+    // An unknown id changes nothing (the existing mate keeps its value).
+    s().setMateValue("does-not-exist", 0.99);
+    expect(s().assembly.mates).toHaveLength(1);
+    expect(s().assembly.mates[0]).toMatchObject({ value: 0.12 });
+  });
+
   it("matePicks keep only the last two picks", () => {
     s().setSelectionRefs({ faces: { 1: { normal: [0, 0, 1] } }, edges: {} });
     const i0 = s().addInstance();

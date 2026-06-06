@@ -8,12 +8,50 @@ import { useCadStore } from "../store/store.js";
 import type { AssemblyMate } from "../assembly/model.js";
 import type { JointKind } from "@plastiq/cad";
 
-const MATE_KINDS: AssemblyMate["kind"][] = [
+// Mates applied straight from two picks (no scalar).
+const VALUELESS_MATES: AssemblyMate["kind"][] = [
   "coincident",
   "concentric",
   "parallel",
   "perpendicular",
 ];
+// distance/angle mates also take a scalar, entered in mm / degrees in the UI and
+// stored in SI (metres / radians) to match the kernel mate solver.
+const MM_PER_M = 1000;
+const DEG_PER_RAD = 180 / Math.PI;
+
+/** Inline editor for a distance/angle mate's scalar. Shows the value in display
+ * units (mm / °) and commits the SI value on blur/Enter, re-solving the assembly.
+ * Keyed by the stored value upstream so undo/redo resets the field. */
+function MateValueInput({
+  mate,
+  onCommit,
+}: {
+  mate: Extract<AssemblyMate, { value: number }>;
+  onCommit: (si: number) => void;
+}): React.JSX.Element {
+  const factor = mate.kind === "distance" ? MM_PER_M : DEG_PER_RAD;
+  const [text, setText] = useState((mate.value * factor).toFixed(1));
+  const commit = (): void => {
+    const n = Number(text);
+    if (Number.isFinite(n)) onCommit(n / factor);
+    else setText((mate.value * factor).toFixed(1)); // reject non-numeric input
+  };
+  return (
+    <input
+      type="number"
+      data-testid="mate-value"
+      value={text}
+      onChange={(e) => setText(e.target.value)}
+      onBlur={commit}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+      }}
+      title={mate.kind === "distance" ? "Distance (mm)" : "Angle (degrees)"}
+      className="w-14 rounded border border-[#2a3444] bg-[#0e131b] px-1 text-right text-[11px] text-[#cfe]"
+    />
+  );
+}
 
 /** Mate authoring (FR-34): toggle pick mode, pick two instance faces, apply a
  * mate; the kernel solver re-poses and the verdict/DOF surface here. */
@@ -24,8 +62,12 @@ function MatesSection(): React.JSX.Element {
   const result = useCadStore((s) => s.assemblyResult);
   const setMateMode = useCadStore((s) => s.setMateMode);
   const applyMate = useCadStore((s) => s.applyMate);
+  const setMateValue = useCadStore((s) => s.setMateValue);
   const removeMate = useCadStore((s) => s.removeMate);
   const ready = matePicks.length === 2;
+  // Creation-time scalars for the valued mates (display units: mm / degrees).
+  const [distMm, setDistMm] = useState("25");
+  const [angleDeg, setAngleDeg] = useState("90");
 
   return (
     <div data-testid="mates-section" className="mt-2">
@@ -43,19 +85,58 @@ function MatesSection(): React.JSX.Element {
         </button>
       </div>
       {mateMode && (
-        <div className="mb-1 flex flex-wrap gap-1">
-          {MATE_KINDS.map((kind) => (
+        <div className="mb-1 space-y-1">
+          <div className="flex flex-wrap gap-1">
+            {VALUELESS_MATES.map((kind) => (
+              <button
+                key={kind}
+                type="button"
+                data-testid={`mate-${kind}`}
+                disabled={!ready}
+                onClick={() => applyMate(kind)}
+                className="rounded border border-[#2a3444] px-1.5 py-0.5 text-[11px] capitalize enabled:hover:bg-[#1b2230] disabled:opacity-30"
+              >
+                {kind}
+              </button>
+            ))}
+          </div>
+          {/* distance + angle take a scalar (mm / °), converted to SI on apply. */}
+          <div className="flex flex-wrap items-center gap-1">
+            <input
+              type="number"
+              data-testid="mate-distance-value"
+              value={distMm}
+              onChange={(e) => setDistMm(e.target.value)}
+              title="Distance (mm)"
+              className="w-14 rounded border border-[#2a3444] bg-[#0e131b] px-1 text-right text-[11px] text-[#cfe]"
+            />
             <button
-              key={kind}
               type="button"
-              data-testid={`mate-${kind}`}
-              disabled={!ready}
-              onClick={() => applyMate(kind)}
-              className="rounded border border-[#2a3444] px-1.5 py-0.5 text-[11px] capitalize enabled:hover:bg-[#1b2230] disabled:opacity-30"
+              data-testid="mate-distance"
+              disabled={!ready || !Number.isFinite(Number(distMm))}
+              onClick={() => applyMate("distance", Number(distMm) / MM_PER_M)}
+              className="rounded border border-[#2a3444] px-1.5 py-0.5 text-[11px] enabled:hover:bg-[#1b2230] disabled:opacity-30"
             >
-              {kind}
+              distance
             </button>
-          ))}
+            <input
+              type="number"
+              data-testid="mate-angle-value"
+              value={angleDeg}
+              onChange={(e) => setAngleDeg(e.target.value)}
+              title="Angle (degrees)"
+              className="w-14 rounded border border-[#2a3444] bg-[#0e131b] px-1 text-right text-[11px] text-[#cfe]"
+            />
+            <button
+              type="button"
+              data-testid="mate-angle"
+              disabled={!ready || !Number.isFinite(Number(angleDeg))}
+              onClick={() => applyMate("angle", Number(angleDeg) / DEG_PER_RAD)}
+              className="rounded border border-[#2a3444] px-1.5 py-0.5 text-[11px] enabled:hover:bg-[#1b2230] disabled:opacity-30"
+            >
+              angle
+            </button>
+          </div>
         </div>
       )}
       {result && (
@@ -72,6 +153,18 @@ function MatesSection(): React.JSX.Element {
               className="group flex items-center gap-1.5 rounded px-1.5 py-0.5 text-xs text-[#9ab] hover:bg-[#151b25]"
             >
               <span className="flex-1 capitalize">{m.kind}</span>
+              {(m.kind === "distance" || m.kind === "angle") && (
+                <>
+                  <MateValueInput
+                    key={`${m.id}:${m.value}`}
+                    mate={m}
+                    onCommit={(si) => setMateValue(m.id, si)}
+                  />
+                  <span className="text-[10px] text-[#789]">
+                    {m.kind === "distance" ? "mm" : "°"}
+                  </span>
+                </>
+              )}
               <button
                 type="button"
                 title="Remove mate"
