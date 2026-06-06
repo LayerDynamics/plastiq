@@ -1,0 +1,80 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# A newer push to the same branch/PR cancels the in-flight run.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    name: typecheck · lint · test · build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # pnpm before setup-node so setup-node can prime the pnpm store cache.
+      # The pnpm version comes from the root package.json `packageManager` field.
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - name: Install (frozen lockfile)
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck
+        run: pnpm -r --if-present run typecheck
+
+      - name: Lint
+        run: pnpm run lint
+
+      # Unit + integration suite — runs the real OCCT (vendored trimmed wasm),
+      # planegcs, and physics backends in Node. No Docker / OCCT rebuild needed:
+      # packages/cad/vendor/occt/plastiq-occt.wasm is committed.
+      - name: Test
+        run: pnpm run test
+
+      - name: Build
+        run: pnpm run build
+
+  e2e:
+    name: e2e (no-mock, browser)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - name: Install (frozen lockfile)
+        run: pnpm install --frozen-lockfile
+
+      # Only Chromium is needed (playwright.config drives the `cad-studio`
+      # Desktop Chrome project). --with-deps installs the OS libraries.
+      - name: Install Playwright Chromium
+        run: pnpm exec playwright install --with-deps chromium
+
+      # Playwright starts the app's own Vite server (reuseExistingServer is off
+      # when CI=true, which GitHub Actions sets) and drives the real editor:
+      # browser → worker (OCCT) → planegcs → physics → render, no mocks.
+      - name: Run E2E
+        run: pnpm run e2e
+
+      - name: Upload Playwright report
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: playwright-report/
+          retention-days: 7
