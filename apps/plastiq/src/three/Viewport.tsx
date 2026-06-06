@@ -13,6 +13,9 @@ import { GeometryClient } from "../worker/bridge.js";
 import { useProjectsStore } from "../persistence/projectsStore.js";
 import { Viewport3D } from "./Viewport3D.js";
 import { standardViewDirection } from "../viewport/views.js";
+import { resolveDatumPlane } from "../worker/sketchPlane.js";
+import { useSketchStore } from "../sketch/sketchStore.js";
+import type { DatumPlane } from "@plastiq/cad";
 import type { TransferMesh } from "../worker/protocol.js";
 
 /** Features that actually build, honouring the rollback point (FR-25). */
@@ -34,6 +37,9 @@ function geometrySignature(s: {
 
 export function Viewport(): React.JSX.Element {
   const [mesh, setMesh] = useState<TransferMesh | null>(null);
+  // The resolved plane the active sketch is "normal to" (datum or, via the worker,
+  // a model face) — drives the ortho sketch camera. null when not sketching.
+  const [sketchFrame, setSketchFrame] = useState<DatumPlane | null>(null);
   const setStatus = useCadStore((s) => s.setStatus);
   const measuring = useCadStore((s) => s.measuring);
   const measureResult = useCadStore((s) => s.measureResult);
@@ -125,9 +131,47 @@ export function Viewport(): React.JSX.Element {
       void rebuild();
     });
 
+    // Resolve the active sketch's "normal to" plane for the ortho camera (S2/S3):
+    // a base datum synchronously, or a model face via the worker (shifted by the
+    // offset along the face normal). Stale async results are dropped.
+    const resolveSketchFrame = (s: ReturnType<typeof useSketchStore.getState>): void => {
+      if (!s.active) {
+        setSketchFrame(null);
+        return;
+      }
+      const face = s.model.face;
+      if (face) {
+        const off = s.model.offset ?? 0;
+        void client.facePlane(useCadStore.getState().toDocument(), face).then((fr) => {
+          const cur = useSketchStore.getState();
+          if (cancelled || !cur.active || cur.model.face !== face) return;
+          setSketchFrame(
+            fr
+              ? {
+                  origin: [
+                    fr.origin[0] + fr.normal[0] * off,
+                    fr.origin[1] + fr.normal[1] * off,
+                    fr.origin[2] + fr.normal[2] * off,
+                  ],
+                  normal: fr.normal,
+                  xAxis: fr.xAxis,
+                }
+              : null,
+          );
+        });
+        return;
+      }
+      setSketchFrame(resolveDatumPlane(s.model.plane, s.model.offset ?? 0));
+    };
+    resolveSketchFrame(useSketchStore.getState());
+    const unsubSketch = useSketchStore.subscribe((s, prev) => {
+      if (s.active !== prev.active || s.model !== prev.model) resolveSketchFrame(s);
+    });
+
     return () => {
       cancelled = true;
       unsub();
+      unsubSketch();
       client.dispose();
       delete (globalThis as { __plastiqLower?: unknown }).__plastiqLower;
       delete (globalThis as { __plastiqExport?: unknown }).__plastiqExport;
@@ -137,7 +181,7 @@ export function Viewport(): React.JSX.Element {
 
   return (
     <>
-      <Viewport3D mesh={mesh} />
+      <Viewport3D mesh={mesh} sketchFrame={sketchFrame} />
       {/* Named standard views + Fit (FR-12); the in-scene cube (viewCube.gizmo)
           handles click-to-orient. Both drive the camera via __plastiqViewport. */}
       <div

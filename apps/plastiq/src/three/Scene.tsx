@@ -13,6 +13,9 @@ import { ViewCubeGizmo } from "./gizmos/viewCube.gizmo.js";
 import { OriginGizmo } from "./gizmos/origin.gizmo.js";
 import { ObjectCenterGizmo } from "./gizmos/objectCenter.gizmo.js";
 import { PlaneGizmo } from "./gizmos/plane.gizmo.js";
+import { ConstructionGeometryGizmo } from "./gizmos/constructionGeometry.gizmo.js";
+import { SketchCamera } from "./SketchCamera.js";
+import type { DatumPlane } from "@plastiq/cad";
 import { GRID_CENTER, GRID_CELL } from "./colors.js";
 import { buildPart, disposePart, type BuiltPart } from "../viewport/buildMesh.js";
 import { applyPlacement, findPlacement, placementFromFeature } from "../viewport/placement.js";
@@ -41,7 +44,13 @@ interface OrbitLike {
   update(): void;
 }
 
-export function Scene({ mesh }: { mesh: TransferMesh | null }): React.JSX.Element {
+export function Scene({
+  mesh,
+  sketchFrame,
+}: {
+  mesh: TransferMesh | null;
+  sketchFrame: DatumPlane | null;
+}): React.JSX.Element {
   const camera = useThree((s) => s.camera);
   const controls = useThree((s) => s.controls) as OrbitLike | null;
 
@@ -124,10 +133,14 @@ export function Scene({ mesh }: { mesh: TransferMesh | null }): React.JSX.Elemen
       <Picking part={part} />
       <OriginGizmo />
       <PlaneGizmo />
+      <ConstructionGeometryGizmo />
       <ObjectCenterGizmo />
       <TransformGizmo part={part} />
       <ViewCubeGizmo />
-      <OrbitControls makeDefault enableDamping target={[0, 0, 0.02]} />
+      {/* While sketching, render through the plane-locked ortho camera and lock
+          orbit (the 2D overlay owns interaction). */}
+      <SketchCamera frame={sketchFrame} />
+      <OrbitControls makeDefault enableDamping enabled={sketchFrame == null} target={[0, 0, 0.02]} />
     </>
   );
 }

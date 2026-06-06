@@ -6,9 +6,16 @@
 import { Canvas } from "@react-three/fiber";
 import { Scene } from "./Scene.js";
 import { VIEWPORT_BG } from "./colors.js";
+import type { DatumPlane } from "@plastiq/cad";
 import type { TransferMesh } from "../worker/protocol.js";
 
-export function Viewport3D({ mesh }: { mesh: TransferMesh | null }): React.JSX.Element {
+export function Viewport3D({
+  mesh,
+  sketchFrame,
+}: {
+  mesh: TransferMesh | null;
+  sketchFrame: DatumPlane | null;
+}): React.JSX.Element {
   return (
     <Canvas
       gl={{ antialias: true, preserveDrawingBuffer: true }}
@@ -22,7 +29,7 @@ export function Viewport3D({ mesh }: { mesh: TransferMesh | null }): React.JSX.E
       style={{ position: "absolute", inset: 0 }}
     >
       <color attach="background" args={[VIEWPORT_BG]} />
-      <Scene mesh={mesh} />
+      <Scene mesh={mesh} sketchFrame={sketchFrame} />
     </Canvas>
   );
 }

@@ -44,3 +44,35 @@ test("origin + object-center always present; plane only while sketching", async 
   await expect(page.getByTestId("sketcher")).toBeHidden();
   await expect.poll(() => gizmo(page, "plane")).toBe(false);
 });
+
+test("construction-geometry gizmo appears once a construction line is drawn", async ({ page }) => {
+  await page.goto("/");
+  await expect(page.getByTestId("status")).toHaveText("ready", { timeout: 240_000 });
+  await expect(page.getByTestId("enter-sketch")).toBeEnabled({ timeout: 240_000 });
+  await page.getByTestId("enter-sketch").click();
+  await expect(page.getByTestId("sketcher")).toBeVisible();
+
+  // No construction geometry yet.
+  expect(await gizmo(page, "constructionGeometry")).toBe(false);
+
+  // Draw a construction line through the sketch slice.
+  await page.evaluate(() => {
+    const st = () =>
+      (
+        globalThis as {
+          __sketchStore?: {
+            getState: () => {
+              setConstruction: (b: boolean) => void;
+              setTool: (t: string) => void;
+              clickAt: (u: number, v: number) => void;
+            };
+          };
+        }
+      ).__sketchStore!.getState();
+    st().setConstruction(true);
+    st().setTool("line");
+    st().clickAt(0, 0);
+    st().clickAt(0.03, 0.01);
+  });
+  await expect.poll(() => gizmo(page, "constructionGeometry")).toBe(true);
+});

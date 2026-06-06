@@ -13,7 +13,7 @@ test("sketching on XZ renders normal-to the plane through a transparent overlay"
   await expect(page.getByTestId("status")).toHaveText("ready", { timeout: 240_000 });
   await page.waitForFunction(
     () =>
-      (globalThis as { __plastiqScene?: { builtPart: unknown } }).__plastiqScene?.builtPart != null,
+      (globalThis as { __plastiqViewport?: { builtPart: unknown } }).__plastiqViewport?.builtPart != null,
     undefined,
     { timeout: 240_000 },
   );
