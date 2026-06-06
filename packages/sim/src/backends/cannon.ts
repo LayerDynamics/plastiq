@@ -119,6 +119,11 @@ class CannonEngine implements PhysicsEngine {
       body.quaternion.set(s.orientation[0], s.orientation[1], s.orientation[2], s.orientation[3]);
       body.velocity.set(s.linearVelocity[0], s.linearVelocity[1], s.linearVelocity[2]);
       body.angularVelocity.set(s.angularVelocity[0], s.angularVelocity[1], s.angularVelocity[2]);
+
+      // Clear accumulated forces and torques so the restored state starts clean.
+      body.force.set(0, 0, 0);
+      body.torque.set(0, 0, 0);
+
       // Sync the integrator's previous-step state so stepping resumes from the
       // restored pose without an interpolation jump, and wake a sleeping body.
       body.previousPosition.copy(body.position);
