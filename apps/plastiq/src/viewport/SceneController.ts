@@ -9,6 +9,7 @@ import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { TransformControls } from "three/examples/jsm/controls/TransformControls.js";
 import { ViewHelper } from "three/examples/jsm/helpers/ViewHelper.js";
 import { standardViewDirection, type StandardView } from "./views.js";
+import { sectionPlane, type SectionAxis } from "./section.js";
 import type { Pick, SelectionMode } from "../store/types.js";
 import type { TransferMesh } from "../worker/protocol.js";
 import { buildPart, disposePart, type BuiltPart } from "./buildMesh.js";
@@ -66,6 +67,9 @@ export class SceneController {
     step: (n: number) => void;
     poses: () => { id: string; position: Vec3; orientation: Quat }[];
   } | null = null;
+  /** Active section cut (clip plane), or null. Re-fit to the part's bbox on
+   * every rebuild/placement so the t-fraction tracks the live geometry. */
+  private section: { axis: SectionAxis; t: number } | null = null;
 
   // --- selection state (FR-8/FR-9) -----------------------------------------
   private readonly picker = new Picker();
@@ -227,6 +231,7 @@ export class SceneController {
     this.scene.add(this.part.group);
     this.refreshHighlight();
     this.syncGizmoAttachment();
+    this.applySection(); // re-fit the section cut to the new geometry's bbox
   }
 
   /**
@@ -366,6 +371,30 @@ export class SceneController {
   setPlacement(p: Placement): void {
     this.placement = p;
     if (this.part) applyPlacement(this.part.group, p);
+    if (this.section) this.applySection(); // the bbox moved with the placement
+  }
+
+  /** Enable/adjust the section cut (clip plane), or disable it (null). */
+  setSection(section: { axis: SectionAxis; t: number } | null): void {
+    this.section = section;
+    this.applySection();
+  }
+
+  /** Recompute the world clip plane from the current part's bbox + section state.
+   * Global renderer.clippingPlanes clip every rendered object (part + instances). */
+  private applySection(): void {
+    if (!this.section || !this.part) {
+      this.renderer.clippingPlanes = [];
+      return;
+    }
+    const box = new THREE.Box3().setFromObject(this.part.group);
+    const { axis, t } = this.section;
+    const min = axis === "x" ? box.min.x : axis === "y" ? box.min.y : box.min.z;
+    const max = axis === "x" ? box.max.x : axis === "y" ? box.max.y : box.max.z;
+    const { normal, constant } = sectionPlane(min, max, axis, t);
+    this.renderer.clippingPlanes = [
+      new THREE.Plane(new THREE.Vector3(normal[0], normal[1], normal[2]), constant),
+    ];
   }
 
   /** Show/hide the transform gizmo (shown when a component is selected). */

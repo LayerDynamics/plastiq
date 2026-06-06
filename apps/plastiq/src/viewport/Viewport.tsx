@@ -166,6 +166,7 @@ export function Viewport(): React.JSX.Element {
     scene.showGizmo(initial.picks.length > 0);
     scene.setMeasuring(initial.measuring);
     scene.setMeasureHandler((result) => useCadStore.getState().setMeasureResult(result));
+    scene.setSection(initial.section);
     scene.setInstances(instanceList(initial.assembly, initial.jointDrive));
     // Mate authoring: a click on an instance face records a mate endpoint (M4.2).
     const syncMateMode = (on: boolean): void =>
@@ -198,6 +199,7 @@ export function Viewport(): React.JSX.Element {
       }
       if (s.gizmoMode !== prev.gizmoMode) scene.setTransformMode(s.gizmoMode);
       if (s.measuring !== prev.measuring) scene.setMeasuring(s.measuring);
+      if (s.section !== prev.section) scene.setSection(s.section);
       if (s.features !== prev.features) {
         scene.setPlacement(placementFromFeature(findPlacement(s.features)));
       }
