@@ -46,6 +46,11 @@ export interface SimManifest {
  * interior and its fan tetrahedra tile the hull exactly. Used to mass-weight the
  * pieces of a compound collider so they share one density and the body's total
  * mass is exact.
+ *
+ * NOTE: `@plastiq/cad`'s `meshVolume` (in lower/decompose.ts) is the deliberate
+ * mirror of this — `@plastiq/sim` stays standalone (it never imports the kernel;
+ * the manifest types are hand-mirrored for the same reason), so the algorithm is
+ * duplicated rather than shared. Keep the two in lock-step if either changes.
  */
 export function hullVolume(hull: HullCollider): number {
   const p = hull.points;
@@ -111,6 +116,19 @@ export function parseManifest(json: string): SimManifest {
       }
       if (!Array.isArray(c.faces) || c.faces.length < 4) {
         throw new Error(`SimManifest: body '${b.id}' has a collider with too few faces`);
+      }
+      // Every face must be a triangle of in-range vertex indices, or a backend
+      // dereferences out of bounds (silent garbage / crash) deep in spawn().
+      const vertexCount = c.points.length / 3;
+      for (const f of c.faces) {
+        if (!Array.isArray(f) || f.length !== 3) {
+          throw new Error(`SimManifest: body '${b.id}' has a non-triangular collider face`);
+        }
+        for (const idx of f) {
+          if (!Number.isInteger(idx) || idx < 0 || idx >= vertexCount) {
+            throw new Error(`SimManifest: body '${b.id}' has a collider face index out of range`);
+          }
+        }
       }
     }
   }

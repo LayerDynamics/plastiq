@@ -76,6 +76,21 @@ describe("parseManifest", () => {
     expect(() => parse(degenerate)).toThrow(/points/);
   });
 
+  it("rejects a collider face with an out-of-range or non-triangular vertex index", () => {
+    // A valid box hull has 8 vertices; index 99 is out of range.
+    const outOfRange = valid();
+    const hull = boxHull(0.05);
+    outOfRange.bodies[0]!.colliders = [{ points: hull.points, faces: [...hull.faces.slice(1), [0, 1, 99]] }];
+    expect(() => parse(outOfRange)).toThrow(/out of range/);
+
+    const notTriangle = valid();
+    const hull2 = boxHull(0.05);
+    notTriangle.bodies[0]!.colliders = [
+      { points: hull2.points, faces: [...hull2.faces.slice(1), [0, 1] as unknown as number[]] },
+    ];
+    expect(() => parse(notTriangle)).toThrow(/non-triangular/);
+  });
+
   it("rejects an unknown constraint kind", () => {
     const m = valid();
     m.constraints = [

@@ -27,7 +27,15 @@ let pending: Promise<ConvexMeshDecomposition> | null = null;
 export async function initDecomposer(): Promise<void> {
   if (decomposer) return;
   pending ??= ConvexMeshDecomposition.create();
-  decomposer = await pending;
+  try {
+    decomposer = await pending;
+  } catch (err) {
+    // Don't poison the memo: a transient create() failure must not make every
+    // future call re-await the same rejected promise — clear it so a later call
+    // can retry. Concurrent awaiters all land here and reset idempotently.
+    pending = null;
+    throw err;
+  }
 }
 
 /** True once {@link initDecomposer} has completed. */
@@ -45,6 +53,11 @@ function vertAt(points: readonly number[], i: number): Vec3 {
  * hull's triangles aren't consistently wound (our convexHull orients face normals
  * but not vertex order). Valid for convex shapes (every collider is convex), where
  * the centroid is interior and the centroid-fan tetrahedra tile the solid exactly.
+ *
+ * NOTE: `@plastiq/sim`'s `hullVolume` (in sim/manifest.ts) is the deliberate mirror
+ * of this — the two packages stay decoupled (sim never imports cad; the manifest
+ * types are hand-mirrored for the same reason), so this algorithm is duplicated
+ * rather than shared. Keep the two in lock-step if either changes.
  */
 export function meshVolume(points: readonly number[], faces: readonly number[][]): number {
   const n = points.length / 3;
@@ -87,6 +100,14 @@ const DEFAULT_CONCAVITY_TOLERANCE = 0.03;
 
 /**
  * Compute a part's collision colliders from its tessellation (COM-local frame).
+ *
+ * **Precondition:** this is synchronous (it is called from the synchronous
+ * lowering path). A *convex* part needs nothing extra. A *concave* part is
+ * decomposed with V-HACD, which requires {@link initDecomposer} to have been
+ * awaited first — otherwise this **throws** `"collidersFor: initDecomposer() must
+ * complete before decomposing a concave part"`. Use {@link decomposerReady} to
+ * check. (Callers — the worker and the test setup — `await initDecomposer()` once
+ * up front; it is intentionally not lazily initialised here to keep this sync.)
  *
  * @param positions flat vertex triplets `[x,y,z,…]` (the part's tessellation,
  *        centred on its COM)

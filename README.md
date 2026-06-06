@@ -1,6 +1,6 @@
 # Plastiq
 
-**Plastiq** is an interactive, parametric, Onshape-class **CAD editor that runs
+**Plastiq** is an interactive, parametric, web based **CAD editor that runs
 entirely in the browser** — no server. Sketch a 2D profile, build an ordered
 feature history (extrude / revolve / cut / loft / sweep / fillet / chamfer /
 shell / draft / pattern / mirror / boolean), select faces/edges/vertices in 3D,
@@ -64,8 +64,8 @@ bindings for only the OCCT symbols the kernel uses — **~5.6 MB gzip, down from
 [`packages/cad/vendor/occt/`](packages/cad/vendor/occt/) and is loaded by
 `src/oc/init.ts` in both Node and the browser. The symbol list
 ([`packages/cad/occt.build.yml`](packages/cad/occt.build.yml)) is verified by
-running the full test suite against the trimmed wasm — a missing symbol fails loud
-as an embind `UnboundTypeError`. To rebuild it (Docker, ≥12 GB memory):
+running the full test suite against the trimmed wasm — a missing symbol fails loudly
+with an embind `UnboundTypeError`. To rebuild it (Docker, ≥12 GB memory):
 `just cad-occt` — see
 [`packages/cad/vendor/occt/PROVENANCE.md`](packages/cad/vendor/occt/PROVENANCE.md)
 and [`packages/cad/scripts/build-occt.md`](packages/cad/scripts/build-occt.md).

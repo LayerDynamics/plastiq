@@ -16,12 +16,16 @@ class AmmoEngine implements PhysicsEngine {
   private world: Ammo.btDiscreteDynamicsWorld | null = null;
   private bodies: Ammo.btRigidBody[] = [];
   private readonly tmp: Ammo.btTransform;
+  // Reused identity transform for compound child shapes (freed in dispose()).
+  private readonly childTransform: Ammo.btTransform;
 
   constructor(
     private readonly mod: AmmoModule,
     private readonly timestep: number,
   ) {
     this.tmp = new mod.btTransform();
+    this.childTransform = new mod.btTransform();
+    this.childTransform.setIdentity();
   }
 
   spawn(manifest: SimManifest): number {
@@ -36,8 +40,7 @@ class AmmoEngine implements PhysicsEngine {
     this.world = world;
 
     const byId = new Map<string, Ammo.btRigidBody>();
-    const childTransform = new m.btTransform();
-    childTransform.setIdentity();
+    const childTransform = this.childTransform;
     for (const b of manifest.bodies) {
       // A compound of one convex-hull child per piece (all at identity offset —
       // the pieces are already in the body's COM-centred frame).
@@ -134,6 +137,7 @@ class AmmoEngine implements PhysicsEngine {
       m.destroy(world);
     }
     m.destroy(this.tmp);
+    m.destroy(this.childTransform);
     this.world = null;
     this.bodies = [];
   }
