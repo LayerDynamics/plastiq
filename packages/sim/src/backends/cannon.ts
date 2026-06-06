@@ -4,7 +4,7 @@
 
 import * as CANNON from "cannon-es";
 
-import type { PhysicsBackend, PhysicsEngine, PhysicsPose } from "../engine.js";
+import type { PhysicsBackend, PhysicsEngine, PhysicsPose, PhysicsSnapshot } from "../engine.js";
 import type { SimManifest } from "../manifest.js";
 
 class CannonEngine implements PhysicsEngine {
@@ -88,6 +88,43 @@ class CannonEngine implements PhysicsEngine {
     const p = body.position;
     const q = body.quaternion;
     return { position: [p.x, p.y, p.z], orientation: [q.x, q.y, q.z, q.w] };
+  }
+
+  snapshot(): PhysicsSnapshot {
+    return {
+      bodies: this.bodies.map((body) => {
+        const p = body.position;
+        const q = body.quaternion;
+        const v = body.velocity;
+        const w = body.angularVelocity;
+        return {
+          position: [p.x, p.y, p.z],
+          orientation: [q.x, q.y, q.z, q.w],
+          linearVelocity: [v.x, v.y, v.z],
+          angularVelocity: [w.x, w.y, w.z],
+        };
+      }),
+    };
+  }
+
+  restore(snapshot: PhysicsSnapshot): void {
+    if (snapshot.bodies.length !== this.bodies.length) {
+      throw new Error(
+        `CannonEngine.restore: snapshot has ${snapshot.bodies.length} bodies, world has ${this.bodies.length}`,
+      );
+    }
+    snapshot.bodies.forEach((s, i) => {
+      const body = this.bodies[i]!;
+      body.position.set(s.position[0], s.position[1], s.position[2]);
+      body.quaternion.set(s.orientation[0], s.orientation[1], s.orientation[2], s.orientation[3]);
+      body.velocity.set(s.linearVelocity[0], s.linearVelocity[1], s.linearVelocity[2]);
+      body.angularVelocity.set(s.angularVelocity[0], s.angularVelocity[1], s.angularVelocity[2]);
+      // Sync the integrator's previous-step state so stepping resumes from the
+      // restored pose without an interpolation jump, and wake a sleeping body.
+      body.previousPosition.copy(body.position);
+      body.previousQuaternion.copy(body.quaternion);
+      body.wakeUp();
+    });
   }
 
   get bodyCount(): number {

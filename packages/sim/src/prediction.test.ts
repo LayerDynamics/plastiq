@@ -270,4 +270,32 @@ describe.each(BACKENDS)("physics backend: %s", (backend) => {
     expect(second.bodyPosition(0)[2]).toBeLessThan(1); // the new world still simulates
     second.dispose();
   });
+
+  it("snapshot + restore rewinds to the exact dynamic state and replays the trajectory", async () => {
+    await initSim({ backend });
+    const sim = new PredictionSim(60, 1n);
+    sim.spawnManifest(JSON.stringify(dropManifest())); // a single free-falling body (no contacts)
+
+    for (let i = 0; i < 30; i++) sim.stepDynamics();
+    const snap = sim.snapshot();
+    // The body is mid-fall, so it has real downward velocity captured.
+    expect(snap.bodies[0]!.linearVelocity[2]).toBeLessThan(-1);
+
+    // Run forward and record where it ends up.
+    for (let i = 0; i < 30; i++) sim.stepDynamics();
+    const forward = sim.bodyPosition(0);
+
+    // Rewind: restore returns the body to the captured pose...
+    sim.restore(snap);
+    expect(sim.bodyPosition(0)[2]).toBeCloseTo(snap.bodies[0]!.position[2], 6);
+
+    // ...and re-stepping reproduces the SAME trajectory — only possible because the
+    // snapshot captured velocity too (pose-only would fall from rest and diverge).
+    for (let i = 0; i < 30; i++) sim.stepDynamics();
+    const replay = sim.bodyPosition(0);
+    expect(replay[0]).toBeCloseTo(forward[0], 5);
+    expect(replay[1]).toBeCloseTo(forward[1], 5);
+    expect(replay[2]).toBeCloseTo(forward[2], 5);
+    sim.dispose();
+  });
 });

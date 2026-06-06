@@ -5,7 +5,7 @@
 
 import RAPIER from "@dimforge/rapier3d-compat";
 
-import type { PhysicsBackend, PhysicsEngine, PhysicsPose } from "../engine.js";
+import type { PhysicsBackend, PhysicsEngine, PhysicsPose, PhysicsSnapshot } from "../engine.js";
 import { hullVolume, type SimManifest } from "../manifest.js";
 
 let ready = false;
@@ -84,6 +84,41 @@ class RapierEngine implements PhysicsEngine {
     const t = body.translation();
     const r = body.rotation();
     return { position: [t.x, t.y, t.z], orientation: [r.x, r.y, r.z, r.w] };
+  }
+
+  snapshot(): PhysicsSnapshot {
+    return {
+      bodies: this.bodies.map((body) => {
+        const t = body.translation();
+        const r = body.rotation();
+        const lv = body.linvel();
+        const av = body.angvel();
+        return {
+          position: [t.x, t.y, t.z],
+          orientation: [r.x, r.y, r.z, r.w],
+          linearVelocity: [lv.x, lv.y, lv.z],
+          angularVelocity: [av.x, av.y, av.z],
+        };
+      }),
+    };
+  }
+
+  restore(snapshot: PhysicsSnapshot): void {
+    if (snapshot.bodies.length !== this.bodies.length) {
+      throw new Error(
+        `RapierEngine.restore: snapshot has ${snapshot.bodies.length} bodies, world has ${this.bodies.length}`,
+      );
+    }
+    snapshot.bodies.forEach((s, i) => {
+      const body = this.bodies[i]!;
+      body.setTranslation({ x: s.position[0], y: s.position[1], z: s.position[2] }, true);
+      body.setRotation(
+        { x: s.orientation[0], y: s.orientation[1], z: s.orientation[2], w: s.orientation[3] },
+        true,
+      );
+      body.setLinvel({ x: s.linearVelocity[0], y: s.linearVelocity[1], z: s.linearVelocity[2] }, true);
+      body.setAngvel({ x: s.angularVelocity[0], y: s.angularVelocity[1], z: s.angularVelocity[2] }, true);
+    });
   }
 
   get bodyCount(): number {
