@@ -78,7 +78,7 @@ ctx.onmessage = (ev: MessageEvent<WorkerRequest>): void => {
             oc,
             solid,
             effective,
-            "cad-studio:assembly",
+            "plastiq:assembly",
           );
           ctx.postMessage({ id: req.id, ok: true, op: "lower", manifest, skippedJoints, localCom });
         } finally {

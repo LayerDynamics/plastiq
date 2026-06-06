@@ -62,7 +62,7 @@ jobs:
       - name: Install (frozen lockfile)
         run: pnpm install --frozen-lockfile
 
-      # Only Chromium is needed (playwright.config drives the `cad-studio`
+      # Only Chromium is needed (playwright.config drives the `plastiq`
       # Desktop Chrome project). --with-deps installs the OS libraries.
       - name: Install Playwright Chromium
         run: pnpm exec playwright install --with-deps chromium

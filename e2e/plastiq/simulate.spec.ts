@@ -7,7 +7,7 @@
 // @plastiq/sim spawn/step → render-back, end to end.
 
 import { expect, test } from "@playwright/test";
-import type { Vec3, Quat } from "../../apps/cad-studio/src/assembly/model.js";
+import type { Vec3, Quat } from "../../apps/plastiq/src/assembly/model.js";
 
 interface SimApi {
   start: () => Promise<number>;
