@@ -32,3 +32,22 @@ test("side panels collapse and expand; splitters present (FR-4)", async ({ page 
   await expect(page.getByRole("complementary", { name: "Properties" })).toHaveCount(0);
   await expect(page.getByTestId("expand-right")).toBeVisible();
 });
+
+test("the status bar is a thin strip, not a stretched row (FR-4 regression)", async ({ page }) => {
+  await page.goto("/");
+  await waitReady(page);
+
+  const statusBar = page.getByRole("contentinfo"); // the <footer> status bar
+  const viewport = page.locator("#viewport-root");
+  const statusBox = await statusBar.boundingBox();
+  const viewportBox = await viewport.boundingBox();
+  expect(statusBox).not.toBeNull();
+  expect(viewportBox).not.toBeNull();
+
+  // The status bar is a single-line strip (~24–32px). Regression guard: when the
+  // (normally hidden) recovery banner rendered null, the layout grid's stretchy
+  // `1fr` row fell onto the footer, ballooning it to ~130px. It must stay thin,
+  // and the viewport must own the bulk of the height.
+  expect(statusBox!.height).toBeLessThan(60);
+  expect(viewportBox!.height).toBeGreaterThan(statusBox!.height * 4);
+});

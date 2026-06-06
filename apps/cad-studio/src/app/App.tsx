@@ -142,9 +142,14 @@ export function App(): React.JSX.Element {
   );
 
   return (
-    <div className="grid h-full grid-rows-[auto_auto_1fr_auto] bg-[#0b0d12] text-[#cfe]">
-      <Toolbar />
-      <RecoveryBanner />
+    <div className="grid h-full grid-rows-[auto_1fr_auto] bg-[#0b0d12] text-[#cfe]">
+      {/* Toolbar + (optional) recovery banner share one grid row, so the `1fr`
+          row is always the viewport — RecoveryBanner returning null must not let
+          the StatusBar fall into the stretchy row. */}
+      <div>
+        <Toolbar />
+        <RecoveryBanner />
+      </div>
       <div className="flex min-h-0">
         {leftOpen ? (
           <>
