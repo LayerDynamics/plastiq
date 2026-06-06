@@ -58,6 +58,14 @@ export interface CadStore {
   jointDrive: Record<string, number>;
   /** Simulate mode (FR-41): the part is running in the in-browser sim. Transient. */
   simulating: boolean;
+  /** Playback (FR-41): sim advancing is paused/frozen. Transient. */
+  simPaused: boolean;
+  /** Fixed ticks the sim has advanced — drives the elapsed-time readout. Transient. */
+  simTicks: number;
+  /** Monotonic request tokens for one-shot playback commands issued from the UI
+   * and applied by the viewport's sim loop (step one frame / rewind to start). */
+  simStepReq: number;
+  simRewindReq: number;
 
   // --- undo/redo history (M2.2): snapshots of the document only ---
   past: HistorySnapshot[];
@@ -140,6 +148,14 @@ export interface CadStore {
   setJointDrive: (id: string, value: number) => void;
   /** Enter/leave Simulate mode (FR-41). */
   setSimulating: (on: boolean) => void;
+  /** Pause/resume the running sim (FR-41 playback). */
+  setSimPaused: (on: boolean) => void;
+  /** Display: record ticks advanced (written by the viewport sim loop). */
+  setSimTicks: (ticks: number) => void;
+  /** Request a one-frame advance while paused (applied by the viewport). */
+  requestSimStep: () => void;
+  /** Request a rewind to the start (applied by the viewport). */
+  requestSimRewind: () => void;
   /** Re-solve the mate network, writing solved poses back as the new seed. */
   solveAssembly: () => void;
 
@@ -211,6 +227,10 @@ export const useCadStore = create<CadStore>((set, get) => ({
   assemblyResult: null,
   jointDrive: {},
   simulating: false,
+  simPaused: false,
+  simTicks: 0,
+  simStepReq: 0,
+  simRewindReq: 0,
   past: [],
   future: [],
   selectedFeatureId: null,
@@ -486,7 +506,12 @@ export const useCadStore = create<CadStore>((set, get) => ({
 
   setJointDrive: (id, value) => set((st) => ({ jointDrive: { ...st.jointDrive, [id]: value } })),
 
-  setSimulating: (on) => set({ simulating: on }),
+  // Entering or leaving Simulate always starts from a clean, playing, t=0 state.
+  setSimulating: (on) => set({ simulating: on, simPaused: false, simTicks: 0 }),
+  setSimPaused: (on) => set({ simPaused: on }),
+  setSimTicks: (ticks) => set({ simTicks: ticks }),
+  requestSimStep: () => set((s) => ({ simStepReq: s.simStepReq + 1 })),
+  requestSimRewind: () => set((s) => ({ simRewindReq: s.simRewindReq + 1 })),
 
   solveAssembly: () => {
     const { assembly } = get();
@@ -587,6 +612,10 @@ export const useCadStore = create<CadStore>((set, get) => ({
       assemblyResult: null,
       jointDrive: {},
       simulating: false,
+      simPaused: false,
+      simTicks: 0,
+      simStepReq: 0,
+      simRewindReq: 0,
       past: [],
       future: [],
       selectedFeatureId: null,

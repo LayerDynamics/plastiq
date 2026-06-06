@@ -5,6 +5,7 @@
 import { useCadStore } from "../store/store.js";
 import type { NewFeature } from "../store/store.js";
 import type { SelectionMode } from "../store/types.js";
+import { SIM_TICK_RATE_HZ } from "../sim/simulator.js";
 import { useSketchStore } from "../sketch/sketchStore.js";
 import type { Profile } from "../sketch/profile.js";
 import {
@@ -515,6 +516,56 @@ function SimulateToggle(): React.JSX.Element {
   );
 }
 
+/** Playback controls (FR-41), shown only while simulating: pause/resume, step one
+ * frame (while paused), rewind to the start, and the elapsed sim-time readout. */
+function SimPlayback(): React.JSX.Element | null {
+  const simulating = useCadStore((s) => s.simulating);
+  const paused = useCadStore((s) => s.simPaused);
+  const simTicks = useCadStore((s) => s.simTicks);
+  const setSimPaused = useCadStore((s) => s.setSimPaused);
+  const requestSimStep = useCadStore((s) => s.requestSimStep);
+  const requestSimRewind = useCadStore((s) => s.requestSimRewind);
+  if (!simulating) return null;
+  const btn =
+    "rounded border border-[#2a3444] px-1.5 py-1 text-xs text-[#cfe] enabled:hover:bg-[#1b2230] disabled:opacity-30";
+  return (
+    <div data-testid="sim-playback" className="flex items-center gap-1">
+      <button
+        type="button"
+        data-testid="sim-pause"
+        aria-pressed={paused}
+        onClick={() => setSimPaused(!paused)}
+        className={btn}
+        title={paused ? "Resume" : "Pause"}
+      >
+        {paused ? "▶" : "❚❚"}
+      </button>
+      <button
+        type="button"
+        data-testid="sim-step"
+        disabled={!paused}
+        onClick={requestSimStep}
+        className={btn}
+        title="Step one frame forward (while paused)"
+      >
+        ⏭
+      </button>
+      <button
+        type="button"
+        data-testid="sim-rewind"
+        onClick={requestSimRewind}
+        className={btn}
+        title="Rewind to the start"
+      >
+        ⏮
+      </button>
+      <span data-testid="sim-time" className="tabular-nums text-[11px] text-[#9ab]">
+        {(simTicks / SIM_TICK_RATE_HZ).toFixed(2)}s
+      </span>
+    </div>
+  );
+}
+
 export function Toolbar(): React.JSX.Element {
   const pickCount = useCadStore((s) => s.picks.length);
   const clearPicks = useCadStore((s) => s.clearPicks);
@@ -536,6 +587,7 @@ export function Toolbar(): React.JSX.Element {
       <CombineMenu />
       <InterchangeMenu />
       <SimulateToggle />
+      <SimPlayback />
       <SelectionModeToggle />
       <GizmoModeToggle />
       <button

@@ -353,3 +353,31 @@ describe("CAD Studio store — document I/O (FR-39 reproducible reload)", () => 
     expect(s().features.find((f) => f.id === id)!.params!.height).toBe(0.02);
   });
 });
+
+describe("CAD Studio store — sim playback (FR-41)", () => {
+  it("setSimulating resets playback to a clean, playing, t=0 state", () => {
+    s().setSimPaused(true);
+    s().setSimTicks(99);
+    s().setSimulating(true);
+    expect(s().simulating).toBe(true);
+    expect(s().simPaused).toBe(false);
+    expect(s().simTicks).toBe(0);
+  });
+
+  it("pause + step/rewind requests update state and bump monotonic nonces", () => {
+    s().setSimPaused(true);
+    expect(s().simPaused).toBe(true);
+
+    const step0 = s().simStepReq;
+    const rewind0 = s().simRewindReq;
+    s().requestSimStep();
+    s().requestSimStep();
+    s().requestSimRewind();
+    // Monotonic tokens (never reset mid-run) so the viewport sees each command once.
+    expect(s().simStepReq).toBe(step0 + 2);
+    expect(s().simRewindReq).toBe(rewind0 + 1);
+
+    s().setSimTicks(48);
+    expect(s().simTicks).toBe(48);
+  });
+});

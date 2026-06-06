@@ -97,6 +97,9 @@ export function Viewport(): React.JSX.Element {
     // runtime — the pluggable design's whole point; the E2E suite drives ammo and
     // cannon through here to prove all three engines run in the browser.
     let simBackend: BackendName | undefined;
+    // One "frame" of playback advances this many fixed ticks (matches the RAF
+    // loop's batch); the Step button advances exactly one such frame.
+    const TICKS_PER_FRAME = 4;
     const simBodies = (): { id: string; position: Vec3; orientation: Quat }[] => {
       const a = useCadStore.getState().assembly;
       return a.instances.length > 0
@@ -209,14 +212,31 @@ export function Viewport(): React.JSX.Element {
           void buildSimulator().then(() => {
             if (!simulator || !useCadStore.getState().simulating) return;
             scene.setSimulation({
-              ticksPerFrame: 4,
-              step: (n) => simulator!.step(n),
+              ticksPerFrame: TICKS_PER_FRAME,
+              step: (n) => {
+                // Playback: skip advancing while paused (poses() still renders the
+                // frozen state each frame). Mirror elapsed ticks into the store.
+                if (useCadStore.getState().simPaused) return;
+                simulator!.step(n);
+                useCadStore.getState().setSimTicks(simulator!.ticks);
+              },
               poses: () => simulator!.poses(),
             });
           });
         } else {
           stopSimulator();
         }
+      }
+      // One-shot playback commands (FR-41), applied to the live simulator.
+      if (s.simStepReq !== prev.simStepReq && simulator) {
+        simulator.step(TICKS_PER_FRAME); // advance one frame while paused
+        scene.setInstancePoses(simulator.poses());
+        useCadStore.getState().setSimTicks(simulator.ticks);
+      }
+      if (s.simRewindReq !== prev.simRewindReq && simulator) {
+        simulator.rewind(); // restore the spawned state (pose + velocity), t=0
+        scene.setInstancePoses(simulator.poses());
+        useCadStore.getState().setSimTicks(0);
       }
     });
 
