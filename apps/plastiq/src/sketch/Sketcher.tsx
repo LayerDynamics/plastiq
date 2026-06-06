@@ -448,11 +448,15 @@ export function Sketcher(): React.JSX.Element | null {
     const profile = extractProfile(m);
     if (!profile) return; // no buildable profile yet — Finish stays disabled
     // The compiled plane spec rebuild consumes (alongside `profile`), so the
-    // feature builds on the sketch's datum/offset rather than always world-XY.
+    // feature builds on the sketch's plane — a base datum + offset, or a model
+    // face + offset — rather than always world-XY.
+    const plane = m.face
+      ? { kind: "face" as const, face: m.face, offset: m.offset ?? 0 }
+      : { base: m.plane, offset: m.offset ?? 0 };
     const data = {
       model: structuredClone(m),
       profile,
-      plane: { base: m.plane, offset: m.offset ?? 0 },
+      plane,
     };
     const cad = useCadStore.getState();
     if (editingFeatureId) cad.setFeatureData(editingFeatureId, data);

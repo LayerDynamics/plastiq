@@ -26,6 +26,8 @@ import {
   makeBoxAt,
   mirror,
   offsetPlane,
+  faceDatumPlane,
+  resolveFaceRef,
   planeXY,
   revolve,
   sweep,
@@ -48,7 +50,7 @@ import {
 import type { CadDocument, EditorFeature } from "../store/types.js";
 import { extractProfile, isProfile, type Profile } from "../sketch/profile.js";
 import { resolveSketchPlane } from "./sketchPlane.js";
-import type { SketchModel, SketchPlaneSpec } from "../sketch/model.js";
+import { isFaceSketchPlane, type SketchModel, type SketchPlaneSpec } from "../sketch/model.js";
 
 /** A 3-vector (the kernel's Vec3 shape; not re-exported from the root). */
 type Vec3 = [number, number, number];
@@ -152,10 +154,25 @@ export function rebuildDocument(oc: Occt, doc: CadDocument): Solid | null {
             `feature '${f.id}' (sketch): no buildable profile (closed loop or circle)`,
           );
         }
-        activeSketch = {
-          profile: prof,
-          plane: resolveSketchPlane(f.data?.["plane"] as SketchPlaneSpec | undefined),
-        };
+        const planeSpec = f.data?.["plane"] as SketchPlaneSpec | undefined;
+        let sketchPlane: DatumPlane;
+        if (isFaceSketchPlane(planeSpec)) {
+          // On-face plane: resolve the face on the current solid and frame it
+          // (parametric — re-derived each rebuild as the face moves).
+          if (!solid)
+            throw new Error(`feature '${f.id}' (sketch): an on-face plane needs an upstream body`);
+          const face = resolveFaceRef(oc, solid, planeSpec.face);
+          if (!face)
+            throw new Error(`feature '${f.id}' (sketch): the on-face plane's face was not found`);
+          try {
+            sketchPlane = offsetPlane(faceDatumPlane(oc, face), planeSpec.offset);
+          } finally {
+            face.delete();
+          }
+        } else {
+          sketchPlane = resolveSketchPlane(planeSpec);
+        }
+        activeSketch = { profile: prof, plane: sketchPlane };
         break;
       }
       case "extrude": {

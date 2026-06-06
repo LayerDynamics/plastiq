@@ -8,8 +8,10 @@ import {
   exportGltf,
   exportIges,
   exportStep,
+  faceDatumPlane,
   initDecomposer,
   initOcct,
+  resolveFaceRef,
   type Occt,
   type TaggedMesh,
 } from "@plastiq/cad";
@@ -104,6 +106,37 @@ ctx.onmessage = (ev: MessageEvent<WorkerRequest>): void => {
                 ? exportIges(oc, solid)
                 : exportGltf(oc, solid, { linearDeflection: 0.0005 });
           ctx.postMessage({ id: req.id, ok: true, op: "export", format: req.format, content });
+        } finally {
+          solid.delete();
+        }
+        return;
+      }
+      if (req.op === "facePlane") {
+        // Resolve a picked face → sketch datum frame, for the "normal to" camera
+        // (the main thread can't run OCCT). Null if there's no body or no match.
+        const solid = rebuildDocument(oc, req.doc);
+        if (!solid) {
+          ctx.postMessage({ id: req.id, ok: true, op: "facePlane", plane: null });
+          return;
+        }
+        try {
+          const face = resolveFaceRef(oc, solid, req.face);
+          if (!face) {
+            ctx.postMessage({ id: req.id, ok: true, op: "facePlane", plane: null });
+            return;
+          }
+          const p = faceDatumPlane(oc, face);
+          face.delete();
+          ctx.postMessage({
+            id: req.id,
+            ok: true,
+            op: "facePlane",
+            plane: {
+              origin: [p.origin[0], p.origin[1], p.origin[2]],
+              normal: [p.normal[0], p.normal[1], p.normal[2]],
+              xAxis: [p.xAxis[0], p.xAxis[1], p.xAxis[2]],
+            },
+          });
         } finally {
           solid.delete();
         }

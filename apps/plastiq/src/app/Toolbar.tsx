@@ -8,7 +8,7 @@ import type { NewFeature } from "../store/store.js";
 import type { SelectionMode } from "../store/types.js";
 import { SIM_TICK_RATE_HZ } from "../sim/simulator.js";
 import { useSketchStore } from "../sketch/sketchStore.js";
-import type { DatumPlaneId } from "../sketch/model.js";
+import { emptySketch, type DatumPlaneId, type SketchModel } from "../sketch/model.js";
 import type { Profile } from "../sketch/profile.js";
 import {
   booleanBodyFeature,
@@ -118,6 +118,20 @@ function FeatureMenu(): React.JSX.Element {
   // The plane + offset (mm) the next New Sketch opens on — no longer always XY.
   const [plane, setPlane] = useState<DatumPlaneId>("XY");
   const [offsetMm, setOffsetMm] = useState("0");
+  // "Sketch on face": enabled when exactly one face is selected (its FaceRef known).
+  const picks = useCadStore((s) => s.picks);
+  const selectionRefs = useCadStore((s) => s.selectionRefs);
+  const faceRef =
+    picks.length === 1 && picks[0]?.kind === "face"
+      ? selectionRefs.faces[picks[0].id]
+      : undefined;
+  const sketchOnFace = (): void => {
+    if (!faceRef) return;
+    const offset = (Number(offsetMm) || 0) / 1000;
+    // Seed the empty sketch with the picked face; the plane id is then a placeholder.
+    const model: SketchModel = { ...emptySketch("XY", offset), face: faceRef };
+    enterSketch("XY", offset, undefined, model);
+  };
   const btn = "rounded px-1.5 py-0.5 text-xs text-[#9ab] hover:bg-[#1b2230]";
   const btnDisabled = "rounded px-1.5 py-0.5 text-xs text-[#445] cursor-not-allowed";
   return (
@@ -160,6 +174,22 @@ function FeatureMenu(): React.JSX.Element {
         onClick={() => enterSketch(plane, (Number(offsetMm) || 0) / 1000)}
       >
         New Sketch
+      </button>
+      <button
+        type="button"
+        className={solverReady && faceRef ? btn : btnDisabled}
+        data-testid="sketch-on-face"
+        disabled={!solverReady || !faceRef}
+        title={
+          !solverReady
+            ? "Loading sketch solver…"
+            : faceRef
+              ? "Sketch on the selected face (offset along its normal)"
+              : "Select a single face first"
+        }
+        onClick={sketchOnFace}
+      >
+        On Face
       </button>
       <button
         type="button"

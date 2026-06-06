@@ -2,7 +2,7 @@
 // request with the document; the worker rebuilds it through @plastiq/cad and posts
 // back a tagged mesh in transferable typed-array form (or a typed error).
 
-import type { FaceGroup, SimManifest } from "@plastiq/cad";
+import type { FaceGroup, FaceRef, SimManifest } from "@plastiq/cad";
 import type { CadDocument } from "../store/types.js";
 
 type Vec3 = [number, number, number];
@@ -54,7 +54,23 @@ export interface ExportRequest {
   format: ExportFormat;
 }
 
-export type WorkerRequest = BuildRequest | LowerRequest | ExportRequest;
+/** Resolve a picked face on `doc` to a sketch datum frame (M3 on-face sketching).
+ * The main thread can't run OCCT, so the worker derives the plane for the camera. */
+export interface FacePlaneRequest {
+  id: number;
+  op: "facePlane";
+  doc: CadDocument;
+  face: FaceRef;
+}
+
+/** A sketch datum frame (origin + orthonormal normal/xAxis), in SI metres. */
+export interface PlaneFrame {
+  origin: Vec3;
+  normal: Vec3;
+  xAxis: Vec3;
+}
+
+export type WorkerRequest = BuildRequest | LowerRequest | ExportRequest | FacePlaneRequest;
 
 export type WorkerResponse =
   | { id: number; ok: true; op: "build"; mesh: TransferMesh | null }
@@ -67,4 +83,5 @@ export type WorkerResponse =
       localCom: [number, number, number];
     }
   | { id: number; ok: true; op: "export"; format: ExportFormat; content: string }
+  | { id: number; ok: true; op: "facePlane"; plane: PlaneFrame | null }
   | { id: number; ok: false; error: string };
