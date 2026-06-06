@@ -25,11 +25,11 @@ e2e:
 
 # Production build of the app.
 build:
-    pnpm --filter @plastiq/cad-studio run build
+    pnpm --filter @plastiq/app run build
 
 # Dev server.
 dev:
-    pnpm --filter @plastiq/cad-studio run dev
+    pnpm --filter @plastiq/app run dev
 
 # Build the TRIMMED opencascade.js for @plastiq/cad (Docker; long: 30–90 min,
 # several GB). The symbol list lives in packages/cad/occt.build.yml. Deferred /

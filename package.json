@@ -9,8 +9,8 @@
     "node": ">=20"
   },
   "scripts": {
-    "dev": "pnpm --filter @plastiq/cad-studio run dev",
-    "build": "pnpm --filter @plastiq/cad-studio run build",
+    "dev": "pnpm --filter @plastiq/app run dev",
+    "build": "pnpm --filter @plastiq/app run build",
     "typecheck": "pnpm -r --if-present run typecheck",
     "test": "vitest run",
     "test:watch": "vitest",

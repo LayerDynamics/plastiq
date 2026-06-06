@@ -1,4 +1,4 @@
-# @plastiq/cad-studio
+# @plastiq/app
 
 The **Plastiq** CAD editor front end — an interactive, parametric, in-browser CAD
 editor (React + Zustand + Tailwind + three.js) on the
@@ -32,8 +32,8 @@ See the [repository README](../../README.md) for the architecture overview.
 ## Scripts
 
 ```sh
-pnpm -C apps/cad-studio run dev      # Vite dev server
-pnpm -C apps/cad-studio run build    # tsc --noEmit + production build
+pnpm -C apps/plastiq run dev      # Vite dev server
+pnpm -C apps/plastiq run build    # tsc --noEmit + production build
 pnpm exec vitest run                 # unit/integration suite (from the repo root)
 pnpm exec playwright test            # no-mock E2E (served on :4177)
 ```

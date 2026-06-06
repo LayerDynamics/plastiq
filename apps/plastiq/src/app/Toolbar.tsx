@@ -435,8 +435,8 @@ function InterchangeMenu(): React.JSX.Element {
 
   const onExport = async (fmt: (typeof EXPORTS)[number]): Promise<void> => {
     const exporter = (
-      globalThis as { __cadStudioExport?: (f: "gltf" | "step" | "iges") => Promise<string> }
-    ).__cadStudioExport;
+      globalThis as { __plastiqExport?: (f: "gltf" | "step" | "iges") => Promise<string> }
+    ).__plastiqExport;
     if (!exporter) return;
     try {
       const content = await exporter(fmt.format);

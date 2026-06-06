@@ -6,7 +6,7 @@
 // (ammo's wasm / cannon's pure JS), and assert the body falls under gravity.
 
 import { expect, test } from "@playwright/test";
-import type { Vec3, Quat } from "../../apps/cad-studio/src/assembly/model.js";
+import type { Vec3, Quat } from "../../apps/plastiq/src/assembly/model.js";
 
 type BackendName = "rapier" | "ammo" | "cannon";
 
@@ -27,7 +27,7 @@ for (const backend of ["ammo", "cannon"] as const) {
     await expect(page.getByTestId("status")).toHaveText("ready", { timeout: 240_000 });
     await page.waitForFunction(
       () =>
-        (globalThis as { __cadStudioScene?: { builtPart: unknown } }).__cadStudioScene
+        (globalThis as { __plastiqScene?: { builtPart: unknown } }).__plastiqScene
           ?.builtPart != null,
       undefined,
       { timeout: 240_000 },
@@ -36,7 +36,7 @@ for (const backend of ["ammo", "cannon"] as const) {
     // Select the backend, spawn the bare part, record its start height. The CAD
     // frame is Z-up, so gravity pulls along −Z (vertical axis = position[2]).
     const start = await page.evaluate(async (name) => {
-      const sim = (globalThis as { __cadStudioSimulate?: SimApi }).__cadStudioSimulate!;
+      const sim = (globalThis as { __plastiqSimulate?: SimApi }).__plastiqSimulate!;
       sim.setBackend(name);
       const count = await sim.start();
       return { count, active: sim.backend(), z0: sim.poseOf("body0")?.position[2] ?? null };
@@ -49,7 +49,7 @@ for (const backend of ["ammo", "cannon"] as const) {
 
     // Step a fixed number of ticks under gravity (deterministic).
     const z1 = await page.evaluate(() => {
-      const sim = (globalThis as { __cadStudioSimulate?: SimApi }).__cadStudioSimulate!;
+      const sim = (globalThis as { __plastiqSimulate?: SimApi }).__plastiqSimulate!;
       sim.step(240);
       return sim.poseOf("body0")?.position[2] ?? null;
     });
@@ -58,7 +58,7 @@ for (const backend of ["ammo", "cannon"] as const) {
 
     // Stop cleanly (simulate is transient view state; the document is untouched).
     await page.evaluate(() => {
-      (globalThis as { __cadStudioSimulate?: SimApi }).__cadStudioSimulate!.stop();
+      (globalThis as { __plastiqSimulate?: SimApi }).__plastiqSimulate!.stop();
     });
   });
 }

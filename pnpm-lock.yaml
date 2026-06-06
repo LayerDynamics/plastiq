@@ -36,7 +36,7 @@ importers:
         specifier: ^4.1.7
         version: 4.1.8(@types/node@25.9.1)(vite@8.0.16(@types/node@25.9.1)(jiti@2.7.0))
 
-  apps/cad-studio:
+  apps/plastiq:
     dependencies:
       '@plastiq/cad':
         specifier: workspace:*

@@ -13,10 +13,10 @@ gravity in a real physics engine** — all client-side.
 Plastiq is a pnpm workspace of one app and two owned packages:
 
 ```text
-apps/cad-studio   React + Zustand + Tailwind + three.js editor (the front end)
+apps/plastiq   React + Zustand + Tailwind + three.js editor (the front end)
 packages/cad      @plastiq/cad — the parametric CAD kernel
 packages/sim      @plastiq/sim — the pluggable physics layer
-e2e/cad-studio    no-mock Playwright end-to-end tests
+e2e/plastiq    no-mock Playwright end-to-end tests
 ```
 
 - **`@plastiq/cad`** — a parametric B-rep kernel built directly on
@@ -46,8 +46,8 @@ solver on the main thread.
 
 ```sh
 pnpm install                              # install the workspace
-pnpm -C apps/cad-studio run dev           # Vite dev server
-pnpm -C apps/cad-studio run build         # tsc --noEmit + production build
+pnpm -C apps/plastiq run dev           # Vite dev server
+pnpm -C apps/plastiq run build         # tsc --noEmit + production build
 pnpm exec vitest run                      # unit/integration suite (real OCCT + wasm)
 pnpm exec playwright test                 # no-mock browser E2E (served on :4177)
 pnpm -r run typecheck                     # type-check every package + the app

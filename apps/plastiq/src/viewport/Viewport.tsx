@@ -69,19 +69,19 @@ export function Viewport(): React.JSX.Element {
     clientRef.current = client;
     // Expose the live scene so the M0/M1 E2Es can drive the real pick + gizmo
     // paths. Harmless in production; it's just a handle to the scene.
-    (globalThis as { __cadStudioScene?: SceneController }).__cadStudioScene = scene;
+    (globalThis as { __plastiqScene?: SceneController }).__plastiqScene = scene;
     // Expose the GPU colour-id face pick (NFR-4) for the strict E2E.
     (
-      globalThis as { __cadStudioGpuPick?: (ndcX: number, ndcY: number) => number | null }
-    ).__cadStudioGpuPick = (ndcX, ndcY) => scene.gpuPickFace({ x: ndcX, y: ndcY });
+      globalThis as { __plastiqGpuPick?: (ndcX: number, ndcY: number) => number | null }
+    ).__plastiqGpuPick = (ndcX, ndcY) => scene.gpuPickFace({ x: ndcX, y: ndcY });
     // Expose assembly→SimManifest lowering (M4.5) for the Export-to-Sim action +
     // the strict E2E: lowers the current document's assembly via the worker.
-    (globalThis as { __cadStudioLower?: () => Promise<unknown> }).__cadStudioLower = () =>
+    (globalThis as { __plastiqLower?: () => Promise<unknown> }).__plastiqLower = () =>
       client.lower(useCadStore.getState().toDocument());
     // Interchange export (M6.2/M6.3): serialize the part to glTF/STEP/IGES.
     (
-      globalThis as { __cadStudioExport?: (f: "gltf" | "step" | "iges") => Promise<string> }
-    ).__cadStudioExport = (format) =>
+      globalThis as { __plastiqExport?: (f: "gltf" | "step" | "iges") => Promise<string> }
+    ).__plastiqExport = (format) =>
       client.exportFile(useCadStore.getState().toDocument(), format);
 
     // Projects (M5): load the SQLite store + let Save capture the viewport.
@@ -131,7 +131,7 @@ export function Viewport(): React.JSX.Element {
     // active one after start.
     (
       globalThis as {
-        __cadStudioSimulate?: {
+        __plastiqSimulate?: {
           start: () => Promise<number>;
           step: (n: number) => void;
           poseOf: (id: string) => { position: Vec3; orientation: Quat } | null;
@@ -140,7 +140,7 @@ export function Viewport(): React.JSX.Element {
           backend: () => BackendName | null;
         };
       }
-    ).__cadStudioSimulate = {
+    ).__plastiqSimulate = {
       start: buildSimulator,
       step: (n) => {
         if (!simulator) return;
@@ -227,10 +227,10 @@ export function Viewport(): React.JSX.Element {
       scene.dispose();
       sceneRef.current = null;
       clientRef.current = null;
-      delete (globalThis as { __cadStudioScene?: SceneController }).__cadStudioScene;
-      delete (globalThis as { __cadStudioLower?: () => Promise<unknown> }).__cadStudioLower;
-      delete (globalThis as { __cadStudioExport?: unknown }).__cadStudioExport;
-      delete (globalThis as { __cadStudioSimulate?: unknown }).__cadStudioSimulate;
+      delete (globalThis as { __plastiqScene?: SceneController }).__plastiqScene;
+      delete (globalThis as { __plastiqLower?: () => Promise<unknown> }).__plastiqLower;
+      delete (globalThis as { __plastiqExport?: unknown }).__plastiqExport;
+      delete (globalThis as { __plastiqSimulate?: unknown }).__plastiqSimulate;
       useProjectsStore.getState().setThumbnailProvider(null);
     };
   }, []);

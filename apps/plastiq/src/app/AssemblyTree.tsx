@@ -260,7 +260,7 @@ export function AssemblyTree(): React.JSX.Element {
 function ExportToSim(): React.JSX.Element {
   const setStatus = useCadStore((s) => s.setStatus);
   const onExport = async (): Promise<void> => {
-    const lower = (globalThis as { __cadStudioLower?: () => Promise<unknown> }).__cadStudioLower;
+    const lower = (globalThis as { __plastiqLower?: () => Promise<unknown> }).__plastiqLower;
     if (!lower) return;
     try {
       const out = (await lower()) as { manifest: unknown; skippedJoints: string[] };

@@ -7,7 +7,7 @@
 // @plastiq/sim spawn/step → render-back, end to end.
 
 import { expect, test } from "@playwright/test";
-import type { Vec3, Quat } from "../../apps/cad-studio/src/assembly/model.js";
+import type { Vec3, Quat } from "../../apps/plastiq/src/assembly/model.js";
 
 interface SimApi {
   start: () => Promise<number>;
@@ -26,9 +26,9 @@ test.beforeEach(async ({ page }) => {
     (globalThis as { faceCount?: () => number }).faceCount = () => {
       const scene = (
         globalThis as {
-          __cadStudioScene?: { builtPart: { mesh: { userData: { faceIds?: number[] } } } | null };
+          __plastiqScene?: { builtPart: { mesh: { userData: { faceIds?: number[] } } } | null };
         }
-      ).__cadStudioScene;
+      ).__plastiqScene;
       return scene?.builtPart?.mesh.userData.faceIds?.length ?? 0;
     };
   });
@@ -41,7 +41,7 @@ test("simulate the part: it drops under gravity, then returns to edit cleanly", 
   await expect(page.getByTestId("status")).toHaveText("ready", { timeout: 240_000 });
   await page.waitForFunction(
     () =>
-      (globalThis as { __cadStudioScene?: { builtPart: unknown } }).__cadStudioScene?.builtPart !=
+      (globalThis as { __plastiqScene?: { builtPart: unknown } }).__plastiqScene?.builtPart !=
       null,
     undefined,
     { timeout: 240_000 },
@@ -50,7 +50,7 @@ test("simulate the part: it drops under gravity, then returns to edit cleanly", 
   // Spawn the bare part into the sim; record its initial height. The CAD frame is
   // Z-up, so gravity pulls along −Z (the body's vertical axis is position[2]).
   const start = await page.evaluate(async () => {
-    const sim = (globalThis as { __cadStudioSimulate?: SimApi }).__cadStudioSimulate!;
+    const sim = (globalThis as { __plastiqSimulate?: SimApi }).__plastiqSimulate!;
     const count = await sim.start();
     return { count, z0: sim.poseOf("body0")?.position[2] ?? null };
   });
@@ -59,7 +59,7 @@ test("simulate the part: it drops under gravity, then returns to edit cleanly", 
 
   // Step a fixed number of ticks under gravity (deterministic).
   const z1 = await page.evaluate(() => {
-    const sim = (globalThis as { __cadStudioSimulate?: SimApi }).__cadStudioSimulate!;
+    const sim = (globalThis as { __plastiqSimulate?: SimApi }).__plastiqSimulate!;
     sim.step(240);
     return sim.poseOf("body0")?.position[2] ?? null;
   });
@@ -68,15 +68,15 @@ test("simulate the part: it drops under gravity, then returns to edit cleanly", 
 
   // Stop → the render returns to the edit pose; the document is untouched.
   await page.evaluate(() => {
-    (globalThis as { __cadStudioSimulate?: SimApi }).__cadStudioSimulate!.stop();
+    (globalThis as { __plastiqSimulate?: SimApi }).__plastiqSimulate!.stop();
   });
   await page.waitForFunction(() => faceCount() === 6, undefined, { timeout: 240_000 });
   const editY = await page.evaluate(() => {
     const scene = (
       globalThis as {
-        __cadStudioScene?: { builtPart: { group: { position: { y: number } } } | null };
+        __plastiqScene?: { builtPart: { group: { position: { y: number } } } | null };
       }
-    ).__cadStudioScene;
+    ).__plastiqScene;
     return scene?.builtPart?.group.position.y ?? null;
   });
   expect(editY).not.toBeNull();
