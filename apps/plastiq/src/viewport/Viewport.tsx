@@ -18,6 +18,8 @@ import { useProjectsStore } from "../persistence/projectsStore.js";
 import { applyJointDrives, type AssemblyModel, type Quat, type Vec3 } from "../assembly/model.js";
 import { Simulator } from "../sim/simulator.js";
 import { explodeInstances } from "./explode.js";
+import { useSketchStore } from "../sketch/sketchStore.js";
+import { resolveDatumPlane } from "../worker/sketchPlane.js";
 import { activeBackend, type BackendName } from "@plastiq/sim";
 
 /** The instance poses the scene renders: the mate-solved poses with any active
@@ -269,8 +271,23 @@ export function Viewport(): React.JSX.Element {
       }
     });
 
+    // "Normal to" sketch view (M3): while a sketch is active, render the scene
+    // through an ortho camera locked to the sketch plane + the overlay's 2D view,
+    // so the model behind the transparent overlay coincides with the sketch.
+    const applySketchView = (s: ReturnType<typeof useSketchStore.getState>): void => {
+      const plane = s.active ? resolveDatumPlane(s.model.plane, s.model.offset ?? 0) : null;
+      scene.setSketchView(plane, s.view);
+    };
+    applySketchView(useSketchStore.getState());
+    const unsubSketch = useSketchStore.subscribe((s, prev) => {
+      if (s.active !== prev.active || s.model !== prev.model || s.view !== prev.view) {
+        applySketchView(s);
+      }
+    });
+
     return () => {
       unsubSel();
+      unsubSketch();
       simulator?.stop();
       client.dispose();
       scene.dispose();

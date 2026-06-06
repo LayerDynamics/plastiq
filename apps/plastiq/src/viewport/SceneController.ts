@@ -11,6 +11,9 @@ import { ViewHelper } from "three/examples/jsm/helpers/ViewHelper.js";
 import { standardViewDirection, type StandardView } from "./views.js";
 import { sectionPlane, type SectionAxis } from "./section.js";
 import { findClashes, type Clash } from "./interference.js";
+import { sketchOrthoFrame } from "./sketchCamera.js";
+import type { DatumPlane } from "@plastiq/cad";
+import type { View2D } from "../sketch/transform2d.js";
 import type { Pick, SelectionMode } from "../store/types.js";
 import type { TransferMesh } from "../worker/protocol.js";
 import { buildPart, disposePart, type BuiltPart } from "./buildMesh.js";
@@ -71,6 +74,11 @@ export class SceneController {
   /** Active section cut (clip plane), or null. Re-fit to the part's bbox on
    * every rebuild/placement so the t-fraction tracks the live geometry. */
   private section: { axis: SectionAxis; t: number } | null = null;
+  /** "Normal to" sketch view (M3): while set, the scene renders through an ortho
+   * camera locked to this datum plane + 2D overlay view, so the model coincides
+   * with the sketch. null = the normal perspective camera. */
+  private sketchCam: THREE.OrthographicCamera | null = null;
+  private sketchView: { plane: DatumPlane; view: View2D } | null = null;
 
   // --- selection state (FR-8/FR-9) -----------------------------------------
   private readonly picker = new Picker();
@@ -379,6 +387,38 @@ export class SceneController {
   setSection(section: { axis: SectionAxis; t: number } | null): void {
     this.section = section;
     this.applySection();
+  }
+
+  /** Enter "normal to" sketch view on `plane`, slaving an ortho camera to the
+   * overlay's `view` so the 3D model coincides with the 2D sketch; null exits
+   * back to the perspective camera. (M3) */
+  setSketchView(plane: DatumPlane | null, view: View2D): void {
+    this.sketchView = plane ? { plane, view } : null;
+    this.applySketchView();
+  }
+
+  /** Rebuild the sketch ortho camera from the current plane + overlay view + the
+   * live canvas size. No-op (and drops the ortho cam) when not sketching. */
+  private applySketchView(): void {
+    if (!this.sketchView) {
+      this.sketchCam = null;
+      return;
+    }
+    const { clientWidth: w, clientHeight: h } = this.host;
+    const f = sketchOrthoFrame(this.sketchView.plane, this.sketchView.view, w || 1, h || 1);
+    const cam = this.sketchCam ?? new THREE.OrthographicCamera();
+    cam.left = f.left;
+    cam.right = f.right;
+    cam.top = f.top;
+    cam.bottom = f.bottom;
+    cam.near = f.near;
+    cam.far = f.far;
+    cam.position.set(f.position[0], f.position[1], f.position[2]);
+    cam.up.set(f.up[0], f.up[1], f.up[2]);
+    cam.lookAt(f.target[0], f.target[1], f.target[2]);
+    cam.updateProjectionMatrix();
+    cam.updateMatrixWorld(true);
+    this.sketchCam = cam;
   }
 
   /** Bounding-box (broad-phase) interference between the assembly instances:
@@ -808,6 +848,8 @@ export class SceneController {
     // no CSS size, so on a HiDPI display (dpr=2) it displayed at the 2× buffer
     // size and the scene rendered off the visible viewport (blank canvas).
     this.renderer.setSize(w, h, true);
+    // The sketch ortho frustum is sized from the canvas; re-fit it on resize.
+    if (this.sketchView) this.applySketchView();
   }
 
   private tick(): void {
@@ -823,7 +865,9 @@ export class SceneController {
     }
     this.controls.update();
     this.renderer.clear();
-    this.renderer.render(this.scene, this.camera);
+    // While sketching, render through the plane-locked ortho camera (the overlay
+    // owns interaction); otherwise the normal perspective camera.
+    this.renderer.render(this.scene, this.sketchCam ?? this.camera);
     this.viewHelper.render(this.renderer);
     this.raf = requestAnimationFrame(this.tick);
   }
