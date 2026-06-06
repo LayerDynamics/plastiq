@@ -21,6 +21,11 @@ export interface TransferMesh {
   vertexIds: number[];
   /** Flat SI corner coordinates `[x0,y0,z0, …]`, one per `vertexIds` entry. */
   vertexPositions: Float32Array;
+  /** Solid volume in m³ — a mass property surfaced in the properties panel.
+   *  Always set by a real build; optional so partial test fixtures need not. */
+  volume?: number;
+  /** Geometric centre of mass (centroid) in SI metres (same caveat as `volume`). */
+  com?: Vec3;
 }
 
 export interface BuildRequest {

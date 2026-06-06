@@ -13,7 +13,7 @@ import {
   type Occt,
   type TaggedMesh,
 } from "@plastiq/cad";
-import { rebuildDocument, rebuildTagged } from "./rebuild.js";
+import { rebuildDocument, rebuildTaggedWithProps } from "./rebuild.js";
 import { lowerAssembly } from "./lower.js";
 import type { TransferMesh, WorkerRequest, WorkerResponse } from "./protocol.js";
 
@@ -26,7 +26,11 @@ const ctx = self as unknown as {
 let ocPromise: Promise<Occt> | null = null;
 const getOc = (): Promise<Occt> => (ocPromise ??= initOcct({ wasmUrl }));
 
-function toTransfer(t: TaggedMesh): TransferMesh {
+function toTransfer(
+  t: TaggedMesh,
+  volume: number,
+  com: [number, number, number],
+): TransferMesh {
   return {
     vertices: Float32Array.from(t.vertices),
     indices: Uint32Array.from(t.indices),
@@ -38,6 +42,8 @@ function toTransfer(t: TaggedMesh): TransferMesh {
     })),
     vertexIds: t.vertexPoints.map((v) => v.vertexId),
     vertexPositions: Float32Array.from(t.vertexPoints.flatMap((v) => [...v.position])),
+    volume,
+    com,
   };
 }
 
@@ -103,8 +109,8 @@ ctx.onmessage = (ev: MessageEvent<WorkerRequest>): void => {
         }
         return;
       }
-      const tagged = rebuildTagged(oc, req.doc, { linearDeflection: req.deflection });
-      const mesh = tagged ? toTransfer(tagged) : null;
+      const built = rebuildTaggedWithProps(oc, req.doc, { linearDeflection: req.deflection });
+      const mesh = built ? toTransfer(built.mesh, built.volume, built.com) : null;
       const transfer: Transferable[] = mesh
         ? [
             mesh.vertices.buffer,

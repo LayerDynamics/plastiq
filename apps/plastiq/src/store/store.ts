@@ -85,6 +85,9 @@ export interface CadStore {
   errorFeatureId: FeatureId | null;
   /** Persistent refs for the current build's pickable faces/edges (FR-16). */
   selectionRefs: SelectionRefs;
+  /** Volume + centroid of the current build (mass-properties readout), or null
+   *  when the document has no geometry. Density-free; mass needs a material. */
+  massProps: { volume: number; com: [number, number, number] } | null;
   /** Rollback bar (FR-25): features at index ≥ this are skipped at rebuild
    * (null = no rollback, build everything). */
   rollbackIndex: number | null;
@@ -112,6 +115,8 @@ export interface CadStore {
   setErrorFeature: (id: FeatureId | null) => void;
   /** Replace the persistent-ref lookup for the current build (FR-16). */
   setSelectionRefs: (refs: SelectionRefs) => void;
+  /** Publish the current build's volume + centroid (null when no geometry). */
+  setMassProps: (props: { volume: number; com: [number, number, number] } | null) => void;
   /** Set the rollback point (index, or null to build everything) (FR-25). */
   setRollback: (index: number | null) => void;
 
@@ -245,6 +250,7 @@ export const useCadStore = create<CadStore>((set, get) => ({
   measureResult: null,
   errorFeatureId: null,
   selectionRefs: { faces: {}, edges: {} },
+  massProps: null,
   rollbackIndex: null,
   rollbackBeforeId: null,
 
@@ -344,6 +350,8 @@ export const useCadStore = create<CadStore>((set, get) => ({
   setMeasureResult: (result) => set({ measureResult: result }),
   setErrorFeature: (id) => set({ errorFeatureId: id }),
   setSelectionRefs: (refs) => set({ selectionRefs: refs }),
+
+  setMassProps: (props) => set({ massProps: props }),
   setRollback: (index) =>
     set((s) => ({
       rollbackIndex: index,
@@ -644,6 +652,7 @@ export const useCadStore = create<CadStore>((set, get) => ({
       measureResult: null,
       errorFeatureId: null,
       selectionRefs: { faces: {}, edges: {} },
+      massProps: null,
       rollbackIndex: null,
       rollbackBeforeId: null,
     }),
