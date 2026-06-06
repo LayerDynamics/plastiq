@@ -130,8 +130,11 @@ export interface CadStore {
   /** Record a picked instance face (world point + faceId) as a mate endpoint. */
   addMatePick: (pick: { instanceId: string; faceId: number; worldPoint: Vec3 }) => void;
   clearMatePicks: () => void;
-  /** Build a mate of `kind` from the two accumulated picks and solve. */
-  applyMate: (kind: AssemblyMate["kind"]) => void;
+  /** Build a mate of `kind` from the two accumulated picks and solve. `value`
+   * (SI: metres for distance, radians for angle) is used by the valued kinds. */
+  applyMate: (kind: AssemblyMate["kind"], value?: number) => void;
+  /** Update a distance/angle mate's scalar (SI) and re-solve the assembly. */
+  setMateValue: (id: string, value: number) => void;
   // --- joints (M4.3, design-time) ---
   /** Build a joint of `kind` from the two accumulated picks (parent → child). */
   applyJoint: (kind: JointKind) => void;
@@ -430,7 +433,7 @@ export const useCadStore = create<CadStore>((set, get) => ({
 
   clearMatePicks: () => set({ matePicks: [] }),
 
-  applyMate: (kind) => {
+  applyMate: (kind, value = 0) => {
     const { matePicks } = get();
     if (matePicks.length !== 2) return;
     const [p0, p1] = matePicks;
@@ -438,13 +441,28 @@ export const useCadStore = create<CadStore>((set, get) => ({
     const b = { instance: p1!.instanceId, point: p1!.point, dir: p1!.dir };
     const id = `m${get().nextSeq}`;
     set((st) => ({ nextSeq: st.nextSeq + 1, matePicks: [] }));
+    // distance/angle carry a scalar (SI: metres / radians); the others don't.
     const mate: AssemblyMate =
       kind === "distance"
-        ? { id, kind, a, b, value: 0 }
+        ? { id, kind, a, b, value }
         : kind === "angle"
-          ? { id, kind, a, b, value: 0 }
+          ? { id, kind, a, b, value }
           : { id, kind, a, b };
     get().addMate(mate);
+  },
+
+  setMateValue: (id, value) => {
+    set((s) => ({
+      ...pushHistory(s),
+      assembly: {
+        ...s.assembly,
+        mates: s.assembly.mates.map((m) =>
+          m.id === id && (m.kind === "distance" || m.kind === "angle") ? { ...m, value } : m,
+        ),
+      },
+    }));
+    // Changing the target distance/angle re-poses the assembly.
+    get().solveAssembly();
   },
 
   applyJoint: (kind) => {
