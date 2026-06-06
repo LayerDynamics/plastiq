@@ -119,7 +119,11 @@ function MatesSection(): React.JSX.Element {
             <button
               type="button"
               data-testid="mate-distance"
-              disabled={!ready || !Number.isFinite(Number(distMm))}
+              disabled={
+                !ready ||
+                distMm.trim() === "" ||
+                !Number.isFinite(Number(distMm))
+              }
               onClick={() => applyMate("distance", Number(distMm) / MM_PER_M)}
               className="rounded border border-[#2a3444] px-1.5 py-0.5 text-[11px] enabled:hover:bg-[#1b2230] disabled:opacity-30"
             >
