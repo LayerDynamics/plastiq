@@ -71,6 +71,28 @@ describe("pathological inputs fail loud (no silent degenerate geometry)", () => 
   it("importing malformed STEP text throws", () => {
     expect(() => importStep(oc, "this is definitely not a STEP file")).toThrow();
   });
+
+  it("a single-point sweep spine throws", () => {
+    const profile = Sketch.circle(planeXY(), 0, 0, mm(5));
+    expect(() => sweep(oc, profile, { kind: "polyline", points: [[0, 0, 0]] })).toThrow(
+      /at least two points/,
+    );
+  });
+
+  it("a zero-length sweep spine (all points coincide) throws", () => {
+    const profile = Sketch.circle(planeXY(), 0, 0, mm(5));
+    // Two points but identical — a degenerate zero-length path. The length check
+    // passes (2 points), so the spine builder must reject the empty geometry.
+    expect(() =>
+      sweep(oc, profile, {
+        kind: "polyline",
+        points: [
+          [0, 0, 0],
+          [0, 0, 0],
+        ],
+      }),
+    ).toThrow(/zero-length spine/);
+  });
 });
 
 describe("boundary-but-valid inputs produce the expected result", () => {

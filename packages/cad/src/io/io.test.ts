@@ -28,11 +28,20 @@ describe("STEP", () => {
 });
 
 describe("IGES", () => {
-  it("exports non-empty IGES text", () => {
+  it("exports a complete, well-formed IGES file (all five sections present)", () => {
     const box = makeBox(oc, mm(10), mm(10), mm(10));
     const iges = exportIges(oc, box);
     expect(iges.length).toBeGreaterThan(0);
-    expect(iges).toContain("S      1"); // IGES start section line
+    // OCCT has no IGES importer here, so verify structural completeness instead
+    // of a round-trip. The IGES Terminate line summarises the record counts of
+    // every preceding section in order — Start, Global, Directory, Parameter —
+    // and is itself the 'T' section, e.g. "S      1G      4D     98P     49 ...
+    // T0000001". Matching it proves all five sections exist with positive counts;
+    // a truncated/garbage export would be missing this line or its tallies.
+    expect(iges).toMatch(/S\s+\d+G\s+\d+D\s+\d+P\s+\d+\s+T\s*\d+/);
+    // The Directory/Parameter counts are non-trivial — the box geometry really
+    // got written (a 1×1×1 cm box yields dozens of entity records, not zero).
+    expect(iges).toMatch(/D\s+([1-9]\d+)P\s+([1-9]\d+)/);
     box.delete();
   });
 });
