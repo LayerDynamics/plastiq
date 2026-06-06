@@ -116,6 +116,9 @@ class RapierEngine implements PhysicsEngine {
         { x: s.orientation[0], y: s.orientation[1], z: s.orientation[2], w: s.orientation[3] },
         true,
       );
+      // Clear any accumulated force/torque, then set the restored velocities.
+      body.resetForces(true);
+      body.resetTorques(true);
       body.setLinvel(
         { x: s.linearVelocity[0], y: s.linearVelocity[1], z: s.linearVelocity[2] },
         true,
@@ -124,10 +127,6 @@ class RapierEngine implements PhysicsEngine {
         { x: s.angularVelocity[0], y: s.angularVelocity[1], z: s.angularVelocity[2] },
         true,
       );
-      body.resetForces(true);
-      body.resetTorques(true);
-      body.setLinvel({ x: s.linearVelocity[0], y: s.linearVelocity[1], z: s.linearVelocity[2] }, true);
-      body.setAngvel({ x: s.angularVelocity[0], y: s.angularVelocity[1], z: s.angularVelocity[2] }, true);
     });
   }
 
