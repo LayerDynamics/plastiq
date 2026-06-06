@@ -28,7 +28,7 @@ test("CAD Studio renders the seeded box as a tagged three.js solid", async ({ pa
   // The SceneController must actually hold a rendered part, not just report ready.
   await page.waitForFunction(
     () =>
-      (globalThis as { __cadStudioScene?: { builtPart: unknown } }).__cadStudioScene?.builtPart !=
+      (globalThis as { __plastiqScene?: { builtPart: unknown } }).__plastiqScene?.builtPart !=
       null,
     undefined,
     { timeout: 240_000 },
@@ -38,7 +38,7 @@ test("CAD Studio renders the seeded box as a tagged three.js solid", async ({ pa
   const stats = await page.evaluate<SceneStats | null>(() => {
     const scene = (
       globalThis as {
-        __cadStudioScene?: {
+        __plastiqScene?: {
           builtPart: {
             mesh: {
               userData: { faceIds?: number[] };
@@ -52,7 +52,7 @@ test("CAD Studio renders the seeded box as a tagged three.js solid", async ({ pa
           } | null;
         };
       }
-    ).__cadStudioScene;
+    ).__plastiqScene;
     const part = scene?.builtPart;
     if (!part) return null;
     const idx = part.mesh.geometry.getIndex();

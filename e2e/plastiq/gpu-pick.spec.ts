@@ -8,7 +8,7 @@ import { expect, test } from "@playwright/test";
 
 declare global {
   // eslint-disable-next-line no-var
-  var __cadStudioGpuPick: ((ndcX: number, ndcY: number) => number | null) | undefined;
+  var __plastiqGpuPick: ((ndcX: number, ndcY: number) => number | null) | undefined;
 }
 
 async function waitReady(page: import("@playwright/test").Page): Promise<void> {
@@ -22,11 +22,11 @@ test("GPU colour-id pick resolves a face at centre and misses off-part (NFR-4)",
   await waitReady(page);
 
   // Centre of the viewport is over the box → a real faceId (≥ 0).
-  const hit = await page.evaluate(() => globalThis.__cadStudioGpuPick?.(0, 0) ?? null);
+  const hit = await page.evaluate(() => globalThis.__plastiqGpuPick?.(0, 0) ?? null);
   expect(hit).not.toBeNull();
   expect(hit).toBeGreaterThanOrEqual(0);
 
   // A far corner of NDC is off the part → the cleared buffer → null (a miss).
-  const miss = await page.evaluate(() => globalThis.__cadStudioGpuPick?.(-0.98, -0.98) ?? null);
+  const miss = await page.evaluate(() => globalThis.__plastiqGpuPick?.(-0.98, -0.98) ?? null);
   expect(miss).toBeNull();
 });

@@ -35,7 +35,7 @@ test("mate two parts → lower the assembly → the real sim spawns + steps it",
   // The build populated selectionRefs (the box's 6 faces) — needed for addMatePick.
   await page.waitForFunction(
     () =>
-      (globalThis as { __cadStudioScene?: { builtPart: unknown } }).__cadStudioScene?.builtPart !=
+      (globalThis as { __plastiqScene?: { builtPart: unknown } }).__plastiqScene?.builtPart !=
       null,
     undefined,
     { timeout: 240_000 },
@@ -57,7 +57,7 @@ test("mate two parts → lower the assembly → the real sim spawns + steps it",
 
   // Lower the assembly to a SimManifest via the worker (real OCCT).
   const manifest = await page.evaluate(async () => {
-    const lower = (globalThis as { __cadStudioLower?: () => Promise<unknown> }).__cadStudioLower!;
+    const lower = (globalThis as { __plastiqLower?: () => Promise<unknown> }).__plastiqLower!;
     const out = (await lower()) as { manifest: unknown };
     return out.manifest;
   });
@@ -67,7 +67,7 @@ test("mate two parts → lower the assembly → the real sim spawns + steps it",
 
   // Spawn the browser-built manifest into the REAL @plastiq/sim and step it.
   const result = await page.evaluate(async (id) => {
-    const sim = (globalThis as { __cadStudioSimulate?: SimApi }).__cadStudioSimulate!;
+    const sim = (globalThis as { __plastiqSimulate?: SimApi }).__plastiqSimulate!;
     const count = await sim.start();
     const z0 = sim.poseOf(id)?.position[2] ?? null;
     sim.step(180);

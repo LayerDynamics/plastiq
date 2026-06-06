@@ -31,9 +31,9 @@ test.beforeEach(async ({ page }) => {
     (globalThis as { faceCount?: () => number }).faceCount = () => {
       const scene = (
         globalThis as {
-          __cadStudioScene?: { builtPart: { mesh: { userData: { faceIds?: number[] } } } | null };
+          __plastiqScene?: { builtPart: { mesh: { userData: { faceIds?: number[] } } } | null };
         }
-      ).__cadStudioScene;
+      ).__plastiqScene;
       return scene?.builtPart?.mesh.userData.faceIds?.length ?? 0;
     };
   });

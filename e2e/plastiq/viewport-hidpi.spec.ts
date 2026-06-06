@@ -14,7 +14,7 @@ test("the viewport canvas fits its host on a HiDPI (dpr=2) display", async ({ pa
   await expect(page.getByTestId("status")).toHaveText("ready", { timeout: 240_000 });
   await page.waitForFunction(
     () =>
-      (globalThis as { __cadStudioScene?: { builtPart: unknown } }).__cadStudioScene?.builtPart !=
+      (globalThis as { __plastiqScene?: { builtPart: unknown } }).__plastiqScene?.builtPart !=
       null,
     undefined,
     { timeout: 240_000 },
