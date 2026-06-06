@@ -16,6 +16,24 @@
 mainBuild:
   name: plastiq-occt.js
   bindings:
+    # NOTE: every class/enum the kernel touches via `oc.X` OR holds as a return
+    # value (whose methods it calls) must be listed — under-listing compiles fine
+    # but throws "oc.X is not a constructor" at runtime. This set was enumerated
+    # from src/ by both `oc.X` usage AND `import type … from "opencascade.js"`
+    # (the latter names the return-value classes: Poly_Triangulation, TopoDS_*, …).
+    # gp_* primitives + enums are listed explicitly because the kernel instantiates
+    # / reads them directly (`new oc.gp_Pnt_3`, `oc.TopAbs_ShapeEnum.TopAbs_FACE`).
+
+    # Geometric primitives (points/vectors/axes/planes/circles/transforms) — used
+    # throughout (gp_*). Constructed directly and returned by Value()/Node().
+    - symbol: gp_Pnt
+    - symbol: gp_Vec
+    - symbol: gp_Dir
+    - symbol: gp_Ax1
+    - symbol: gp_Ax2
+    - symbol: gp_Pln
+    - symbol: gp_Circ
+    - symbol: gp_Trsf
     # Primitives + extrude/revolve (solid/primitives.ts, action/extrude.ts, revolve.ts)
     - symbol: BRepPrimAPI_MakeBox
     - symbol: BRepPrimAPI_MakePrism
@@ -29,12 +47,18 @@ mainBuild:
     - symbol: GC_MakeSegment
     - symbol: GeomAPI_PointsToBSpline
     - symbol: TColgp_Array1OfPnt
+    # Curve handles for sketch edges (Handle_Geom_* are generated from these).
+    - symbol: Geom_Curve
+    - symbol: Geom_TrimmedCurve
+    - symbol: Geom_BSplineCurve
     # Transforms (action/transform.ts)
     - symbol: BRepBuilderAPI_Transform
-    # Booleans (action/boolean.ts)
+    # Booleans (action/boolean.ts) — Message_ProgressRange is the progress arg.
+    - symbol: BRepAlgoAPI_BooleanOperation
     - symbol: BRepAlgoAPI_Fuse
     - symbol: BRepAlgoAPI_Cut
     - symbol: BRepAlgoAPI_Common
+    - symbol: Message_ProgressRange
     # Dress-up (action/dressup.ts)
     - symbol: BRepFilletAPI_MakeFillet
     - symbol: BRepFilletAPI_MakeChamfer
@@ -43,36 +67,87 @@ mainBuild:
     # Loft / sweep (action/loft.ts)
     - symbol: BRepOffsetAPI_ThruSections
     - symbol: BRepOffsetAPI_MakePipe
+    - symbol: BRepOffsetAPI_MakePipeShell # sweep along multi-edge/cornered spines
     # Topology exploration + casting (mesh/*, throughout)
     - symbol: TopExp
     - symbol: TopExp_Explorer
     - symbol: TopoDS
+    - symbol: TopoDS_Shape
+    - symbol: TopoDS_Solid
+    - symbol: TopoDS_Face
+    - symbol: TopoDS_Edge
+    - symbol: TopoDS_Wire
+    - symbol: TopoDS_Vertex
     - symbol: TopLoc_Location
     - symbol: TopTools_ListOfShape
     - symbol: TopTools_IndexedDataMapOfShapeListOfShape
     - symbol: BRep_Tool
     - symbol: BRepAdaptor_Curve
     - symbol: GCPnts_UniformDeflection
-    # Tessellation (mesh/tessellate.ts)
+    # Tessellation (mesh/tessellate.ts) — Poly_Triangulation/Triangle are returned
+    # by BRep_Tool.Triangulation()/Triangle() and read in JS.
     - symbol: BRepMesh_IncrementalMesh
+    - symbol: Poly_Triangulation
+    - symbol: Poly_Triangle
     # Mass properties + bounding box + validity (solid/solid.ts, lower/massprops.ts)
     - symbol: BRepGProp
     - symbol: GProp_GProps
     - symbol: Bnd_Box
     - symbol: BRepBndLib
     - symbol: BRepCheck_Analyzer
-    # Interchange (io/index.ts)
+    # Interchange (io/index.ts) — writers/readers + their status/mode enums.
     - symbol: STEPControl_Writer
     - symbol: STEPControl_Reader
     - symbol: IGESControl_Writer
-  emccFlags:
-    - -O3
-    - -flto
-    - --closure=1
-    - -sEXPORT_ES6=1
-    - -sMODULARIZE=1
-    - -sUSE_PTHREADS=0 # single-threaded so boolean/mesh algorithms are deterministic
-    - -sALLOW_MEMORY_GROWTH=1
-    - -sENVIRONMENT=web,node
+    - symbol: STEPControl_StepModelType
+    - symbol: IFSelect_ReturnStatus
+    # Enums read directly as oc.<Enum>.<Member> (mesh/normals.ts, action/dressup.ts).
+    - symbol: TopAbs_ShapeEnum
+    - symbol: TopAbs_Orientation
+    - symbol: GeomAbs_Shape
+    - symbol: GeomAbs_JoinType
+    - symbol: BRepOffset_Mode
+    - symbol: ChFi3d_FilletShape
+    - symbol: BRepBuilderAPI_TransitionMode # sweep corner transition (action/loft.ts)
+    # Base classes of the above. embind needs the FULL inheritance chain bound, or
+    # constructing a derived class throws "unbound types: <Base>". Computed as the
+    # transitive `extends` ancestors of the bound symbols (from opencascade.full.d.ts).
+    - symbol: Standard_Transient # root of every Handle-managed OCCT class
+    - symbol: BRepBuilderAPI_Command
+    - symbol: BRepBuilderAPI_MakeShape # base of all Make* shape builders
+    - symbol: BRepBuilderAPI_ModifyShape # base of BRepBuilderAPI_Transform
+    - symbol: BRepPrimAPI_MakeSweep # base of MakePrism/MakeRevol/MakePipe
+    - symbol: BRepFilletAPI_LocalOperation # base of MakeFillet/MakeChamfer
+    - symbol: BRepOffsetAPI_MakeOffsetShape # base of MakeThickSolid
+    - symbol: BRepAlgoAPI_Algo # boolean-op bases
+    - symbol: BRepAlgoAPI_BuilderAlgo
+    - symbol: BRepMesh_DiscretRoot # base of BRepMesh_IncrementalMesh
+    - symbol: Adaptor3d_Curve # base of BRepAdaptor_Curve
+    - symbol: GC_Root # base of GC_MakeArcOfCircle/GC_MakeSegment
+    - symbol: Geom_Geometry # Geom curve hierarchy
+    - symbol: Geom_BoundedCurve
+    - symbol: NCollection_BaseList # bases of TopTools/TColgp collections
+    - symbol: NCollection_BaseMap
+    - symbol: XSControl_Reader # base of STEPControl_Reader
+    # Handle_<T> smart-pointer wrappers. Methods that return/accept a handle (e.g.
+    # BRep_Tool.Triangulation → Handle_Poly_Triangulation, GC_Make*.Value() →
+    # Handle_Geom_TrimmedCurve) need the handle type bound, not just the class.
+    - symbol: Handle_Standard_Transient
+    - symbol: Handle_Poly_Triangulation
+    - symbol: Handle_Geom_Geometry
+    - symbol: Handle_Geom_Curve
+    - symbol: Handle_Geom_BoundedCurve
+    - symbol: Handle_Geom_TrimmedCurve
+    - symbol: Handle_Geom_BSplineCurve
 
-additionalBuilds: []
+# emccFlags is intentionally OMITTED so the builder's known-good DEFAULTS apply.
+# The build links with `emcc -lembind <objs> -o <name> *emccFlags` and force-adds
+# nothing else, so the defaults are what make a working module:
+#   -sEXPORT_ES6=1 (⇒ MODULARIZE: the ESM default-export factory init.ts loads),
+#   -fexceptions -sDISABLE_EXCEPTION_CATCHING=0 (OCCT throws Standard_Failure),
+#   -sEXPORTED_RUNTIME_METHODS=['FS'] (io/index.ts uses oc.FS for STEP/IGES),
+#   -sUSE_FREETYPE=1, -sLLD_REPORT_UNDEFINED, --no-entry, memory growth, -O3 -flto.
+# Overriding emccFlags REPLACES (not extends) that list, so we don't — dropping
+# any of the above produces a crashing or unlinkable wasm.
+# Threading is controlled by the image's `threading` env (single-threaded here →
+# deterministic boolean/mesh algorithms), not by emccFlags.

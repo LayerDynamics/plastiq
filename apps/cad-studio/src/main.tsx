@@ -13,8 +13,12 @@ import "./index.css";
 
 // Load the sketch-solver wasm before the editor can sketch (solveSketch is
 // synchronous, so planegcs must already be initialised). It's a small wasm; the
-// heavier OCCT kernel loads lazily in the geometry worker afterwards.
-void initSketchSolver({ wasmUrl: planegcsWasmUrl });
+// heavier OCCT kernel loads lazily in the geometry worker afterwards. The sketch
+// store gates entering the sketcher on this completing (the Sketch button stays
+// disabled until then), so a solve can never race the wasm load.
+void initSketchSolver({ wasmUrl: planegcsWasmUrl }).then(() => {
+  useSketchStore.getState().setSolverReady(true);
+});
 
 // Seed a default model so a fresh session renders geometry immediately (M0.5).
 useCadStore.getState().loadDocument(defaultDocument());

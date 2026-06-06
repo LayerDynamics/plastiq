@@ -721,7 +721,11 @@ describe("CAD Studio rebuild (SPEC-5 M0.4)", () => {
     const solid = rebuildDocument(oc, doc);
     try {
       expect(solid!.isValid()).toBe(true);
-      expect(solidVolume(oc, solid!)).toBeGreaterThan(0);
+      // The spine is two edges (40 mm up, then a 45°-cornered ~42 mm run). The
+      // sweep must follow BOTH edges, not just the first — a 10 mm-square profile
+      // over only the first 40 mm edge would be ~4e-6 m³, so require clearly more.
+      const firstEdgeVolume = m(10) * m(10) * m(40);
+      expect(solidVolume(oc, solid!)).toBeGreaterThan(firstEdgeVolume * 1.5);
     } finally {
       solid!.delete();
     }

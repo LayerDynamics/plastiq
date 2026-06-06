@@ -111,7 +111,9 @@ const DEFAULT_RECT: Profile = {
 function FeatureMenu(): React.JSX.Element {
   const addFeature = useCadStore((s) => s.addFeature);
   const enterSketch = useSketchStore((s) => s.enterSketch);
+  const solverReady = useSketchStore((s) => s.solverReady);
   const btn = "rounded px-1.5 py-0.5 text-xs text-[#9ab] hover:bg-[#1b2230]";
+  const btnDisabled = "rounded px-1.5 py-0.5 text-xs text-[#445] cursor-not-allowed";
   return (
     <div
       data-testid="feature-menu"
@@ -120,9 +122,10 @@ function FeatureMenu(): React.JSX.Element {
       <span className="px-1 text-[10px] uppercase text-[#567]">Add</span>
       <button
         type="button"
-        className={btn}
+        className={solverReady ? btn : btnDisabled}
         data-testid="enter-sketch"
-        title="Open the 2D sketch editor on the XY plane"
+        disabled={!solverReady}
+        title={solverReady ? "Open the 2D sketch editor on the XY plane" : "Loading sketch solver…"}
         onClick={() => enterSketch("XY")}
       >
         New Sketch

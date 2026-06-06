@@ -60,6 +60,11 @@ export interface SketchStore {
   selection: string[];
   /** Id of the dimension constraint whose value is being edited (FR-19). */
   editingDim: string | null;
+  /** True once the planegcs solver wasm has loaded — sketching is gated on it so
+   * the synchronous `solveSketch` never races the (small, fast) wasm load (FR). */
+  solverReady: boolean;
+  /** Mark the solver ready (called when initSketchSolver resolves). */
+  setSolverReady: (ready: boolean) => void;
 
   enterSketch: (plane: DatumPlaneId, featureId?: string, model?: SketchModel) => void;
   exitSketch: () => void;
@@ -119,8 +124,14 @@ export const useSketchStore = create<SketchStore>((set, get) => ({
   result: null,
   selection: [],
   editingDim: null,
+  solverReady: false,
+  setSolverReady: (ready) => set({ solverReady: ready }),
 
-  enterSketch: (plane, featureId, model) =>
+  enterSketch: (plane, featureId, model) => {
+    // The sketcher solves synchronously; refuse to open it until planegcs is
+    // loaded so a constraint solve can never race the wasm. The Sketch button is
+    // also disabled while !solverReady, so this is a belt-and-suspenders guard.
+    if (!get().solverReady) return;
     set({
       active: true,
       editingFeatureId: featureId ?? null,
@@ -130,7 +141,8 @@ export const useSketchStore = create<SketchStore>((set, get) => ({
       result: null,
       selection: [],
       editingDim: null,
-    }),
+    });
+  },
 
   exitSketch: () => set({ active: false, editingFeatureId: null, selection: [], pending: [] }),
   setView: (view) => set({ view }),

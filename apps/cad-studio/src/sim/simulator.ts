@@ -8,7 +8,7 @@
 // group is the part's local-origin geometry, so the render-back inverts the
 // lowering's COM composition: groupPos = comPos − R(ori)·localCom.
 
-import { initSim, PredictionSim } from "@plastiq/sim";
+import { initSim, PredictionSim, type BackendName } from "@plastiq/sim";
 import { quatRotate, type Quat, type Vec3 } from "../assembly/model.js";
 
 export interface BodyRenderPose {
@@ -50,9 +50,12 @@ export class Simulator {
     private readonly instanceIds: readonly string[],
   ) {}
 
-  /** Load the sim wasm + spawn the manifest. Returns the body count. */
-  async start(): Promise<number> {
-    await initSim();
+  /**
+   * Load the sim backend (default Rapier; pass `backend` to use ammo or cannon)
+   * + spawn the manifest. Returns the body count.
+   */
+  async start(backend?: BackendName): Promise<number> {
+    await initSim(backend ? { backend } : undefined);
     const sim = new PredictionSim(TICK_RATE_HZ, SEED);
     const count = sim.spawnManifest(this.manifestJson);
     this.sim = sim;

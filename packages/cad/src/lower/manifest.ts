@@ -1,7 +1,9 @@
 // SimManifest — the lowered, physics-ready description of an assembly. This is
 // the contract between @plastiq/cad (producer, via exportForSim) and @plastiq/sim
-// (consumer, via spawnManifest). It is plain JSON: bodies are box-collider rigid
-// bodies posed by their world centre of mass; constraints are hinge/fixed joints.
+// (consumer, via spawnManifest). It is plain JSON: each body is a compound of one
+// or more convex-hull colliders posed by its world centre of mass; constraints
+// are hinge/fixed joints. A convex part lowers to one collider; a concave part is
+// decomposed into several convex pieces (see lower/decompose.ts).
 
 /** A convex-hull collider in the body's local frame (centred at the COM). */
 export interface HullCollider {
@@ -20,8 +22,12 @@ export interface ManifestBody {
   readonly com: readonly [number, number, number];
   /** World orientation (quaternion x,y,z,w) at spawn. */
   readonly orientation: readonly [number, number, number, number];
-  /** The part's actual convex-hull collider (from its tessellation). */
-  readonly hull: HullCollider;
+  /**
+   * The part's collision shape as one or more convex-hull pieces (a compound
+   * collider), in the COM-local frame. One piece for a convex part; several for
+   * a concave part (convex decomposition). Always non-empty.
+   */
+  readonly colliders: HullCollider[];
   /** A fixed body is static (does not fall). */
   readonly fixed?: boolean;
 }
@@ -54,8 +60,12 @@ export function isSimManifest(x: unknown): x is SimManifest {
     const body = b as Record<string, unknown>;
     if (typeof body["id"] !== "string" || typeof body["mass"] !== "number") return false;
     if (!Array.isArray(body["com"]) || !Array.isArray(body["orientation"])) return false;
-    const hull = body["hull"] as Record<string, unknown> | undefined;
-    if (!hull || !Array.isArray(hull["points"]) || !Array.isArray(hull["faces"])) return false;
+    const colliders = body["colliders"];
+    if (!Array.isArray(colliders) || colliders.length === 0) return false;
+    for (const c of colliders) {
+      const hull = c as Record<string, unknown>;
+      if (!hull || !Array.isArray(hull["points"]) || !Array.isArray(hull["faces"])) return false;
+    }
   }
   return true;
 }

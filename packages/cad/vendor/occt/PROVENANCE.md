@@ -1,0 +1,50 @@
+# Vendored: trimmed OpenCascade (OCCT) WebAssembly
+
+`plastiq-occt.{js,wasm,d.ts}` is a **custom, trimmed build** of
+[`opencascade.js`](https://ocjs.org) (OCCT → WebAssembly), produced from
+[`../../occt.build.yml`](../../occt.build.yml) by the official builder image.
+
+## Why
+
+The full prebuilt `opencascade.js` wasm is ~48 MB raw / **~13.7 MB gzip** — it
+exposes thousands of OCCT classes, almost none of which the kernel calls. This
+trimmed build binds **only the OCCT symbols `@plastiq/cad` actually uses** (see
+`occt.build.yml`); LTO + `--gc-sections` dead-strips everything unreachable from
+those bindings at link time. Result: **~18 MB raw / ~5.6 MB gzip** — the shipped
+browser bundle's OCCT payload drops by ~60%.
+
+Nothing is removed from the project: the full `opencascade.js` npm package stays
+a dependency (it supplies the TypeScript API types and is the **source** for this
+build). `src/oc/init.ts` loads these vendored files in both Node and the browser.
+
+## How it was built / how to rebuild
+
+```sh
+just cad-occt   # docker run donalffons/opencascade.js:<pinned> occt.build.yml
+```
+
+Requires Docker with **≥ ~12 GB memory** — the final link does monolithic LTO
+over the whole OCCT object tree and OOMs on the 8 GB default (it ran here on amd64
+under QEMU emulation on Apple Silicon). Output (`plastiq-occt.js/.wasm/.d.ts`) is
+written to `packages/cad/`; move it here, overwriting these files.
+
+## The symbol list (occt.build.yml) — three layers
+
+`occt.build.yml` lists every symbol that must be bound. It was derived and then
+**verified by running the full test suite against the trimmed wasm** (288 unit +
+15 browser E2E), which surfaces any missing symbol as an embind
+`UnboundTypeError`. Three layers are required:
+
+1. **Leaf API classes/enums** the kernel calls via `oc.X` or holds as a return
+   value (`BRepPrimAPI_MakeBox`, `gp_Pnt`, `Poly_Triangulation`, the STEP/IGES
+   writers, the `GeomAbs_*`/`TopAbs_*` enums, …).
+2. **Base classes** — embind needs the full inheritance chain bound, or
+   constructing a derived class throws `unbound types: <Base>`
+   (`Standard_Transient`, `BRepBuilderAPI_MakeShape`, `BRepPrimAPI_MakeSweep`,
+   the boolean/fillet/offset bases, `Geom_Geometry`, `NCollection_*`, …).
+3. **`Handle_<T>` wrappers** — methods returning/taking a smart pointer need the
+   handle bound, not just the class (`Handle_Poly_Triangulation` for
+   `BRep_Tool.Triangulation`, the `Handle_Geom_*` curve handles, …).
+
+If a kernel change touches a new OCCT symbol, add it (plus any new base/handle it
+pulls in), rebuild, and re-run `pnpm exec vitest run` — a missing entry fails loud.

@@ -4,9 +4,11 @@ import { beforeAll, describe, expect, it } from "vitest";
 
 import { initOcct, type Occt } from "../oc/init.js";
 import { mm } from "../unit/index.js";
-import { makeBox } from "../solid/primitives.js";
+import { makeBox, makeBoxAt } from "../solid/primitives.js";
+import { cut } from "../action/boolean.js";
 import { Component, defaultLibrary, makeBody } from "./component.js";
 import { exportForSim } from "./export.js";
+import { initDecomposer } from "./decompose.js";
 import { isLowerable, lowerJoints, makeJoint, type JointBinding } from "./joints.js";
 import { massProperties } from "./massprops.js";
 import { isSimManifest } from "./manifest.js";
@@ -15,6 +17,7 @@ let oc: Occt;
 
 beforeAll(async () => {
   oc = await initOcct();
+  await initDecomposer();
 }, 120_000);
 
 describe("massProperties", () => {
@@ -57,14 +60,45 @@ describe("exportForSim", () => {
     expect(manifest.bodies[0]!.com[0]).toBeCloseTo(mm(10), 6);
     // Body i2 is shifted +100mm in x → COM x = 100 + 10 = 110mm.
     expect(manifest.bodies[1]!.com[0]).toBeCloseTo(mm(110), 6);
-    // The collider is the part's actual convex hull (a 20mm box → 8 corners,
+    // A convex box lowers to ONE collider — its actual convex hull (8 corners,
     // 12 triangles), centred on the COM so corner coords are ±10mm.
-    const hull = manifest.bodies[0]!.hull;
+    expect(manifest.bodies[0]!.colliders).toHaveLength(1);
+    const hull = manifest.bodies[0]!.colliders[0]!;
     expect(hull.points.length / 3).toBe(8);
     expect(hull.faces).toHaveLength(12);
     const maxAbsX = Math.max(...hull.points.filter((_, i) => i % 3 === 0).map(Math.abs));
     expect(maxAbsX).toBeCloseTo(mm(10), 6);
     part.delete();
+  });
+});
+
+describe("exportForSim — concave part decomposition", () => {
+  it("lowers a concave L-bracket into a multi-piece compound collider", () => {
+    // An L-bracket: a 60×60×20 block with a 31×31 corner notch cut out.
+    const block = makeBox(oc, mm(60), mm(60), mm(20));
+    const tool = makeBoxAt(oc, [mm(30), mm(30), mm(-1)], mm(31), mm(31), mm(22));
+    const ell = cut(oc, block, tool);
+    block.delete();
+    tool.delete();
+
+    const root = new Component("assembly");
+    const comp = new Component("i1");
+    comp.placement = { position: [0, 0, 0], orientation: [0, 0, 0, 1] };
+    const body = makeBody("i1", "structural-steel");
+    body.geometry = ell;
+    comp.addBody(body);
+    root.addChild(comp);
+
+    const manifest = exportForSim(oc, root, defaultLibrary(), "test", {});
+    expect(isSimManifest(manifest)).toBe(true);
+    // The L is genuinely concave → its collider is NOT a single bulged hull but
+    // several convex pieces that leave the notch empty.
+    expect(manifest.bodies[0]!.colliders.length).toBeGreaterThanOrEqual(2);
+    for (const c of manifest.bodies[0]!.colliders) {
+      expect(c.points.length / 3).toBeGreaterThanOrEqual(4);
+      expect(c.faces.length).toBeGreaterThanOrEqual(4);
+    }
+    ell.delete();
   });
 });
 

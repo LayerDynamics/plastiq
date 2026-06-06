@@ -1,19 +1,20 @@
 // exportForSim — walk a component hierarchy and emit a SimManifest. Each body's
 // world centre-of-mass pose is composed down through its component placements;
-// its collider is the part's local bounding box.
+// its collider is the part's convex shape — one convex hull for a convex part,
+// or several convex pieces (convex decomposition) for a concave one.
 
 import type { Occt } from "../oc/init.js";
 import { quatMul, quatRotate, vAdd, type Quat, type Vec3 } from "../assembly/quat.js";
 import { tessellateTagged } from "../mesh/tessellate.js";
 import { IDENTITY_PLACEMENT, type Component, type MaterialLibrary, type Placement } from "./component.js";
-import { convexHull } from "./hull.js";
+import { collidersFor } from "./decompose.js";
 import { massProperties } from "./massprops.js";
 import type { ManifestBody, ManifestConstraint, SimManifest } from "./manifest.js";
 
 const GRAVITY: readonly [number, number, number] = [0, 0, -9.81];
 
-// Collision meshes only need the part's extreme vertices, so a coarse
-// tessellation (0.5 mm) is plenty for the convex hull.
+// Collision meshes only need the part's surface, so a coarse tessellation
+// (0.5 mm) is plenty for the convex hull(s) / decomposition.
 const HULL_DEFLECTION = 5e-4;
 
 /** Compose a child placement under a parent (parent ∘ child). */
@@ -50,20 +51,17 @@ export function exportForSim(
       const mp = massProperties(oc, solid, density);
       const localCom: Vec3 = [mp.com[0], mp.com[1], mp.com[2]];
 
-      // Build the convex-hull collider from the part's actual tessellation,
-      // expressed in the body-local frame (centred on the COM).
+      // Build the collider(s) from the part's actual tessellation, expressed in
+      // the body-local frame (centred on the COM): one convex hull for a convex
+      // part, or a convex decomposition for a concave one.
       const mesh = tessellateTagged(oc, solid, { linearDeflection: HULL_DEFLECTION });
-      const local: Vec3[] = [];
+      const local: number[] = new Array<number>(mesh.vertices.length);
       for (let k = 0; k < mesh.vertices.length; k += 3) {
-        local.push([
-          mesh.vertices[k]! - localCom[0],
-          mesh.vertices[k + 1]! - localCom[1],
-          mesh.vertices[k + 2]! - localCom[2],
-        ]);
+        local[k] = mesh.vertices[k]! - localCom[0];
+        local[k + 1] = mesh.vertices[k + 1]! - localCom[1];
+        local[k + 2] = mesh.vertices[k + 2]! - localCom[2];
       }
-      const hull = convexHull(local);
-      const points: number[] = [];
-      for (const v of hull.vertices) points.push(v[0], v[1], v[2]);
+      const colliders = collidersFor(local, mesh.indices, mp.volume);
 
       const worldCom = vAdd(here.position as Vec3, quatRotate(here.orientation as Quat, localCom));
       bodies.push({
@@ -71,7 +69,7 @@ export function exportForSim(
         mass: mp.mass,
         com: worldCom,
         orientation: here.orientation,
-        hull: { points, faces: hull.faces },
+        colliders,
       });
     }
     for (const child of comp.children) walk(child, here);

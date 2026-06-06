@@ -43,6 +43,11 @@ export function extrude(
 ): Solid {
   const dir = normalize(opts?.direction ?? sketch.plane.normal);
   const back = opts?.back ?? 0;
+  // A zero total sweep distance makes a degenerate (zero-thickness) prism that
+  // OCCT would hand back as an invalid shape — reject it rather than returning one.
+  if (!Number.isFinite(height + back) || height + back === 0) {
+    throw new Error("extrude: total height (height + back) must be non-zero");
+  }
   const face = sketch.toFace(oc);
 
   let baseFace = face;

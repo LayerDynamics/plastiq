@@ -4,12 +4,15 @@
 
 import type { BackendName, PhysicsBackend, PhysicsEngine } from "./engine.js";
 import { parseManifest } from "./manifest.js";
-import { RapierBackend } from "./backends/rapier.js";
 
-const REGISTRY: Record<BackendName, () => PhysicsBackend> = {
-  rapier: () => new RapierBackend(),
-  ammo: () => new AmmoBackend(),
-  cannon: () => new CannonBackend(),
+// Each backend is loaded with a dynamic import so the bundler code-splits the
+// three physics engines (Rapier/ammo/cannon, each with its own wasm/runtime) into
+// separate chunks — only the one the user actually simulates with is fetched,
+// instead of all three bundling eagerly into the app's main chunk.
+const REGISTRY: Record<BackendName, () => Promise<PhysicsBackend>> = {
+  rapier: async () => new (await import("./backends/rapier.js")).RapierBackend(),
+  ammo: async () => new (await import("./backends/ammo.js")).AmmoBackend(),
+  cannon: async () => new (await import("./backends/cannon.js")).CannonBackend(),
 };
 
 let active: PhysicsBackend | null = null;
@@ -17,7 +20,7 @@ let active: PhysicsBackend | null = null;
 /** Load a physics backend (default Rapier). Await before constructing a PredictionSim. */
 export async function initSim(opts?: { backend?: BackendName }): Promise<void> {
   const name = opts?.backend ?? "rapier";
-  const backend = REGISTRY[name]();
+  const backend = await REGISTRY[name]();
   await backend.init();
   active = backend;
 }
@@ -69,7 +72,3 @@ export class PredictionSim {
     this.engine.dispose();
   }
 }
-
-// Backends implemented in this package; imported lazily by the registry.
-import { AmmoBackend } from "./backends/ammo.js";
-import { CannonBackend } from "./backends/cannon.js";

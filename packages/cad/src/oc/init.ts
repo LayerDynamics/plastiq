@@ -1,18 +1,25 @@
 // opencascade.js (OCCT → WebAssembly) engine initializer.
 //
-// One engine instance, memoized. Two load paths:
-//  - Browser: call the Emscripten factory in `opencascade.full.js` directly,
-//    passing the bundler-resolved wasm URL (e.g. Vite `?url`) through
-//    `locateFile`. We bypass the package's `index.js` because it does an ESM
-//    `import … .wasm` that bundlers (Vite) reject; the factory fetches the wasm
-//    at runtime.
-//  - Node/CI: the `node.js` entry patches __dirname and self-locates the wasm.
-//    Marked `@vite-ignore` so the browser build never pulls Node built-ins.
+// Loads the TRIMMED, vendored OCCT build at packages/cad/vendor/occt/plastiq-occt.*
+// — a custom opencascade.js compiled with bindings for ONLY the OCCT symbols the
+// kernel uses (see occt.build.yml), so the shipped wasm is ~5 MB gzip instead of
+// the ~13 MB gzip full prebuilt. (The full `opencascade.js` package stays a
+// dependency: it supplies the API types here and is the source for rebuilding the
+// trim.) The trimmed module is the same Emscripten ES6 factory as the full build
+// — a default export taking `{ locateFile }` and resolving to the OCCT instance.
+//
+//  - Browser: the caller passes the bundler-resolved wasm URL (e.g. Vite `?url`),
+//    returned from `locateFile` so the factory fetches it at runtime.
+//  - Node/CI: resolve the vendored `.wasm` path next to this module and hand it
+//    to `locateFile`; Emscripten reads it via fs.
 
 import type { OpenCascadeInstance } from "opencascade.js";
 
-/** The initialized OCCT engine handle (the full opencascade.js instance). */
+/** The initialized OCCT engine handle. Typed against the full opencascade.js API
+ * (a superset of the trimmed runtime — the kernel only calls the bound subset). */
 export type Occt = OpenCascadeInstance;
+
+type OcctFactory = (opts: { locateFile: (path: string) => string }) => Promise<Occt>;
 
 let engine: Promise<Occt> | null = null;
 
@@ -22,25 +29,34 @@ function isNode(): boolean {
   return Boolean(g.process?.versions?.node);
 }
 
-async function initNode(): Promise<Occt> {
-  const mod = (await import(/* @vite-ignore */ "opencascade.js/dist/node.js")) as {
-    default: (settings?: { mainWasm?: string }) => Promise<Occt>;
+async function loadFactory(): Promise<OcctFactory> {
+  const mod = (await import("../../vendor/occt/plastiq-occt.js")) as unknown as {
+    default: OcctFactory;
   };
-  return mod.default();
+  return mod.default;
 }
 
 async function initBrowser(wasmUrl?: string): Promise<Occt> {
-  const mod = (await import("opencascade.js/dist/opencascade.full.js")) as unknown as {
-    default: new (opts: { locateFile: (path: string) => string }) => Promise<Occt>;
-  };
-  return new mod.default({
+  const factory = await loadFactory();
+  return factory({
     locateFile: (path: string) => (path.endsWith(".wasm") && wasmUrl ? wasmUrl : path),
   });
 }
 
+async function initNode(): Promise<Occt> {
+  const factory = await loadFactory();
+  // Resolve the vendored .wasm path next to this module using only web-standard
+  // URL (so the package needs no @types/node). file:// → fs path: decode %xx and
+  // strip a leading Windows drive slash if present.
+  const wasmFileUrl = new URL("../../vendor/occt/plastiq-occt.wasm", import.meta.url);
+  let wasmPath = decodeURIComponent(wasmFileUrl.pathname);
+  if (/^\/[A-Za-z]:\//.test(wasmPath)) wasmPath = wasmPath.slice(1);
+  return factory({ locateFile: (path: string) => (path.endsWith(".wasm") ? wasmPath : path) });
+}
+
 /**
  * Initialize (or return the memoized) OCCT engine. In the browser pass
- * `{ wasmUrl }` — the bundler-resolved URL of `opencascade.full.wasm`.
+ * `{ wasmUrl }` — the bundler-resolved URL of `plastiq-occt.wasm`.
  */
 export function initOcct(opts?: { wasmUrl?: string }): Promise<Occt> {
   if (!engine) {

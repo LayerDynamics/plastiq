@@ -26,3 +26,10 @@ export {
   lowerJoints,
 } from "./joints.js";
 export { type ExportOptions, exportForSim } from "./export.js";
+export {
+  type DecomposeOptions,
+  initDecomposer,
+  decomposerReady,
+  collidersFor,
+  meshVolume,
+} from "./decompose.js";

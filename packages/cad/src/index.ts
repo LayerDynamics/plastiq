@@ -79,6 +79,7 @@ export {
   type SketchVerdict,
   type SolveResult,
   initSketchSolver,
+  sketchSolverReady,
   solveSketch,
 } from "./sketch/solver.js";
 export {
@@ -116,4 +117,9 @@ export {
   lowerJoints,
   type ExportOptions,
   exportForSim,
+  type DecomposeOptions,
+  initDecomposer,
+  decomposerReady,
+  collidersFor,
+  meshVolume,
 } from "./lower/index.js";

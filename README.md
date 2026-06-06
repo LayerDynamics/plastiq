@@ -31,9 +31,12 @@ e2e/cad-studio    no-mock Playwright end-to-end tests
   backends, selectable at runtime:
   [Rapier](https://rapier.rs/), [ammo.js](https://github.com/kripken/ammo.js)
   (Bullet), and [cannon-es](https://pmndrs.github.io/cannon-es/). It spawns the
-  kernel's `SimManifest` and steps it under gravity. Each body's collider is the
-  part's **convex hull**, computed from its real tessellation (exact for convex
-  parts; concave dynamics would need convex decomposition, a future step).
+  kernel's `SimManifest` and steps it under gravity. Each body is a **compound of
+  convex-hull colliders**: a convex part is one hull (exact); a concave part is
+  split into several convex pieces by [V-HACD](https://github.com/kmammou/v-hacd)
+  so the collider tracks the real concave shape instead of bulging across the
+  pocket — a multi-piece convex *approximation*, tunable by tolerance, not a
+  single bounding hull.
 
 The editor uses React + Zustand + Tailwind + three.js, with `@plastiq/cad`
 running in a Web Worker (the OCCT wasm stays in the worker chunk) and the sketch
@@ -55,8 +58,15 @@ A [`justfile`](justfile) wraps the common recipes (`just test`, `just e2e`,
 
 ## Bundle size / the OCCT trim
 
-The shipped OCCT wasm is the full prebuilt `opencascade.js` (~14 MB gzip). A
-trimmed build containing only the OCCT symbols the kernel uses is wired but
-deferred: see [`packages/cad/occt.build.yml`](packages/cad/occt.build.yml) and
-[`packages/cad/scripts/build-occt.md`](packages/cad/scripts/build-occt.md)
-(`just cad-occt`).
+The shipped OCCT wasm is a **custom trimmed build** of `opencascade.js` containing
+bindings for only the OCCT symbols the kernel uses — **~5.6 MB gzip, down from
+~13.7 MB gzip** for the full prebuilt build. It lives at
+[`packages/cad/vendor/occt/`](packages/cad/vendor/occt/) and is loaded by
+`src/oc/init.ts` in both Node and the browser. The symbol list
+([`packages/cad/occt.build.yml`](packages/cad/occt.build.yml)) is verified by
+running the full test suite against the trimmed wasm — a missing symbol fails loud
+as an embind `UnboundTypeError`. To rebuild it (Docker, ≥12 GB memory):
+`just cad-occt` — see
+[`packages/cad/vendor/occt/PROVENANCE.md`](packages/cad/vendor/occt/PROVENANCE.md)
+and [`packages/cad/scripts/build-occt.md`](packages/cad/scripts/build-occt.md).
+The full `opencascade.js` package stays a dependency (API types + rebuild source).

@@ -83,6 +83,10 @@ export function tessellateTagged(
     const loc = new oc.TopLoc_Location_1();
     const handle = oc.BRep_Tool.Triangulation(face, loc, MESH_PURPOSE);
     if (handle.IsNull()) {
+      // A face with no triangulation is omitted from the mesh. Valid solids
+      // triangulate at this deflection, so this is rare — surface it rather than
+      // dropping geometry silently.
+      console.warn(`tessellateTagged: face ${faceId} has no triangulation (deflection ${deflection}) — omitted from the mesh`);
       handle.delete();
       loc.delete();
       face.delete();
