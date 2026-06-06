@@ -33,11 +33,16 @@ export function bodyPoseToGroup(
   };
 }
 
-const TICK_RATE_HZ = 120;
+/** Fixed integration rate (Hz). Exposed so the UI can show elapsed sim-time. */
+export const SIM_TICK_RATE_HZ = 120;
 const SEED = 1n;
 
 export class Simulator {
   private sim: PredictionSim | null = null;
+  /** State captured right after spawn, so playback can rewind to the start. */
+  private initialSnapshot: ReturnType<PredictionSim["snapshot"]> | null = null;
+  /** Fixed ticks advanced since start (or the last rewind) — drives the readout. */
+  private ticksAdvanced = 0;
 
   /**
    * @param manifestJson the lowered SimManifest (JSON)
@@ -56,15 +61,37 @@ export class Simulator {
    */
   async start(backend?: BackendName): Promise<number> {
     await initSim(backend ? { backend } : undefined);
-    const sim = new PredictionSim(TICK_RATE_HZ, SEED);
+    const sim = new PredictionSim(SIM_TICK_RATE_HZ, SEED);
     const count = sim.spawnManifest(this.manifestJson);
     this.sim = sim;
+    // Capture the spawned state so rewind() can return to it exactly.
+    this.initialSnapshot = sim.snapshot();
+    this.ticksAdvanced = 0;
     return count;
   }
 
   /** Advance `n` fixed ticks under gravity (deterministic; no wall-clock scaling). */
   step(n = 1): void {
-    for (let i = 0; i < n; i++) this.sim?.stepDynamics();
+    if (!this.sim) return;
+    for (let i = 0; i < n; i++) this.sim.stepDynamics();
+    this.ticksAdvanced += n;
+  }
+
+  /** Rewind to the spawned state (restores pose + velocity) and reset the clock. */
+  rewind(): void {
+    if (!this.sim || !this.initialSnapshot) return;
+    this.sim.restore(this.initialSnapshot);
+    this.ticksAdvanced = 0;
+  }
+
+  /** Fixed ticks advanced since start / last rewind. */
+  get ticks(): number {
+    return this.ticksAdvanced;
+  }
+
+  /** Elapsed sim-time in seconds (ticks / fixed rate). */
+  get elapsedSeconds(): number {
+    return this.ticksAdvanced / SIM_TICK_RATE_HZ;
   }
 
   /** Current render poses for each spawned body (COM-frame → group origin). */
@@ -85,5 +112,7 @@ export class Simulator {
   /** Drop the sim (return-to-edit re-derives the render from the document). */
   stop(): void {
     this.sim = null;
+    this.initialSnapshot = null;
+    this.ticksAdvanced = 0;
   }
 }
