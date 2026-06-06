@@ -33,6 +33,12 @@ function MateValueInput({
   const factor = mate.kind === "distance" ? MM_PER_M : DEG_PER_RAD;
   const [text, setText] = useState((mate.value * factor).toFixed(1));
   const commit = (): void => {
+    // Treat empty/whitespace-only input as "revert" instead of 0
+    if (text.trim() === "") {
+      setText((mate.value * factor).toFixed(1));
+      return;
+    }
+
     const n = Number(text);
     if (Number.isFinite(n)) onCommit(n / factor);
     else setText((mate.value * factor).toFixed(1)); // reject non-numeric input
