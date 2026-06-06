@@ -14,6 +14,7 @@
     "typecheck": "pnpm -r --if-present run typecheck",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
     "e2e": "playwright test",
     "lint": "eslint apps packages --max-warnings 0",
     "format": "prettier --write ."
@@ -22,6 +23,7 @@
     "@eslint/js": "^10.0.1",
     "@playwright/test": "^1.60.0",
     "@types/node": "^25.9.1",
+    "@vitest/coverage-v8": "^4.1.7",
     "eslint": "^10.4.0",
     "prettier": "^3.8.3",
     "typescript": "^6.0.3",

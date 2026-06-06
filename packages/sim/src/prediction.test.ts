@@ -112,6 +112,26 @@ function hingeManifest(): SimManifest {
   };
 }
 
+/**
+ * A pendulum: a small FIXED anchor at the origin and a 0.1 m arm hung 0.3 m out
+ * on a hinge through the origin (axis +y). The arm is far enough from the anchor
+ * that it never contacts it, so it swings FREELY under gravity — a clean source
+ * of sustained angular velocity. (Two ADJACENT jointed cubes, like hingeManifest,
+ * collide at the shared face and barely rotate, so they can't exercise replay.)
+ */
+function pendulumManifest(): SimManifest {
+  return {
+    version: 1,
+    source: "test",
+    gravity: [0, 0, -9.81],
+    bodies: [
+      { id: "anchor", mass: 0, com: [0, 0, 0], orientation: [0, 0, 0, 1], colliders: [boxHull(0.02)], fixed: true },
+      { id: "arm", mass: 1, com: [0.3, 0, 0], orientation: [0, 0, 0, 1], colliders: [boxHull(0.05)] },
+    ],
+    constraints: [{ kind: "hinge", bodyA: "anchor", bodyB: "arm", origin: [0, 0, 0], axis: [0, 1, 0] }],
+  };
+}
+
 /** A ground slab + three 0.1 m cubes stacked vertically, dropped to settle. */
 function pileManifest(): SimManifest {
   return {
@@ -296,6 +316,82 @@ describe.each(BACKENDS)("physics backend: %s", (backend) => {
     expect(replay[0]).toBeCloseTo(forward[0], 5);
     expect(replay[1]).toBeCloseTo(forward[1], 5);
     expect(replay[2]).toBeCloseTo(forward[2], 5);
+    sim.dispose();
+  });
+
+  it("snapshot + restore preserves a CONSTRAINED body's swing (hinge) and replays it", async () => {
+    await initSim({ backend });
+    const sim = new PredictionSim(60, 1n);
+    expect(sim.spawnManifest(JSON.stringify(pendulumManifest()))).toBe(2);
+
+    // The arm (body 1) hangs 0.3 m out on a hinge and swings DOWN under gravity.
+    // Let it get well into its first swing so it carries real angular velocity.
+    const armStartZ = sim.bodyPosition(1)[2];
+    for (let i = 0; i < 15; i++) sim.stepDynamics();
+    const snap = sim.snapshot();
+
+    // Mid-swing the arm has substantial angular velocity. The free-fall replay
+    // test above can't catch this: a snapshot that dropped angular velocity (or
+    // the joint's contribution) would fail to reproduce the continued swing below.
+    const w = snap.bodies[1]!.angularVelocity;
+    expect(Math.hypot(w[0], w[1], w[2])).toBeGreaterThan(0.1);
+    // It genuinely swung downward from its start — the test is non-trivial.
+    expect(sim.bodyPosition(1)[2]).toBeLessThan(armStartZ - 0.01);
+
+    // Run forward and record where the swinging arm ends up.
+    for (let i = 0; i < 40; i++) sim.stepDynamics();
+    const forward = sim.bodyPosition(1);
+
+    // Rewind: the arm returns to the exact captured pose...
+    sim.restore(snap);
+    const restored = sim.bodyPosition(1);
+    expect(restored[0]).toBeCloseTo(snap.bodies[1]!.position[0], 6);
+    expect(restored[1]).toBeCloseTo(snap.bodies[1]!.position[1], 6);
+    expect(restored[2]).toBeCloseTo(snap.bodies[1]!.position[2], 6);
+
+    // ...and re-stepping reproduces the same swing — only possible because pose
+    // AND angular velocity were captured and the hinge re-applies from there.
+    for (let i = 0; i < 40; i++) sim.stepDynamics();
+    const replay = sim.bodyPosition(1);
+    expect(replay[0]).toBeCloseTo(forward[0], 3);
+    expect(replay[1]).toBeCloseTo(forward[1], 3);
+    expect(replay[2]).toBeCloseTo(forward[2], 3);
+
+    // The fixed base (body 0) never moved through any of this.
+    expect(sim.bodyPosition(0)[2]).toBeCloseTo(0, 6);
+    sim.dispose();
+  });
+
+  it("snapshot + restore returns EVERY body in a multi-body contact scene to its exact state", async () => {
+    await initSim({ backend });
+    const sim = new PredictionSim(120, 1n);
+    expect(sim.spawnManifest(JSON.stringify(pileManifest()))).toBe(4);
+
+    // Let the stack fall and begin settling (bodies in contact, still moving).
+    for (let i = 0; i < 200; i++) sim.stepDynamics();
+    const snap = sim.snapshot();
+    expect(snap.bodies).toHaveLength(4);
+
+    // Step forward, then rewind: EVERY body (ground + 3 cubes) returns to its
+    // exact captured pose. The free-fall replay test only restores ONE body, so
+    // a backend that mishandled the i-th body's restore would slip through here.
+    for (let i = 0; i < 100; i++) sim.stepDynamics();
+    sim.restore(snap);
+    for (let b = 0; b < 4; b++) {
+      const p = sim.bodyPosition(b);
+      expect(p[0]).toBeCloseTo(snap.bodies[b]!.position[0], 6);
+      expect(p[1]).toBeCloseTo(snap.bodies[b]!.position[1], 6);
+      expect(p[2]).toBeCloseTo(snap.bodies[b]!.position[2], 6);
+    }
+
+    // The restored world keeps simulating sanely (no NaN / explosion): the cubes
+    // stay in the resting band above the ground top after stepping on.
+    for (let i = 0; i < 100; i++) sim.stepDynamics();
+    for (let b = 1; b < 4; b++) {
+      const z = sim.bodyPosition(b)[2];
+      expect(z).toBeGreaterThan(0.08);
+      expect(z).toBeLessThan(0.45);
+    }
     sim.dispose();
   });
 });
