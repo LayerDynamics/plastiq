@@ -227,6 +227,12 @@ export function Viewport(): React.JSX.Element {
           s.explodeFactor !== prev.explodeFactor)
       ) {
         renderInstances(s);
+        // Instances moved → any prior interference result is stale.
+        if (s.interferences) useCadStore.getState().setInterferences(null);
+      }
+      // Interference check (FR-33): compute clashes on request, publish to the store.
+      if (s.interferenceReq !== prev.interferenceReq) {
+        useCadStore.getState().setInterferences(scene.findInterferences());
       }
       if (s.mateMode !== prev.mateMode) syncMateMode(s.mateMode);
       // Simulate (FR-41): start a RAF-driven sim, or stop and return to edit.

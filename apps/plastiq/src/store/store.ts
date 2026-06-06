@@ -94,6 +94,11 @@ export interface CadStore {
   /** Exploded-view factor (FR-33): instances are spread from the assembly centroid
    *  by this fraction of their offset (0 = assembled). Transient view state. */
   explodeFactor: number;
+  /** Interference check (FR-33): clashing instance-id pairs from the last run,
+   *  null = not checked yet, [] = checked & clear. Transient view state. */
+  interferences: { a: string; b: string }[] | null;
+  /** Monotonic token: bumped to request an interference check, run by the viewport. */
+  interferenceReq: number;
   /** Rollback bar (FR-25): features at index ≥ this are skipped at rebuild
    * (null = no rollback, build everything). */
   rollbackIndex: number | null;
@@ -127,6 +132,10 @@ export interface CadStore {
   setSection: (section: { axis: "x" | "y" | "z"; t: number } | null) => void;
   /** Set the exploded-view factor (0 = assembled) (FR-33). */
   setExplodeFactor: (factor: number) => void;
+  /** Request an interference check (the viewport computes + publishes it) (FR-33). */
+  checkInterference: () => void;
+  /** Publish interference results (clashing pairs, or null to clear) (FR-33). */
+  setInterferences: (clashes: { a: string; b: string }[] | null) => void;
   /** Set the rollback point (index, or null to build everything) (FR-25). */
   setRollback: (index: number | null) => void;
 
@@ -263,6 +272,8 @@ export const useCadStore = create<CadStore>((set, get) => ({
   massProps: null,
   section: null,
   explodeFactor: 0,
+  interferences: null,
+  interferenceReq: 0,
   rollbackIndex: null,
   rollbackBeforeId: null,
 
@@ -368,6 +379,9 @@ export const useCadStore = create<CadStore>((set, get) => ({
   setSection: (section) => set({ section }),
 
   setExplodeFactor: (factor) => set({ explodeFactor: Math.max(0, factor) }),
+
+  checkInterference: () => set((s) => ({ interferenceReq: s.interferenceReq + 1 })),
+  setInterferences: (clashes) => set({ interferences: clashes }),
   setRollback: (index) =>
     set((s) => ({
       rollbackIndex: index,
@@ -671,6 +685,8 @@ export const useCadStore = create<CadStore>((set, get) => ({
       massProps: null,
       section: null,
       explodeFactor: 0,
+      interferences: null,
+      interferenceReq: 0,
       rollbackIndex: null,
       rollbackBeforeId: null,
     }),

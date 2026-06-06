@@ -10,6 +10,7 @@ import { TransformControls } from "three/examples/jsm/controls/TransformControls
 import { ViewHelper } from "three/examples/jsm/helpers/ViewHelper.js";
 import { standardViewDirection, type StandardView } from "./views.js";
 import { sectionPlane, type SectionAxis } from "./section.js";
+import { findClashes, type Clash } from "./interference.js";
 import type { Pick, SelectionMode } from "../store/types.js";
 import type { TransferMesh } from "../worker/protocol.js";
 import { buildPart, disposePart, type BuiltPart } from "./buildMesh.js";
@@ -378,6 +379,23 @@ export class SceneController {
   setSection(section: { axis: SectionAxis; t: number } | null): void {
     this.section = section;
     this.applySection();
+  }
+
+  /** Bounding-box (broad-phase) interference between the assembly instances:
+   * the clashing id pairs. Each instance's world AABB is taken from its posed
+   * part group; conservative for rotated/non-box parts, exact for axis-aligned
+   * boxes. Empty when fewer than two instances are placed. */
+  findInterferences(): Clash[] {
+    this.instanceGroup.updateMatrixWorld(true); // poses may be set but not yet drawn
+    const boxes = this.instanceParts.map(({ id, part }) => {
+      const b = new THREE.Box3().setFromObject(part.group);
+      return {
+        id,
+        min: [b.min.x, b.min.y, b.min.z] as [number, number, number],
+        max: [b.max.x, b.max.y, b.max.z] as [number, number, number],
+      };
+    });
+    return findClashes(boxes);
   }
 
   /** Recompute the world clip plane from the current part's bbox + section state.
