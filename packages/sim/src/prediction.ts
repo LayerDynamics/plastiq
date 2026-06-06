@@ -2,7 +2,7 @@
 // (default Rapier) once; PredictionSim spawns a manifest into it and steps under
 // gravity, reporting each body's world COM pose.
 
-import type { BackendName, PhysicsBackend, PhysicsEngine } from "./engine.js";
+import type { BackendName, PhysicsBackend, PhysicsEngine, PhysicsSnapshot } from "./engine.js";
 import { parseManifest } from "./manifest.js";
 
 // Each backend is loaded with a dynamic import so the bundler code-splits the
@@ -65,6 +65,18 @@ export class PredictionSim {
   /** World orientation (x,y,z,w) of body `i`. */
   bodyOrientation(i: number): [number, number, number, number] {
     return this.engine.pose(i).orientation;
+  }
+
+  /** Capture the full dynamic state (pose + velocities) of every body, so the
+   * world can be rewound to this point with {@link restore} — deterministic
+   * save / rewind / replay. */
+  snapshot(): PhysicsSnapshot {
+    return this.engine.snapshot();
+  }
+
+  /** Restore every body to a previously captured {@link snapshot}. */
+  restore(snapshot: PhysicsSnapshot): void {
+    this.engine.restore(snapshot);
   }
 
   /** Release backend resources. */

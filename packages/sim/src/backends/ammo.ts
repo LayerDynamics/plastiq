@@ -5,7 +5,7 @@
 
 import Ammo from "ammojs-typed";
 
-import type { PhysicsBackend, PhysicsEngine, PhysicsPose } from "../engine.js";
+import type { PhysicsBackend, PhysicsEngine, PhysicsPose, PhysicsSnapshot } from "../engine.js";
 import type { SimManifest } from "../manifest.js";
 
 type AmmoModule = Awaited<ReturnType<typeof Ammo>>;
@@ -117,6 +117,67 @@ class AmmoEngine implements PhysicsEngine {
     const o = this.tmp.getOrigin();
     const q = this.tmp.getRotation();
     return { position: [o.x(), o.y(), o.z()], orientation: [q.x(), q.y(), q.z(), q.w()] };
+  }
+
+  snapshot(): PhysicsSnapshot {
+    return {
+      bodies: this.bodies.map((body) => {
+        // Read the body's ACTUAL world (centre-of-mass) transform, not the motion
+        // state: after a step the motion state holds the interpolated start-of-step
+        // transform (one step behind), which would make a restore replay one step
+        // behind. getWorldTransform() is the post-integration truth.
+        const t = body.getWorldTransform();
+        const o = t.getOrigin();
+        const r = t.getRotation();
+        const lv = body.getLinearVelocity();
+        const av = body.getAngularVelocity();
+        return {
+          position: [o.x(), o.y(), o.z()],
+          orientation: [r.x(), r.y(), r.z(), r.w()],
+          linearVelocity: [lv.x(), lv.y(), lv.z()],
+          angularVelocity: [av.x(), av.y(), av.z()],
+        };
+      }),
+    };
+  }
+
+  restore(snapshot: PhysicsSnapshot): void {
+    if (snapshot.bodies.length !== this.bodies.length) {
+      throw new Error(
+        `AmmoEngine.restore: snapshot has ${snapshot.bodies.length} bodies, world has ${this.bodies.length}`,
+      );
+    }
+    const m = this.mod;
+    const t = this.tmp;
+    // Scratch Bullet objects, reused across bodies and freed at the end (Bullet
+    // objects are manual wasm allocations).
+    const origin = new m.btVector3(0, 0, 0);
+    const rot = new m.btQuaternion(0, 0, 0, 1);
+    const lin = new m.btVector3(0, 0, 0);
+    const ang = new m.btVector3(0, 0, 0);
+    try {
+      snapshot.bodies.forEach((s, i) => {
+        const body = this.bodies[i]!;
+        origin.setValue(s.position[0], s.position[1], s.position[2]);
+        rot.setValue(s.orientation[0], s.orientation[1], s.orientation[2], s.orientation[3]);
+        t.setIdentity();
+        t.setOrigin(origin);
+        t.setRotation(rot);
+        body.setWorldTransform(t);
+        body.getMotionState().setWorldTransform(t);
+        lin.setValue(s.linearVelocity[0], s.linearVelocity[1], s.linearVelocity[2]);
+        ang.setValue(s.angularVelocity[0], s.angularVelocity[1], s.angularVelocity[2]);
+        body.setLinearVelocity(lin);
+        body.setAngularVelocity(ang);
+        body.clearForces();
+        body.activate(); // a body asleep at snapshot time must resume on restore
+      });
+    } finally {
+      m.destroy(origin);
+      m.destroy(rot);
+      m.destroy(lin);
+      m.destroy(ang);
+    }
   }
 
   get bodyCount(): number {

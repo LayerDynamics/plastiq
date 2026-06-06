@@ -9,7 +9,14 @@
 export const SIM_VERSION = "0.1.0" as const;
 
 export { initSim, activeBackend, PredictionSim } from "./prediction.js";
-export type { PhysicsEngine, PhysicsBackend, PhysicsPose, BackendName } from "./engine.js";
+export type {
+  PhysicsEngine,
+  PhysicsBackend,
+  PhysicsPose,
+  PhysicsSnapshot,
+  BodyState,
+  BackendName,
+} from "./engine.js";
 export {
   type SimManifest,
   type ManifestBody,

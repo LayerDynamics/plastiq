@@ -8,6 +8,22 @@ export interface PhysicsPose {
   orientation: [number, number, number, number];
 }
 
+/** The full dynamic state of one body — pose AND velocities, so restoring it
+ * reproduces the simulation forward from this point (pose alone would discard the
+ * momentum and diverge). */
+export interface BodyState {
+  position: [number, number, number];
+  orientation: [number, number, number, number];
+  linearVelocity: [number, number, number];
+  angularVelocity: [number, number, number];
+}
+
+/** A capture of every spawned body's full state, in spawn order. Snapshot a world,
+ * step it, and `restore()` to rewind to that exact state (save/rewind/replay). */
+export interface PhysicsSnapshot {
+  readonly bodies: BodyState[];
+}
+
 export interface PhysicsEngine {
   /** Number of spawned bodies. */
   readonly bodyCount: number;
@@ -17,6 +33,10 @@ export interface PhysicsEngine {
   step(): void;
   /** Current world pose (COM position + orientation) of spawned body `index`. */
   pose(index: number): PhysicsPose;
+  /** Capture every body's full dynamic state (pose + velocities), in spawn order. */
+  snapshot(): PhysicsSnapshot;
+  /** Restore every body to a previously captured snapshot (same body count). */
+  restore(snapshot: PhysicsSnapshot): void;
   /** Release any native/wasm resources. */
   dispose(): void;
 }
