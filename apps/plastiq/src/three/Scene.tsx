@@ -8,13 +8,19 @@ import { useThree } from "@react-three/fiber";
 import { OrbitControls } from "@react-three/drei";
 import { Part } from "./Part.js";
 import { Picking } from "./Picking.js";
+import { TransformGizmo } from "./gizmos/transform.gizmo.js";
+import { ViewCubeGizmo } from "./gizmos/viewCube.gizmo.js";
 import { GRID_CENTER, GRID_CELL } from "./colors.js";
 import { buildPart, disposePart, type BuiltPart } from "../viewport/buildMesh.js";
+import { applyPlacement, findPlacement, placementFromFeature } from "../viewport/placement.js";
+import { useCadStore } from "../store/store.js";
 import type { TransferMesh } from "../worker/protocol.js";
 
 interface ViewportGlobal {
   builtPart: BuiltPart | null;
   fitToView?: () => void;
+  /** Orient the camera to look along `dir` (target → camera), keeping framing. */
+  setView?: (dir: readonly [number, number, number]) => void;
   gpuPickFace?: (ndc: { x: number; y: number }) => number | null;
 }
 
@@ -47,6 +53,18 @@ export function Scene({ mesh }: { mesh: TransferMesh | null }): React.JSX.Elemen
     };
   }, [part]);
 
+  // Position the part group from the document's placement feature (FR-11), and
+  // keep it in sync as that feature changes (gizmo write-back / undo / panel).
+  useEffect(() => {
+    if (!part) return;
+    const apply = (): void =>
+      applyPlacement(part.group, placementFromFeature(findPlacement(useCadStore.getState().features)));
+    apply();
+    return useCadStore.subscribe((s, prev) => {
+      if (s.features !== prev.features) apply();
+    });
+  }, [part]);
+
   // Frame the part (or the grid) so it fills the view — the legacy fitToView,
   // set instantly (deterministic for tests). Published on the viewport global the
   // E2E seams call.
@@ -76,8 +94,19 @@ export function Scene({ mesh }: { mesh: TransferMesh | null }): React.JSX.Elemen
       }
       camera.lookAt(center);
     };
+    // Orient to a standard-view direction (named view buttons + FR-12), keeping
+    // the current target + framing distance — the legacy setViewDirection.
+    vp.setView = (dir): void => {
+      const target = controls?.target ?? new THREE.Vector3(0, 0, 0.02);
+      const radius = camera.position.distanceTo(target) || 0.2;
+      const d = new THREE.Vector3(dir[0], dir[1], dir[2]).normalize();
+      camera.position.copy(target.clone().addScaledVector(d, radius));
+      if (controls) controls.update();
+      camera.lookAt(target);
+    };
     return () => {
       delete vp.fitToView;
+      delete vp.setView;
     };
   }, [camera, controls]);
 
@@ -90,6 +119,8 @@ export function Scene({ mesh }: { mesh: TransferMesh | null }): React.JSX.Elemen
       <gridHelper args={[0.4, 40, GRID_CENTER, GRID_CELL]} rotation={[Math.PI / 2, 0, 0]} />
       <Part part={part} />
       <Picking part={part} />
+      <TransformGizmo part={part} />
+      <ViewCubeGizmo />
       <OrbitControls makeDefault enableDamping target={[0, 0, 0.02]} />
     </>
   );
