@@ -35,7 +35,7 @@ const ICONS: Record<string, string> = {
 function editSketch(feature: EditorFeature): boolean {
   if (feature.type === "sketch" && feature.data?.["model"] != null) {
     const m = feature.data["model"] as SketchModel;
-    useSketchStore.getState().enterSketch(m.plane, feature.id, m);
+    useSketchStore.getState().enterSketch(m.plane, m.offset ?? 0, feature.id, m);
     return true;
   }
   return false;

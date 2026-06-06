@@ -11,6 +11,15 @@ import type { Constraint as SolverConstraint, SolverPoint } from "@plastiq/cad";
 
 export type DatumPlaneId = "XY" | "XZ" | "YZ";
 
+/** A sketch's plane: a base datum (XY/XZ/YZ) shifted `offset` metres along its
+ * normal. The compiled form stored on a sketch feature's `data.plane` and resolved
+ * to a kernel DatumPlane at rebuild. Absent ⇒ XY at offset 0 (back-compat). */
+export interface SketchPlaneSpec {
+  base: DatumPlaneId;
+  /** Distance along the base plane's normal, in SI metres. */
+  offset: number;
+}
+
 export interface SketchPoint {
   id: string;
   u: number;
@@ -96,13 +105,16 @@ export type ValuedConstraintKind =
 
 export interface SketchModel {
   plane: DatumPlaneId;
+  /** Offset of the sketch plane along its base normal, in SI metres (default 0).
+   * Optional so documents saved before sketch offsets still load (back-compat). */
+  offset?: number;
   points: SketchPoint[];
   entities: SketchEntity[];
   constraints: SketchConstraint[];
 }
 
-export function emptySketch(plane: DatumPlaneId = "XY"): SketchModel {
-  return { plane, points: [], entities: [], constraints: [] };
+export function emptySketch(plane: DatumPlaneId = "XY", offset = 0): SketchModel {
+  return { plane, offset, points: [], entities: [], constraints: [] };
 }
 
 /** The circle through three points (the circumcircle), or null if collinear. */

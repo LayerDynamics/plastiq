@@ -47,7 +47,8 @@ import {
 } from "@plastiq/cad";
 import type { CadDocument, EditorFeature } from "../store/types.js";
 import { extractProfile, isProfile, type Profile } from "../sketch/profile.js";
-import type { SketchModel } from "../sketch/model.js";
+import { resolveSketchPlane } from "./sketchPlane.js";
+import type { SketchModel, SketchPlaneSpec } from "../sketch/model.js";
 
 /** A 3-vector (the kernel's Vec3 shape; not re-exported from the root). */
 type Vec3 = [number, number, number];
@@ -67,9 +68,9 @@ function opt(f: EditorFeature, key: string, fallback: number): number {
 }
 
 /**
- * Build a kernel Sketch on the XY datum from a derived editor profile. A circle
- * becomes a true curved edge (real cylinder on extrude); a loop becomes its
- * line/arc segment chain.
+ * Build a kernel Sketch on the given datum plane (default XY) from a derived
+ * editor profile. A circle becomes a true curved edge (real cylinder on extrude);
+ * a loop becomes its line/arc segment chain.
  *
  * The profile is an explicit closed loop (its last segment lands back on
  * `start`). The kernel auto-closes an open chain with a straight edge, so a
@@ -121,7 +122,10 @@ function unionAll(oc: Occt, copies: readonly Solid[], featureId: string): Solid 
  */
 export function rebuildDocument(oc: Occt, doc: CadDocument): Solid | null {
   let solid: Solid | null = null;
-  let profile: Profile | null = null;
+  // The active sketch profile + its resolved 3D plane, set by the most recent
+  // `sketch` feature and consumed by extrude/revolve/cut (so a profile builds on
+  // its own datum/offset, not always world-XY).
+  let activeSketch: { profile: Profile; plane: DatumPlane } | null = null;
 
   const replace = (next: Solid): void => {
     solid?.delete();
@@ -148,12 +152,16 @@ export function rebuildDocument(oc: Occt, doc: CadDocument): Solid | null {
             `feature '${f.id}' (sketch): no buildable profile (closed loop or circle)`,
           );
         }
-        profile = prof;
+        activeSketch = {
+          profile: prof,
+          plane: resolveSketchPlane(f.data?.["plane"] as SketchPlaneSpec | undefined),
+        };
         break;
       }
       case "extrude": {
-        if (!profile) throw new Error(`feature '${f.id}' (extrude): no sketch profile upstream`);
-        const sk = profileSketch(profile);
+        if (!activeSketch)
+          throw new Error(`feature '${f.id}' (extrude): no sketch profile upstream`);
+        const sk = profileSketch(activeSketch.profile, activeSketch.plane);
         // Direction override: a baked vector, or re-resolved from a picked edge.
         let direction: Vec3 | undefined;
         const dirVec = f.data?.["direction"];
@@ -186,12 +194,15 @@ export function rebuildDocument(oc: Occt, doc: CadDocument): Solid | null {
         break;
       }
       case "revolve": {
-        if (!profile) throw new Error(`feature '${f.id}' (revolve): no sketch profile upstream`);
+        if (!activeSketch)
+          throw new Error(`feature '${f.id}' (revolve): no sketch profile upstream`);
         // Revolve the active profile about an axis (default: world Y through
         // origin) by `angle` radians (FR-29).
         const angle = num(f, "angle");
         const axis: [number, number, number] = [opt(f, "ax", 0), opt(f, "ay", 1), opt(f, "az", 0)];
-        replace(revolve(oc, profileSketch(profile), [0, 0, 0], axis, angle));
+        replace(
+          revolve(oc, profileSketch(activeSketch.profile, activeSketch.plane), [0, 0, 0], axis, angle),
+        );
         break;
       }
       case "loft": {
@@ -216,10 +227,10 @@ export function rebuildDocument(oc: Occt, doc: CadDocument): Solid | null {
       case "cut": {
         const base = solid;
         if (!base) throw new Error(`feature '${f.id}' (cut): no solid to cut into`);
-        if (!profile) throw new Error(`feature '${f.id}' (cut): no sketch profile upstream`);
+        if (!activeSketch) throw new Error(`feature '${f.id}' (cut): no sketch profile upstream`);
         // Subtract the active profile, extruded `depth`, from the current solid
         // (a pocket/through-cut; FR-29).
-        const tool = extrude(oc, profileSketch(profile), num(f, "depth"));
+        const tool = extrude(oc, profileSketch(activeSketch.profile, activeSketch.plane), num(f, "depth"));
         try {
           replace(cut(oc, base, tool));
         } finally {

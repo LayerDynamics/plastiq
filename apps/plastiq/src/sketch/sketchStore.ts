@@ -66,7 +66,12 @@ export interface SketchStore {
   /** Mark the solver ready (called when initSketchSolver resolves). */
   setSolverReady: (ready: boolean) => void;
 
-  enterSketch: (plane: DatumPlaneId, featureId?: string, model?: SketchModel) => void;
+  enterSketch: (
+    plane: DatumPlaneId,
+    offset?: number,
+    featureId?: string,
+    model?: SketchModel,
+  ) => void;
   exitSketch: () => void;
   setView: (view: View2D) => void;
   setTool: (tool: SketchTool) => void;
@@ -127,7 +132,7 @@ export const useSketchStore = create<SketchStore>((set, get) => ({
   solverReady: false,
   setSolverReady: (ready) => set({ solverReady: ready }),
 
-  enterSketch: (plane, featureId, model) => {
+  enterSketch: (plane, offset = 0, featureId, model) => {
     // The sketcher solves synchronously; refuse to open it until planegcs is
     // loaded so a constraint solve can never race the wasm. The Sketch button is
     // also disabled while !solverReady, so this is a belt-and-suspenders guard.
@@ -135,7 +140,7 @@ export const useSketchStore = create<SketchStore>((set, get) => ({
     set({
       active: true,
       editingFeatureId: featureId ?? null,
-      model: model ? structuredClone(model) : emptySketch(plane),
+      model: model ? structuredClone(model) : emptySketch(plane, offset),
       tool: "select",
       pending: [],
       result: null,

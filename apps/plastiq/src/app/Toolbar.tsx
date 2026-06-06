@@ -2,11 +2,13 @@
 // kind the viewport picks) and the live selection count. Feature/sketch/export
 // tools are wired in later milestones.
 
+import { useState } from "react";
 import { useCadStore } from "../store/store.js";
 import type { NewFeature } from "../store/store.js";
 import type { SelectionMode } from "../store/types.js";
 import { SIM_TICK_RATE_HZ } from "../sim/simulator.js";
 import { useSketchStore } from "../sketch/sketchStore.js";
+import type { DatumPlaneId } from "../sketch/model.js";
 import type { Profile } from "../sketch/profile.js";
 import {
   booleanBodyFeature,
@@ -113,6 +115,9 @@ function FeatureMenu(): React.JSX.Element {
   const addFeature = useCadStore((s) => s.addFeature);
   const enterSketch = useSketchStore((s) => s.enterSketch);
   const solverReady = useSketchStore((s) => s.solverReady);
+  // The plane + offset (mm) the next New Sketch opens on — no longer always XY.
+  const [plane, setPlane] = useState<DatumPlaneId>("XY");
+  const [offsetMm, setOffsetMm] = useState("0");
   const btn = "rounded px-1.5 py-0.5 text-xs text-[#9ab] hover:bg-[#1b2230]";
   const btnDisabled = "rounded px-1.5 py-0.5 text-xs text-[#445] cursor-not-allowed";
   return (
@@ -121,13 +126,38 @@ function FeatureMenu(): React.JSX.Element {
       className="flex items-center gap-0.5 rounded border border-[#2a3444] px-1"
     >
       <span className="px-1 text-[10px] uppercase text-[#567]">Add</span>
+      <select
+        data-testid="sketch-plane"
+        value={plane}
+        onChange={(e) => setPlane(e.currentTarget.value as DatumPlaneId)}
+        title="Plane the new sketch is drawn on"
+        className="rounded border border-[#2a3444] bg-[#0e1219] px-1 py-0.5 text-[11px] text-[#cfe]"
+      >
+        <option value="XY">XY</option>
+        <option value="XZ">XZ</option>
+        <option value="YZ">YZ</option>
+      </select>
+      <input
+        type="number"
+        step="any"
+        data-testid="sketch-offset"
+        value={offsetMm}
+        onChange={(e) => setOffsetMm(e.currentTarget.value)}
+        title="Offset along the plane normal (mm)"
+        className="w-14 rounded border border-[#2a3444] bg-[#0e1219] px-1 py-0.5 text-right text-[11px] text-[#cfe]"
+      />
+      <span className="text-[10px] text-[#567]">mm</span>
       <button
         type="button"
         className={solverReady ? btn : btnDisabled}
         data-testid="enter-sketch"
         disabled={!solverReady}
-        title={solverReady ? "Open the 2D sketch editor on the XY plane" : "Loading sketch solver…"}
-        onClick={() => enterSketch("XY")}
+        title={
+          solverReady
+            ? `Open the 2D sketch editor on the ${plane} plane`
+            : "Loading sketch solver…"
+        }
+        onClick={() => enterSketch(plane, (Number(offsetMm) || 0) / 1000)}
       >
         New Sketch
       </button>

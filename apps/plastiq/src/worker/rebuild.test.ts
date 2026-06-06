@@ -108,6 +108,58 @@ describe("CAD Studio rebuild (SPEC-5 M0.4)", () => {
     expect(mesh!.indices.length).toBeGreaterThan(0);
   });
 
+  it("a sketch's datum plane reorients the extrude (XZ extrudes along Y, not Z)", () => {
+    const m = (x: number): number => mm(x);
+    // A 20×30 mm rect at the plane origin, extruded 20 mm along the plane normal.
+    const rect = loopProfile([
+      [0, 0],
+      [m(20), 0],
+      [m(20), m(30)],
+      [0, m(30)],
+    ]);
+    const comOn = (base: "XY" | "XZ"): [number, number, number] => {
+      const doc: CadDocument = {
+        features: [
+          { id: "f1", type: "sketch", data: { profile: rect, plane: { base, offset: 0 } } },
+          { id: "f2", type: "extrude", deps: ["f1"], params: { height: m(20) } },
+        ],
+        params: {},
+      };
+      return rebuildTaggedWithProps(oc, doc, { linearDeflection: mm(0.5) })!.com;
+    };
+    // XY: the 20 mm height runs along +Z (|z|≈10), the profile spans Y (|y|≈15).
+    const xy = comOn("XY");
+    expect(Math.abs(xy[2])).toBeCloseTo(m(10), 6);
+    expect(Math.abs(xy[1])).toBeCloseTo(m(15), 6);
+    // XZ: the SAME profile now extrudes along Y (|y|≈10) and spans Z (|z|≈15) —
+    // proof the plane reaches the geometry, not a hardcoded XY.
+    const xz = comOn("XZ");
+    expect(Math.abs(xz[1])).toBeCloseTo(m(10), 6);
+    expect(Math.abs(xz[2])).toBeCloseTo(m(15), 6);
+  });
+
+  it("a sketch's plane offset shifts the solid along the normal by that distance", () => {
+    const m = (x: number): number => mm(x);
+    const rect = loopProfile([
+      [0, 0],
+      [m(20), 0],
+      [m(20), m(30)],
+      [0, m(30)],
+    ]);
+    const comZ = (offset: number): number => {
+      const doc: CadDocument = {
+        features: [
+          { id: "f1", type: "sketch", data: { profile: rect, plane: { base: "XY", offset } } },
+          { id: "f2", type: "extrude", deps: ["f1"], params: { height: m(20) } },
+        ],
+        params: {},
+      };
+      return rebuildTaggedWithProps(oc, doc, { linearDeflection: mm(0.5) })!.com[2];
+    };
+    // A 50 mm offset along +Z lifts the whole solid (its centroid z) by 50 mm.
+    expect(comZ(m(50)) - comZ(0)).toBeCloseTo(m(50), 6);
+  });
+
   it("box → sketch → cut subtracts a pocket from the current solid (FR-29)", () => {
     const m = (x: number): number => mm(x);
     const doc: CadDocument = {
