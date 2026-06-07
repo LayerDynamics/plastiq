@@ -48,6 +48,12 @@ export default defineConfig({
         // constants. Pure-logic three/ modules (e.g. sketch-camera math) stay IN.
         "apps/*/src/three/gpuPick.ts",
         "apps/*/src/three/colors.ts",
+        // Context-menu input glue: binds the canvas `contextmenu` event to the
+        // store via useThree/Picker/GpuPicker — only runs in a real browser
+        // (e2e). The pure modules it drives (contextSelection/contextOptions/
+        // config/contextMenuProvider) stay measured + unit-tested.
+        "apps/*/src/three/contextmenu/useCanvasRightClick.ts",
+        "apps/*/src/three/contextmenu/snapshot.ts",
       ],
       // Baseline floor, set a couple points below the measured current
       // (stmts 82.5 / branch 70.5 / funcs 83.1 / lines 85.9) so the build fails

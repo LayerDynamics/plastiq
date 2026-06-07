@@ -35,6 +35,25 @@ export function Assembly({
     };
   }, [parts]);
 
+  // Tag each instance group with its id and publish the group list so the canvas
+  // right-click menu can raycast them to resolve which instance was clicked (the
+  // base Part isn't rendered while instances exist). Ids are stable with `parts`.
+  useEffect(() => {
+    const vp = ((globalThis as { __plastiqViewport?: { instanceGroups?: unknown[] } })
+      .__plastiqViewport ??= {});
+    if (instances && parts.length === instances.length) {
+      instances.forEach((b, i) => {
+        parts[i]!.group.userData["instanceId"] = b.id;
+      });
+      vp.instanceGroups = parts.map((p) => p.group);
+    } else {
+      vp.instanceGroups = [];
+    }
+    return () => {
+      vp.instanceGroups = [];
+    };
+  }, [parts, instances]);
+
   if (!instances || parts.length !== instances.length) return null;
   return (
     <>

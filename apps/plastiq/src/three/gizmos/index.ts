@@ -7,3 +7,4 @@ export { PlaneGizmo } from "./plane.gizmo.js";
 export { ConstructionGeometryGizmo } from "./constructionGeometry.gizmo.js";
 export { SectionAnalysisGizmo } from "./sectionAnalysis.gizmo.js";
 export { OffsetGizmo } from "./offset.gizmo.js";
+export { RightClickDropdownGizmo } from "./rightClickDropdown.gizmo.js";

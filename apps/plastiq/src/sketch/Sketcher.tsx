@@ -14,6 +14,11 @@ import { canApply, hitTest, type ConstraintKind } from "./hit.js";
 import { canDimension, type DimensionKind } from "./dim.js";
 import { extractProfile } from "./profile.js";
 import { useCadStore } from "../store/store.js";
+import { resolveContextTarget, type ContextTarget } from "../three/contextmenu/contextSelection.js";
+import { buildMenuSections, type MenuSection } from "../three/contextmenu/contextOptions.js";
+import { runContextAction } from "../three/contextmenu/config.js";
+import { snapshotCad, snapshotSketch } from "../three/contextmenu/snapshot.js";
+import { ContextMenuView } from "../three/contextmenu/ContextMenuView.js";
 import {
   centeredView,
   gridStep,
@@ -468,6 +473,14 @@ export function Sketcher(): React.JSX.Element | null {
   const hostRef = useRef<HTMLDivElement>(null);
   const [size, setSize] = useState({ w: 800, h: 600 });
   const [hover, setHover] = useState<{ px: Px; snap: Snap; hint: SegHint | null } | null>(null);
+  // Right-click context menu (sketch-entity context): screen-anchored DOM menu
+  // over the overlay, reusing the shared catalog (constraints/dimensions/fix/finish).
+  const [ctxMenu, setCtxMenu] = useState<{
+    x: number;
+    y: number;
+    sections: MenuSection[];
+    target: ContextTarget;
+  } | null>(null);
   const pan = useRef<{ x: number; y: number } | null>(null);
   const moved = useRef(false);
   /** The point being dragged in the Select tool (live re-solve), if any. */
@@ -709,12 +722,23 @@ export function Sketcher(): React.JSX.Element | null {
         width={size.w}
         height={size.h}
         className={`block touch-none ${tool === "select" ? "cursor-grab" : "cursor-crosshair"}`}
+        onContextMenu={(e) => {
+          e.preventDefault();
+          const target = resolveContextTarget({
+            cad: snapshotCad(),
+            sketch: snapshotSketch(),
+            hit: null,
+            worldPoint: [0, 0, 0],
+          });
+          setCtxMenu({ x: e.clientX, y: e.clientY, sections: buildMenuSections(target), target });
+        }}
         onWheel={(e) => {
           const r = (e.currentTarget as SVGElement).getBoundingClientRect();
           const anchorPx = { x: e.clientX - r.left, y: e.clientY - r.top };
           setView(zoomAt(view, anchorPx, e.deltaY < 0 ? 1.1 : 1 / 1.1));
         }}
         onPointerDown={(e) => {
+          if (e.button !== 0) return; // left button only — right-click opens the menu
           (e.currentTarget as SVGElement).setPointerCapture(e.pointerId);
           const p = rectPx(e);
           pan.current = p;
@@ -747,6 +771,7 @@ export function Sketcher(): React.JSX.Element | null {
         }}
         onPointerLeave={() => setHover(null)}
         onPointerUp={(e) => {
+          if (e.button !== 0) return; // left button only — right-click opens the menu
           const wasMove = moved.current;
           const wasDrag = dragPoint.current !== null;
           const p = rectPx(e);
@@ -787,6 +812,31 @@ export function Sketcher(): React.JSX.Element | null {
           />
         )}
       </svg>
+      {ctxMenu && (
+        <>
+          {/* Backdrop dismisses on the next click (matches the feature-tree menu). */}
+          <div
+            data-testid="sketch-ctx-backdrop"
+            className="fixed inset-0 z-40"
+            onClick={() => setCtxMenu(null)}
+            onContextMenu={(e) => {
+              e.preventDefault();
+              setCtxMenu(null);
+            }}
+          />
+          <div className="fixed z-50" style={{ left: ctxMenu.x, top: ctxMenu.y }}>
+            <ContextMenuView
+              testid="sketch-context-menu"
+              sections={ctxMenu.sections}
+              onClose={() => setCtxMenu(null)}
+              onRun={(id) => {
+                runContextAction(id, ctxMenu.target);
+                setCtxMenu(null);
+              }}
+            />
+          </div>
+        </>
+      )}
     </div>
   );
 }
