@@ -4,7 +4,8 @@
 // milestones (viewport = M0.5/three.js, feature tree = M2, properties = M2).
 
 import { useEffect, useRef, useState } from "react";
-import { Ribbon } from "../ribbon/Ribbon.js";
+import { TopBar } from "../ribbon/TopBar.js";
+import { WorkspacePanel } from "../ribbon/WorkspacePanel.js";
 import { StatusBar } from "./StatusBar.js";
 import { FeatureTree } from "./FeatureTree.js";
 import { AssemblyTree } from "./AssemblyTree.js";
@@ -143,26 +144,28 @@ export function App(): React.JSX.Element {
 
   return (
     <div className="grid h-full grid-cols-1 grid-rows-[auto_1fr_auto] bg-[#0b0d12] text-[#cfe]">
-      {/* Ribbon + (optional) recovery banner share one grid row, so the `1fr` row
-          is always the viewport. The ribbon is workspace+tab scoped, so it fits the
-          width without horizontal scrolling (no overflow-x-auto) — the fix for the
-          old dense, scrolling toolbar. */}
+      {/* A SLIM top strip (global controls + workspace switcher only) + the recovery
+          banner share the `auto` row, so the `1fr` row stays the viewport. The actual
+          workspace TOOLS live in the left sidebar (WorkspacePanel) — not a top bar. */}
       <div className="min-w-0">
-        <Ribbon />
+        <TopBar />
         <RecoveryBanner />
       </div>
       <div className="flex min-h-0 min-w-0">
         {leftOpen ? (
           <>
             <aside
-              aria-label="Feature tree and assembly"
+              aria-label="Workspace tools, feature tree, and assembly"
               style={{ width: leftW }}
               className="min-h-0 shrink-0 overflow-auto border-r border-[#222a36] bg-black/30 p-2"
             >
               <div className="mb-2 flex items-center justify-between">
-                <h2 className="text-xs font-bold tracking-wide text-[#8aa]">FEATURE TREE</h2>
+                <h2 className="text-xs font-bold tracking-wide text-[#8aa]">TOOLS</h2>
                 {collapseBtn(() => setLeftOpen(false), "Collapse feature panel", "‹")}
               </div>
+              <WorkspacePanel />
+              <div className="my-2 border-t border-[#222a36]" />
+              <h2 className="mb-2 text-xs font-bold tracking-wide text-[#8aa]">FEATURE TREE</h2>
               <div id="tree-root">
                 <FeatureTree />
               </div>

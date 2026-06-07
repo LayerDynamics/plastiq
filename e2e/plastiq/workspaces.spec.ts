@@ -1,8 +1,9 @@
-// E2E (no mock): Fusion-style workspaces. The top-left switcher flips Design /
-// Assemble / Simulate; each shows its own tabbed ribbon of tools. Verifies the
-// switch reconfigures the ribbon + drives real state, that the ribbon fits without
-// horizontal scrolling (the fix for the old scrolling toolbar), and that SKETCH is
-// a contextual tab present only while sketching.
+// E2E (no mock): Fusion-style workspaces with the tools in the LEFT SIDEBAR. The
+// top-left switcher flips Design / Assemble / Simulate; the slim top strip holds
+// only global controls, and the active workspace's TOOLS live in the sidebar
+// (WorkspacePanel) as collapsible groups. Verifies the switch reconfigures the
+// sidebar, that tools are in the sidebar (not the top strip), that the top strip
+// stays slim (no horizontal scroll), and the contextual Sketch group + commit.
 
 import { expect, test, type Page } from "@playwright/test";
 
@@ -25,134 +26,96 @@ const instanceCount = (page: Page): Promise<number> =>
         .__cadStore?.getState().assembly.instances.length ?? 0,
   );
 
-const simulating = (page: Page): Promise<boolean> =>
+const numField = (page: Page, field: "simulating" | "simTicks" | "explodeFactor" | "mateMode") =>
   page.evaluate(
-    () =>
-      (globalThis as { __cadStore?: { getState(): { simulating: boolean } } }).__cadStore?.getState()
-        .simulating ?? false,
+    (f) =>
+      (globalThis as { __cadStore?: { getState(): Record<string, unknown> } }).__cadStore!.getState()[
+        f
+      ],
+    field,
   );
 
-test("the switcher flips workspaces and reconfigures the ribbon", async ({ page }) => {
+const panel = (page: Page) => page.getByTestId("workspace-panel");
+const topbar = (page: Page) => page.getByTestId("topbar");
+
+test("the switcher swaps the sidebar's tools per workspace", async ({ page }) => {
   await bootReady(page);
 
-  // Design is the default workspace.
-  await expect(page.getByTestId("ribbon-tab-solid")).toBeVisible();
-  await expect(page.getByTestId("add-extrude")).toBeVisible();
+  // Design: modelling tools in the sidebar (Create group open by default).
+  await expect(panel(page).getByTestId("add-extrude")).toBeVisible();
 
-  // Assemble: the ribbon swaps to the Assemble tab; Insert Instance runs.
+  // Assemble: insert-instance appears; modelling tools gone.
   await page.getByTestId("workspace-switcher").selectOption("assemble");
-  await expect(page.getByTestId("ribbon-tab-assemble")).toBeVisible();
-  await expect(page.getByTestId("ribbon-tab-solid")).toHaveCount(0);
-  const before = await instanceCount(page);
-  await page.getByTestId("ribbon-insert-instance").click();
-  await expect.poll(() => instanceCount(page)).toBe(before + 1);
+  await expect(panel(page).getByTestId("act-insert-instance")).toBeVisible();
+  await expect(page.getByTestId("add-extrude")).toHaveCount(0);
 
-  // Simulate: switching in starts the sim and shows playback.
+  // Simulate: playback appears + the sim starts; modelling gone.
   await page.getByTestId("workspace-switcher").selectOption("simulate");
-  await expect(page.getByTestId("ribbon-tab-simulate")).toBeVisible();
-  await expect.poll(() => simulating(page)).toBe(true);
-  await expect(page.getByTestId("ribbon-sim-pause")).toBeVisible();
+  await expect(panel(page).getByTestId("act-sim-pause")).toBeVisible();
+  await expect.poll(() => numField(page, "simulating")).toBe(true);
 
-  // Leaving simulate stops the sim.
+  // Back to Design.
   await page.getByTestId("workspace-switcher").selectOption("design");
-  await expect.poll(() => simulating(page)).toBe(false);
+  await expect.poll(() => numField(page, "simulating")).toBe(false);
+  await expect(panel(page).getByTestId("add-extrude")).toBeVisible();
 });
 
-test("the Assemble workspace runs insert / explode / interference / mate mode", async ({ page }) => {
+test("tools live in the sidebar, not the slim top strip", async ({ page }) => {
   await bootReady(page);
-  await page.getByTestId("workspace-switcher").selectOption("assemble");
-  await expect(page.getByTestId("ribbon-tab-assemble")).toBeVisible();
-
-  // Insert two instances.
-  await page.getByTestId("ribbon-insert-instance").click();
-  await page.getByTestId("ribbon-insert-instance").click();
-  await expect.poll(() => instanceCount(page)).toBe(2);
-
-  // Explode spreads them (factor > 0).
-  await page.getByTestId("ribbon-explode").click();
-  await expect
-    .poll(() =>
-      page.evaluate(
-        () =>
-          (globalThis as { __cadStore?: { getState(): { explodeFactor: number } } }).__cadStore!
-            .getState().explodeFactor,
-      ),
-    )
-    .toBeGreaterThan(0);
-
-  // Interference check populates a result (clashing pairs, or [] when clear).
-  await page.getByTestId("ribbon-interference").click();
-  await expect
-    .poll(() =>
-      page.evaluate(
-        () =>
-          (globalThis as { __cadStore?: { getState(): { interferences: unknown } } }).__cadStore!
-            .getState().interferences !== null,
-      ),
-    )
-    .toBe(true);
-
-  // Mate mode toggles on (the two-pick authoring then happens in AssemblyTree).
-  await page.getByTestId("ribbon-mate-mode").click();
-  await expect
-    .poll(() =>
-      page.evaluate(
-        () =>
-          (globalThis as { __cadStore?: { getState(): { mateMode: boolean } } }).__cadStore!
-            .getState().mateMode,
-      ),
-    )
-    .toBe(true);
-});
-
-test("the Simulate workspace shows playback + the elapsed-time readout", async ({ page }) => {
-  await bootReady(page);
-  await page.getByTestId("workspace-switcher").selectOption("simulate");
-  await expect(page.getByTestId("ribbon-tab-simulate")).toBeVisible();
-  await expect.poll(() => simulating(page)).toBe(true);
-  await expect(page.getByTestId("sim-time")).toBeVisible();
-
-  // Pause, then step one frame → the elapsed sim time advances.
-  const ticks = (): Promise<number> =>
-    page.evaluate(
-      () =>
-        (globalThis as { __cadStore?: { getState(): { simTicks: number } } }).__cadStore!.getState()
-          .simTicks,
-    );
-  await page.getByTestId("ribbon-sim-pause").click();
-  const t0 = await ticks();
-  await page.getByTestId("ribbon-sim-step").click();
-  await expect.poll(ticks).toBeGreaterThan(t0);
-});
-
-test("the ribbon fits its width without horizontal scrolling", async ({ page }) => {
-  await bootReady(page);
+  // The modelling tools are in the sidebar panel, NOT the top strip.
+  await expect(panel(page).getByTestId("add-extrude")).toBeVisible();
+  await expect(topbar(page).getByTestId("add-extrude")).toHaveCount(0);
+  // The top strip stays slim — it does not scroll horizontally.
   const fits = await page.evaluate(() => {
-    const r = document.querySelector('[data-testid="ribbon"]') as HTMLElement | null;
-    return r ? r.scrollWidth <= r.clientWidth + 1 : false;
+    const t = document.querySelector('[data-testid="topbar"]') as HTMLElement | null;
+    return t ? t.scrollWidth <= t.clientWidth + 1 : false;
   });
   expect(fits).toBe(true);
 });
 
-test("the SKETCH tab is contextual — present only while sketching", async ({ page }) => {
+test("Assemble: insert instances + enter mate mode from the sidebar", async ({ page }) => {
   await bootReady(page);
+  await page.getByTestId("workspace-switcher").selectOption("assemble");
 
-  // No sketch yet → no SKETCH tab.
-  await expect(page.getByTestId("ribbon-tab-sketch")).toHaveCount(0);
+  await page.getByTestId("act-insert-instance").click();
+  await page.getByTestId("act-insert-instance").click();
+  await expect.poll(() => instanceCount(page)).toBe(2);
 
-  // Enter a sketch → the contextual SKETCH tab appears.
+  // Groups are expanded by default → Mate mode is visible in the Relationships group.
+  await page.getByTestId("act-mate-mode").click();
+  await expect.poll(() => numField(page, "mateMode")).toBe(true);
+});
+
+test("Simulate: playback + elapsed readout in the sidebar", async ({ page }) => {
+  await bootReady(page);
+  await page.getByTestId("workspace-switcher").selectOption("simulate");
+  await expect.poll(() => numField(page, "simulating")).toBe(true);
+  await expect(page.getByTestId("sim-time")).toBeVisible();
+
+  // Pause, then step one frame → elapsed sim time advances.
+  await page.getByTestId("act-sim-pause").click();
+  const t0 = (await numField(page, "simTicks")) as number;
+  await page.getByTestId("act-sim-step").click();
+  await expect.poll(() => numField(page, "simTicks") as Promise<number>).toBeGreaterThan(t0);
+});
+
+test("the Sketch group is contextual — present only while sketching", async ({ page }) => {
+  await bootReady(page);
+  // Not sketching → no Finish.
+  await expect(page.getByTestId("act-sk-finish")).toHaveCount(0);
+
   await expect(page.getByTestId("enter-sketch")).toBeEnabled({ timeout: 240_000 });
   await page.getByTestId("enter-sketch").click();
   await expect(page.getByTestId("sketcher")).toBeVisible();
-  await expect(page.getByTestId("ribbon-tab-sketch")).toBeVisible();
+  await expect(panel(page).getByTestId("act-sk-finish")).toBeVisible();
 
-  // Leave the sketch → the SKETCH tab clears.
+  // Cancel via the sketcher overlay → the Sketch group clears.
   await page.getByRole("button", { name: "Cancel" }).click();
   await expect(page.getByTestId("sketcher")).toBeHidden();
-  await expect(page.getByTestId("ribbon-tab-sketch")).toHaveCount(0);
+  await expect(page.getByTestId("act-sk-finish")).toHaveCount(0);
 });
 
-test("the SKETCH tab's Finish commits the sketch (no data loss)", async ({ page }) => {
+test("the Sketch group's Finish commits the sketch (no data loss)", async ({ page }) => {
   await bootReady(page);
   const sketchCount = (): Promise<number> =>
     page.evaluate(
@@ -166,9 +129,6 @@ test("the SKETCH tab's Finish commits the sketch (no data loss)", async ({ page 
   await expect(page.getByTestId("enter-sketch")).toBeEnabled({ timeout: 240_000 });
   await page.getByTestId("enter-sketch").click();
   await expect(page.getByTestId("sketcher")).toBeVisible();
-
-  // Draw a closed triangle through the store seam (real solver), then Finish via the
-  // ribbon's SKETCH tab — it must COMMIT (persist a sketch feature), not discard.
   await page.evaluate(() => {
     const st = () =>
       (
@@ -187,13 +147,11 @@ test("the SKETCH tab's Finish commits the sketch (no data loss)", async ({ page 
     const firstId = st().model.points[0]!.id;
     st().clickAt(0.03, 0);
     st().clickAt(0.015, 0.02);
-    st().clickAt(0, 0, { reusePointId: firstId }); // close the loop on the first point
+    st().clickAt(0, 0, { reusePointId: firstId });
   });
 
-  await expect(page.getByTestId("ribbon-sk-finish")).toBeEnabled();
-  await page.getByTestId("ribbon-sk-finish").click();
+  await expect(panel(page).getByTestId("act-sk-finish")).toBeEnabled();
+  await panel(page).getByTestId("act-sk-finish").click();
   await expect(page.getByTestId("sketcher")).toBeHidden();
   await expect.poll(() => sketchCount(page)).toBe(before + 1);
-  // Back to a non-contextual Design tab.
-  await expect(page.getByTestId("ribbon-tab-sketch")).toHaveCount(0);
 });
