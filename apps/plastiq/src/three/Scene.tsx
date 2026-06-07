@@ -18,6 +18,7 @@ import { SectionAnalysisGizmo } from "./gizmos/sectionAnalysis.gizmo.js";
 import { OffsetGizmo } from "./gizmos/offset.gizmo.js";
 import { SketchCamera } from "./SketchCamera.js";
 import { Section } from "./Section.js";
+import { Assembly, type InstanceBody } from "./Assembly.js";
 import type { DatumPlane } from "@plastiq/cad";
 import { GRID_CENTER, GRID_CELL } from "./colors.js";
 import { buildPart, disposePart, type BuiltPart } from "../viewport/buildMesh.js";
@@ -50,9 +51,11 @@ interface OrbitLike {
 export function Scene({
   mesh,
   sketchFrame,
+  instances,
 }: {
   mesh: TransferMesh | null;
   sketchFrame: DatumPlane | null;
+  instances: InstanceBody[] | null;
 }): React.JSX.Element {
   const camera = useThree((s) => s.camera);
   const controls = useThree((s) => s.controls) as OrbitLike | null;
@@ -132,7 +135,10 @@ export function Scene({
       <directionalLight intensity={0.35} color={0x88aaff} position={[-0.3, 0.3, 0.2]} />
       {/* GridHelper is XZ by default → rotate to the XY ground plane (Z-up). */}
       <gridHelper args={[0.4, 40, GRID_CENTER, GRID_CELL]} rotation={[Math.PI / 2, 0, 0]} />
-      <Part part={part} />
+      {/* Base part shows for a bare single body; the assembly layer takes over
+          when instances exist (M4) or a simulation is running (M6). */}
+      {instances == null && <Part part={part} />}
+      <Assembly mesh={mesh} instances={instances} />
       <Picking part={part} />
       <Section part={part} />
       <OriginGizmo />

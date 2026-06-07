@@ -35,7 +35,7 @@ test("mate two parts → lower the assembly → the real sim spawns + steps it",
   // The build populated selectionRefs (the box's 6 faces) — needed for addMatePick.
   await page.waitForFunction(
     () =>
-      (globalThis as { __plastiqScene?: { builtPart: unknown } }).__plastiqScene?.builtPart !=
+      (globalThis as { __plastiqViewport?: { builtPart: unknown } }).__plastiqViewport?.builtPart !=
       null,
     undefined,
     { timeout: 240_000 },

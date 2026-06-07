@@ -6,7 +6,8 @@
 // Capabilities still being ported in later stages (picking R1, gizmos R2/R3,
 // sketch camera R4, section R5, assembly/sim R6) are not wired here yet.
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import * as THREE from "three";
 import { useCadStore } from "../store/store.js";
 import { PLACEMENT_TYPE, type CadDocument } from "../store/types.js";
 import { GeometryClient } from "../worker/bridge.js";
@@ -15,8 +16,88 @@ import { Viewport3D } from "./Viewport3D.js";
 import { standardViewDirection } from "../viewport/views.js";
 import { resolveDatumPlane } from "../worker/sketchPlane.js";
 import { useSketchStore } from "../sketch/sketchStore.js";
+import { explodeInstances } from "../viewport/explode.js";
+import { findClashes, type InstanceBox } from "../viewport/interference.js";
+import { Simulator } from "../sim/simulator.js";
+import { applyJointDrives, type AssemblyModel, type Quat, type Vec3 } from "../assembly/model.js";
+import { activeBackend, type BackendName } from "@plastiq/sim";
+import type { InstanceBody } from "./Assembly.js";
 import type { DatumPlane } from "@plastiq/cad";
 import type { TransferMesh } from "../worker/protocol.js";
+
+/** Render bodies for the document assembly: mate-solved poses + joint drives,
+ * then the exploded-view spread. Empty (null) for a bare single part. */
+function explodedInstances(s: {
+  assembly: AssemblyModel;
+  jointDrive: Record<string, number>;
+  explodeFactor: number;
+}): InstanceBody[] | null {
+  if (s.assembly.instances.length === 0) return null;
+  const driven = applyJointDrives(s.assembly.instances, s.assembly.joints, s.jointDrive);
+  const list = driven.map((i) => ({
+    id: i.id,
+    position: i.pose.position,
+    orientation: i.pose.orientation,
+  }));
+  return explodeInstances(list, s.explodeFactor);
+}
+
+/** The bodies a simulation drives: the assembly instances, or one identity body
+ * for a bare part (matching the worker's synthesized body0). */
+function simBodies(assembly: AssemblyModel): InstanceBody[] {
+  return assembly.instances.length > 0
+    ? assembly.instances.map((i) => ({
+        id: i.id,
+        position: i.pose.position,
+        orientation: i.pose.orientation,
+      }))
+    : [{ id: "body0", position: [0, 0, 0], orientation: [0, 0, 0, 1] }];
+}
+
+/** Local axis-aligned bounds of the part from its tessellation vertices. */
+function localBounds(mesh: TransferMesh): { min: Vec3; max: Vec3 } {
+  const v = mesh.vertices;
+  const min: Vec3 = [Infinity, Infinity, Infinity];
+  const max: Vec3 = [-Infinity, -Infinity, -Infinity];
+  for (let i = 0; i < v.length; i += 3) {
+    for (let a = 0; a < 3; a++) {
+      const c = v[i + a]!;
+      if (c < min[a]!) min[a] = c;
+      if (c > max[a]!) max[a] = c;
+    }
+  }
+  return { min, max };
+}
+
+/** World AABB of the local box transformed by a body pose (rotate the 8 corners). */
+function worldBox(id: string, local: { min: Vec3; max: Vec3 }, body: InstanceBody): InstanceBox {
+  const q = new THREE.Quaternion(
+    body.orientation[0],
+    body.orientation[1],
+    body.orientation[2],
+    body.orientation[3],
+  );
+  const min: Vec3 = [Infinity, Infinity, Infinity];
+  const max: Vec3 = [-Infinity, -Infinity, -Infinity];
+  const corner = new THREE.Vector3();
+  for (let cx = 0; cx < 2; cx++)
+    for (let cy = 0; cy < 2; cy++)
+      for (let cz = 0; cz < 2; cz++) {
+        corner
+          .set(
+            cx ? local.max[0] : local.min[0],
+            cy ? local.max[1] : local.min[1],
+            cz ? local.max[2] : local.min[2],
+          )
+          .applyQuaternion(q);
+        const w: Vec3 = [corner.x + body.position[0], corner.y + body.position[1], corner.z + body.position[2]];
+        for (let a = 0; a < 3; a++) {
+          if (w[a]! < min[a]!) min[a] = w[a]!;
+          if (w[a]! > max[a]!) max[a] = w[a]!;
+        }
+      }
+  return { id, min, max };
+}
 
 /** Features that actually build, honouring the rollback point (FR-25). */
 function buildFeatures(s: {
@@ -40,6 +121,11 @@ export function Viewport(): React.JSX.Element {
   // The resolved plane the active sketch is "normal to" (datum or, via the worker,
   // a model face) — drives the ortho sketch camera. null when not sketching.
   const [sketchFrame, setSketchFrame] = useState<DatumPlane | null>(null);
+  // The bodies the assembly layer renders: doc poses + explode, or live sim poses.
+  // null = a bare single part (the base Part shows instead).
+  const [instances, setInstances] = useState<InstanceBody[] | null>(null);
+  // Latest tessellation, for the interference local bounds (state closure is stale).
+  const meshRef = useRef<TransferMesh | null>(null);
   const setStatus = useCadStore((s) => s.setStatus);
   const measuring = useCadStore((s) => s.measuring);
   const measureResult = useCadStore((s) => s.measureResult);
@@ -81,6 +167,7 @@ export function Viewport(): React.JSX.Element {
         const built = await client.build(doc);
         if (!cancelled) {
           setMesh(built);
+          meshRef.current = built;
           setStatus(built ? "ready" : "empty");
           const store = useCadStore.getState();
           store.setErrorFeature(null);
@@ -168,10 +255,118 @@ export function Viewport(): React.JSX.Element {
       if (s.active !== prev.active || s.model !== prev.model) resolveSketchFrame(s);
     });
 
+    // --- Assembly instances + explode + interference + simulation (M4/M6) -----
+    let simulator: Simulator | null = null;
+    let simBackend: BackendName | undefined;
+    let raf = 0;
+    const TICKS_PER_FRAME = 4;
+
+    // Render the document assembly (mate-solved + joint drives + explode); a no-op
+    // while simulating (the sim owns the poses).
+    const renderDoc = (): void => {
+      if (useCadStore.getState().simulating) return;
+      setInstances(explodedInstances(useCadStore.getState()));
+    };
+    const updatePoses = (): void => {
+      if (simulator) setInstances(simulator.poses());
+    };
+    // Lower the document, spawn the sim, render its bodies. Returns body count.
+    const buildSimulator = async (): Promise<number> => {
+      const { manifest, localCom } = await client.lower(useCadStore.getState().toDocument());
+      const bodies = simBodies(useCadStore.getState().assembly);
+      setInstances(bodies);
+      simulator = new Simulator(JSON.stringify(manifest), localCom, bodies.map((b) => b.id));
+      return simulator.start(simBackend);
+    };
+    const loop = (): void => {
+      if (!simulator) return;
+      simulator.step(TICKS_PER_FRAME);
+      updatePoses();
+      raf = requestAnimationFrame(loop);
+    };
+    const stopSimulator = (): void => {
+      if (raf) cancelAnimationFrame(raf);
+      raf = 0;
+      simulator?.stop();
+      simulator = null;
+      renderDoc();
+    };
+    // Deterministic manual control for the strict E2E (no RAF) + backend select.
+    (
+      globalThis as {
+        __plastiqSimulate?: {
+          start: () => Promise<number>;
+          step: (n: number) => void;
+          poseOf: (id: string) => { position: Vec3; orientation: Quat } | null;
+          stop: () => void;
+          setBackend: (name: BackendName) => void;
+          backend: () => BackendName | null;
+        };
+      }
+    ).__plastiqSimulate = {
+      start: buildSimulator,
+      step: (n) => {
+        if (!simulator) return;
+        simulator.step(n);
+        updatePoses();
+      },
+      poseOf: (id) => simulator?.poses().find((p) => p.id === id) ?? null,
+      stop: stopSimulator,
+      setBackend: (name) => {
+        simBackend = name;
+      },
+      backend: () => activeBackend(),
+    };
+
+    renderDoc(); // initial assembly render
+    const unsubAssembly = useCadStore.subscribe((s, prev) => {
+      // Simulate toggle (FR-41): start a RAF-driven sim, or stop and return to edit.
+      if (s.simulating !== prev.simulating) {
+        if (s.simulating) {
+          void buildSimulator().then(() => {
+            if (!cancelled && useCadStore.getState().simulating) raf = requestAnimationFrame(loop);
+          });
+        } else {
+          stopSimulator();
+        }
+        return;
+      }
+      if (s.simulating) return; // the sim owns the poses
+      if (
+        s.assembly !== prev.assembly ||
+        s.jointDrive !== prev.jointDrive ||
+        s.explodeFactor !== prev.explodeFactor
+      ) {
+        renderDoc();
+        if (s.interferences) useCadStore.getState().setInterferences(null); // moved → stale
+      }
+      // Interference check (FR-33): clashes from the ASSEMBLED instance AABBs.
+      if (s.interferenceReq !== prev.interferenceReq) {
+        const mesh = meshRef.current;
+        const a = useCadStore.getState().assembly;
+        if (mesh && a.instances.length > 0) {
+          const local = localBounds(mesh);
+          const boxes = a.instances.map((i) =>
+            worldBox(i.id, local, {
+              id: i.id,
+              position: i.pose.position,
+              orientation: i.pose.orientation,
+            }),
+          );
+          useCadStore.getState().setInterferences(findClashes(boxes));
+        } else {
+          useCadStore.getState().setInterferences([]);
+        }
+      }
+    });
+
     return () => {
       cancelled = true;
       unsub();
       unsubSketch();
+      unsubAssembly();
+      stopSimulator();
+      delete (globalThis as { __plastiqSimulate?: unknown }).__plastiqSimulate;
       client.dispose();
       delete (globalThis as { __plastiqLower?: unknown }).__plastiqLower;
       delete (globalThis as { __plastiqExport?: unknown }).__plastiqExport;
@@ -181,7 +376,7 @@ export function Viewport(): React.JSX.Element {
 
   return (
     <>
-      <Viewport3D mesh={mesh} sketchFrame={sketchFrame} />
+      <Viewport3D mesh={mesh} sketchFrame={sketchFrame} instances={instances} />
       {/* Named standard views + Fit (FR-12); the in-scene cube (viewCube.gizmo)
           handles click-to-orient. Both drive the camera via __plastiqViewport. */}
       <div

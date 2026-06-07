@@ -26,9 +26,9 @@ test.beforeEach(async ({ page }) => {
     (globalThis as { faceCount?: () => number }).faceCount = () => {
       const scene = (
         globalThis as {
-          __plastiqScene?: { builtPart: { mesh: { userData: { faceIds?: number[] } } } | null };
+          __plastiqViewport?: { builtPart: { mesh: { userData: { faceIds?: number[] } } } | null };
         }
-      ).__plastiqScene;
+      ).__plastiqViewport;
       return scene?.builtPart?.mesh.userData.faceIds?.length ?? 0;
     };
   });
@@ -41,7 +41,7 @@ test("simulate the part: it drops under gravity, then returns to edit cleanly", 
   await expect(page.getByTestId("status")).toHaveText("ready", { timeout: 240_000 });
   await page.waitForFunction(
     () =>
-      (globalThis as { __plastiqScene?: { builtPart: unknown } }).__plastiqScene?.builtPart !=
+      (globalThis as { __plastiqViewport?: { builtPart: unknown } }).__plastiqViewport?.builtPart !=
       null,
     undefined,
     { timeout: 240_000 },
@@ -74,9 +74,9 @@ test("simulate the part: it drops under gravity, then returns to edit cleanly", 
   const editY = await page.evaluate(() => {
     const scene = (
       globalThis as {
-        __plastiqScene?: { builtPart: { group: { position: { y: number } } } | null };
+        __plastiqViewport?: { builtPart: { group: { position: { y: number } } } | null };
       }
-    ).__plastiqScene;
+    ).__plastiqViewport;
     return scene?.builtPart?.group.position.y ?? null;
   });
   expect(editY).not.toBeNull();
