@@ -6,7 +6,9 @@
 import { useCadStore, type NewFeature } from "../../store/store.js";
 import { useSketchStore } from "../../sketch/sketchStore.js";
 import { editSketchFeature } from "../../sketch/editFeature.js";
-import { emptySketch, type SketchModel } from "../../sketch/model.js";
+import { emptySketch, type SketchModel, type SketchPoint } from "../../sketch/model.js";
+import { canApply, type ConstraintKind } from "../../sketch/hit.js";
+import { canDimension, type DimensionKind } from "../../sketch/dim.js";
 import {
   chamferFeature,
   draftFeature,
@@ -82,6 +84,12 @@ const selectedFeature = (ctx: ContextTarget): EditorFeature | undefined =>
   ctx.features.find((f) => f.id === ctx.selectedFeatureId);
 const selectedIndex = (ctx: ContextTarget): number =>
   ctx.features.findIndex((f) => f.id === ctx.selectedFeatureId);
+
+/** The single selected sketch point (for the fix/unfix action), if exactly one. */
+function selectedSketchPoint(ctx: ContextTarget): SketchPoint | undefined {
+  if (!ctx.sketchModel || ctx.sketchSelection.length !== 1) return undefined;
+  return ctx.sketchModel.points.find((p) => p.id === ctx.sketchSelection[0]);
+}
 
 /** Standard, non-modal editing context (not sketching, not simulating). */
 const editing = (ctx: ContextTarget): boolean => !ctx.inSketch && !ctx.simulating;
@@ -440,10 +448,87 @@ const SELECTION: ContextAction[] = [
   },
 ];
 
+// --- SKETCH: select-then-constrain / dimension / fix / finish, inside the 2D
+// sketcher (FR-16..FR-19). Only the constraints/dimensions the selection actually
+// supports are shown (canApply/canDimension), so the menu stays context-filtered. ---
+const SKETCH_CONSTRAINTS: { kind: ConstraintKind; label: string }[] = [
+  { kind: "horizontal", label: "Horizontal" },
+  { kind: "vertical", label: "Vertical" },
+  { kind: "coincident", label: "Coincident" },
+  { kind: "parallel", label: "Parallel" },
+  { kind: "perpendicular", label: "Perpendicular" },
+  { kind: "equalLength", label: "Equal length" },
+  { kind: "concentric", label: "Concentric" },
+  { kind: "tangent", label: "Tangent" },
+  { kind: "midpoint", label: "Midpoint" },
+  { kind: "pointOnObject", label: "Point on object" },
+  { kind: "symmetric", label: "Symmetric" },
+];
+
+const SKETCH_DIMENSIONS: { kind: DimensionKind; label: string }[] = [
+  { kind: "distance", label: "Distance" },
+  { kind: "hDistance", label: "Horizontal distance" },
+  { kind: "vDistance", label: "Vertical distance" },
+  { kind: "radius", label: "Radius" },
+  { kind: "diameter", label: "Diameter" },
+  { kind: "angle", label: "Angle" },
+];
+
+const SKETCH: ContextAction[] = [
+  ...SKETCH_CONSTRAINTS.map(
+    (c): ContextAction => ({
+      id: `sk-constraint-${c.kind}`,
+      group: "sketch",
+      label: () => c.label,
+      visible: (ctx) =>
+        ctx.inSketch &&
+        ctx.sketchModel != null &&
+        ctx.sketchSelection.length > 0 &&
+        canApply(c.kind, ctx.sketchModel, ctx.sketchSelection),
+      enabled: always,
+      run: () => sketch().applyConstraint(c.kind),
+    }),
+  ),
+  ...SKETCH_DIMENSIONS.map(
+    (d): ContextAction => ({
+      id: `sk-dim-${d.kind}`,
+      group: "sketch",
+      label: () => `Dimension: ${d.label}`,
+      visible: (ctx) =>
+        ctx.inSketch &&
+        ctx.sketchModel != null &&
+        ctx.sketchSelection.length > 0 &&
+        canDimension(d.kind, ctx.sketchModel, ctx.sketchSelection),
+      enabled: always,
+      run: () => sketch().addDimension(d.kind),
+    }),
+  ),
+  {
+    id: "sk-fix",
+    group: "sketch",
+    label: (ctx) => (selectedSketchPoint(ctx)?.fixed ? "Unfix point" : "Fix point"),
+    visible: (ctx) => ctx.inSketch && selectedSketchPoint(ctx) != null,
+    enabled: always,
+    run: (ctx) => {
+      const p = selectedSketchPoint(ctx);
+      if (p) sketch().toggleFix(p.id);
+    },
+  },
+  {
+    id: "sk-finish",
+    group: "sketch",
+    label: () => "Finish sketch",
+    visible: (ctx) => ctx.inSketch,
+    enabled: always,
+    run: () => sketch().exitSketch(),
+  },
+];
+
 /** Every possible option, all contexts. contextOptions.ts filters + orders these. */
 export const CONTEXT_ACTIONS: ContextAction[] = [
   ...CREATE,
   ...MODIFY,
+  ...SKETCH,
   ...FEATURE,
   ...ASSEMBLY,
   ...MATE,
@@ -451,3 +536,10 @@ export const CONTEXT_ACTIONS: ContextAction[] = [
   ...VIEW,
   ...SELECTION,
 ];
+
+/** Run a catalog action by id against a resolved target, honouring enabled().
+ * Shared by the canvas provider + the sketcher's own right-click menu. */
+export function runContextAction(id: string, target: ContextTarget): void {
+  const action = CONTEXT_ACTIONS.find((a) => a.id === id);
+  if (action && action.enabled(target)) action.run(target);
+}

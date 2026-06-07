@@ -27,7 +27,7 @@ function makeCad(over: Partial<CadSnapshot> = {}): CadSnapshot {
   };
 }
 
-const noSketch: SketchSnapshot = { active: false, selection: [], solverReady: true };
+const noSketch: SketchSnapshot = { active: false, selection: [], solverReady: true, model: null };
 const W: [number, number, number] = [1, 2, 3];
 
 function resolve(cad: CadSnapshot, hit: RightClickHit | null, sketch = noSketch) {
@@ -63,7 +63,7 @@ describe("contextSelection — resolveContextTarget (kind precedence)", () => {
   });
 
   it("sketcher open wins over everything → 'sketchEntity'", () => {
-    const sketch: SketchSnapshot = { active: true, selection: ["e1"], solverReady: true };
+    const sketch: SketchSnapshot = { active: true, selection: ["e1"], solverReady: true, model: null };
     const t = resolve(makeCad({ picks: [{ kind: "face", id: 1 }] }), { kind: "face", id: 1 }, sketch);
     expect(t.kind).toBe("sketchEntity");
     expect(t.inSketch).toBe(true);

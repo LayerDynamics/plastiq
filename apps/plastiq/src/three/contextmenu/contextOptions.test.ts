@@ -2,6 +2,17 @@ import { describe, expect, it } from "vitest";
 import type { FaceRef } from "@plastiq/cad";
 import { buildMenuSections, menuItemIds } from "./contextOptions.js";
 import type { ContextTarget } from "./contextSelection.js";
+import type { SketchModel } from "../../sketch/model.js";
+
+const lineModel: SketchModel = {
+  plane: "XY",
+  points: [
+    { id: "p1", u: 0, v: 0 },
+    { id: "p2", u: 1, v: 0 },
+  ],
+  entities: [{ id: "L1", kind: "line", a: "p1", b: "p2" }],
+  constraints: [],
+};
 
 function makeTarget(over: Partial<ContextTarget> = {}): ContextTarget {
   return {
@@ -13,6 +24,7 @@ function makeTarget(over: Partial<ContextTarget> = {}): ContextTarget {
     selectedFeatureId: null,
     inSketch: false,
     sketchSelection: [],
+    sketchModel: null,
     mateMode: false,
     matePickCount: 0,
     simulating: false,
@@ -108,6 +120,23 @@ describe("contextOptions — buildMenuSections (context-filtered)", () => {
     expect(coincident?.enabled).toBe(false);
     const twoSection = buildMenuSections(makeTarget({ kind: "body", mateMode: true, matePickCount: 2 }));
     expect(twoSection.flatMap((s) => s.items).find((i) => i.id === "mate-coincident")?.enabled).toBe(true);
+  });
+
+  it("in sketch: only the constraints the selection supports, plus finish", () => {
+    const ids = menuItemIds(
+      makeTarget({ kind: "sketchEntity", inSketch: true, sketchSelection: ["L1"], sketchModel: lineModel }),
+    );
+    // A single line supports horizontal/vertical; finish is always offered.
+    expect(ids).toEqual(expect.arrayContaining(["sk-constraint-horizontal", "sk-constraint-vertical", "sk-finish"]));
+    // Binary line constraints (need 2 lines) and 3D dress-up are hidden.
+    expect(ids).not.toContain("sk-constraint-parallel");
+    expect(ids).not.toContain("shell");
+    expect(ids).not.toContain("section");
+  });
+
+  it("in sketch with nothing selected: only finish", () => {
+    const ids = menuItemIds(makeTarget({ kind: "sketchEntity", inSketch: true, sketchSelection: [], sketchModel: lineModel }));
+    expect(ids).toEqual(["sk-finish"]);
   });
 
   it("an assembly instance: fixed/explode/interference + remove (danger)", () => {

@@ -7,13 +7,9 @@
 import { Html } from "@react-three/drei";
 import { useContextMenu } from "../contextmenu/contextMenuProvider.js";
 import { useCanvasRightClick } from "../contextmenu/useCanvasRightClick.js";
+import { ContextMenuView } from "../contextmenu/ContextMenuView.js";
 import { useGizmoPresence } from "./presence.js";
 import type { BuiltPart } from "../../viewport/buildMesh.js";
-
-const ITEM =
-  "block w-full px-3 py-1 text-left text-xs text-[#cfe] enabled:hover:bg-[#1f2a3a] disabled:opacity-40 disabled:cursor-not-allowed";
-const DANGER_ITEM =
-  "block w-full px-3 py-1 text-left text-xs text-[#ff8a8a] enabled:hover:bg-[#2a1717] disabled:opacity-40 disabled:cursor-not-allowed";
 
 export function RightClickDropdownGizmo({
   part,
@@ -33,43 +29,8 @@ export function RightClickDropdownGizmo({
 
   if (!open || !anchor) return null;
   return (
-    <Html
-      position={anchor}
-      zIndexRange={[1000, 0]}
-      pointerEvents="auto"
-      wrapperClass="ctx-menu-wrap"
-    >
-      <div
-        data-testid="canvas-context-menu"
-        role="menu"
-        className="min-w-40 select-none rounded border border-[#2a3444] bg-[#0e1219] py-1 shadow-lg"
-        onContextMenu={(e) => e.preventDefault()}
-        // Keep pointer gestures on the menu from reaching the canvas/OrbitControls
-        // underneath (which would "start" an orbit and dismiss the menu before the
-        // item's click lands). React stops the native event too, so the canvas
-        // pointerdown-to-close + controls "start" never fire for in-menu clicks.
-        onPointerDown={(e) => e.stopPropagation()}
-        onPointerUp={(e) => e.stopPropagation()}
-      >
-        {sections.map((sec, si) => (
-          <div key={sec.group}>
-            {si > 0 && <div className="my-1 border-t border-[#2a3444]" />}
-            {sec.items.map((it) => (
-              <button
-                key={it.id}
-                type="button"
-                role="menuitem"
-                data-testid={`ctx-${it.id}`}
-                disabled={!it.enabled}
-                className={it.danger ? DANGER_ITEM : ITEM}
-                onClick={() => runAction(it.id)}
-              >
-                {it.label}
-              </button>
-            ))}
-          </div>
-        ))}
-      </div>
+    <Html position={anchor} zIndexRange={[1000, 0]} pointerEvents="auto" wrapperClass="ctx-menu-wrap">
+      <ContextMenuView sections={sections} onRun={runAction} />
     </Html>
   );
 }

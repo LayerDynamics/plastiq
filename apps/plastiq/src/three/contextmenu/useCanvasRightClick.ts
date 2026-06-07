@@ -14,31 +14,12 @@ import type { BuiltPart } from "../../viewport/buildMesh.js";
 import { resolveContextTarget, type RightClickHit } from "./contextSelection.js";
 import { buildMenuSections } from "./contextOptions.js";
 import { useContextMenu } from "./contextMenuProvider.js";
+import { snapshotCad, snapshotSketch } from "./snapshot.js";
 
 /** Minimal shape of the OrbitControls instance we attach the close listener to. */
 interface ControlsLike {
   addEventListener(type: "start", fn: () => void): void;
   removeEventListener(type: "start", fn: () => void): void;
-}
-
-/** Snapshot the cad store into the pure CadSnapshot the resolver expects. */
-function cadSnapshot(): Parameters<typeof resolveContextTarget>[0]["cad"] {
-  const s = useCadStore.getState();
-  return {
-    picks: s.picks,
-    selMode: s.selMode,
-    selectionRefs: s.selectionRefs,
-    features: s.features,
-    selectedFeatureId: s.selectedFeatureId,
-    mateMode: s.mateMode,
-    matePicks: s.matePicks,
-    simulating: s.simulating,
-    simPaused: s.simPaused,
-    section: s.section,
-    measuring: s.measuring,
-    explodeFactor: s.explodeFactor,
-    gizmoMode: s.gizmoMode,
-  };
 }
 
 export function useCanvasRightClick(part: BuiltPart | null): void {
@@ -117,12 +98,8 @@ export function useCanvasRightClick(part: BuiltPart | null): void {
       }
 
       const target = resolveContextTarget({
-        cad: cadSnapshot(), // fresh — reflects the selection just applied
-        sketch: {
-          active: useSketchStore.getState().active,
-          selection: useSketchStore.getState().selection,
-          solverReady: useSketchStore.getState().solverReady,
-        },
+        cad: snapshotCad(), // fresh — reflects the selection just applied
+        sketch: snapshotSketch(),
         hit,
         worldPoint: worldPointAt(ndc),
       });

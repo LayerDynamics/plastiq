@@ -5,6 +5,7 @@
 
 import type { EditorFeature, FeatureId, Pick, SelectionMode } from "../../store/types.js";
 import type { SelectionRefs } from "../../store/store.js";
+import type { SketchModel } from "../../sketch/model.js";
 
 /** The kind of thing the menu is acting on (precedence-resolved, see below). */
 export type ContextKind =
@@ -30,6 +31,8 @@ export interface ContextTarget {
   /** Orthogonal mode flags (sketch / mate / simulate are modal overlays). */
   inSketch: boolean;
   sketchSelection: string[];
+  /** The live sketch model (for constraint/dimension applicability), null outside sketch. */
+  sketchModel: SketchModel | null;
   mateMode: boolean;
   matePickCount: number;
   simulating: boolean;
@@ -73,6 +76,7 @@ export interface SketchSnapshot {
   active: boolean;
   selection: string[];
   solverReady: boolean;
+  model: SketchModel | null;
 }
 
 /** What the right-click resolved under the cursor (null = empty space). */
@@ -121,6 +125,7 @@ export function resolveContextTarget(input: {
     selectedFeatureId: cad.selectedFeatureId,
     inSketch: sketch.active,
     sketchSelection: sketch.selection,
+    sketchModel: sketch.model,
     mateMode: cad.mateMode,
     matePickCount: cad.matePicks.length,
     simulating: cad.simulating,

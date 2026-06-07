@@ -1,6 +1,14 @@
-import { beforeEach, describe, expect, it } from "vitest";
-import type { FaceRef, EdgeRef } from "@plastiq/cad";
+import { beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { initSketchSolver, type FaceRef, type EdgeRef } from "@plastiq/cad";
 import { useCadStore } from "../../store/store.js";
+import { useSketchStore } from "../../sketch/sketchStore.js";
+
+// The sketch constraint action solves via planegcs (async wasm) — load it once so
+// the select-then-constrain test re-solves like the live sketcher.
+beforeAll(async () => {
+  await initSketchSolver();
+  useSketchStore.getState().setSolverReady(true);
+});
 import { CONTEXT_ACTIONS } from "./config.js";
 import type { ContextAction } from "./config.js";
 import type { ContextTarget } from "./contextSelection.js";
@@ -15,6 +23,7 @@ function makeTarget(over: Partial<ContextTarget> = {}): ContextTarget {
     selectedFeatureId: null,
     inSketch: false,
     sketchSelection: [],
+    sketchModel: null,
     mateMode: false,
     matePickCount: 0,
     simulating: false,
@@ -143,5 +152,28 @@ describe("config — run() invokes the real store/dressup action", () => {
     const before = useCadStore.getState().simStepReq;
     byId("sim-step").run(makeTarget({ simulating: true, simPaused: true }));
     expect(useCadStore.getState().simStepReq).toBe(before + 1);
+  });
+
+  it("sk-finish exits the sketch (shared exitSketch)", () => {
+    const sk = useSketchStore.getState();
+    sk.setSolverReady(true);
+    sk.enterSketch("XY");
+    expect(useSketchStore.getState().active).toBe(true);
+    byId("sk-finish").run(makeTarget({ inSketch: true }));
+    expect(useSketchStore.getState().active).toBe(false);
+  });
+
+  it("a sketch constraint applies to the live model (select-then-constrain)", () => {
+    const sk = useSketchStore.getState();
+    sk.setSolverReady(true);
+    sk.enterSketch("XY");
+    const a = useSketchStore.getState().addPoint({ u: 0, v: 0 });
+    const b = useSketchStore.getState().addPoint({ u: 1, v: 0.1 });
+    useSketchStore.getState().addEntity({ id: "L1", kind: "line", a, b });
+    useSketchStore.getState().setSelection(["L1"]);
+    const before = useSketchStore.getState().model.constraints.length;
+    byId("sk-constraint-horizontal").run(makeTarget({ inSketch: true, sketchSelection: ["L1"] }));
+    expect(useSketchStore.getState().model.constraints.length).toBe(before + 1);
+    useSketchStore.getState().exitSketch();
   });
 });

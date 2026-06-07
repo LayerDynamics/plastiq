@@ -14,6 +14,7 @@ function makeTarget(over: Partial<ContextTarget> = {}): ContextTarget {
     selectedFeatureId: null,
     inSketch: false,
     sketchSelection: [],
+    sketchModel: null,
     mateMode: false,
     matePickCount: 0,
     simulating: false,

@@ -53,6 +53,7 @@ export default defineConfig({
         // (e2e). The pure modules it drives (contextSelection/contextOptions/
         // config/contextMenuProvider) stay measured + unit-tested.
         "apps/*/src/three/contextmenu/useCanvasRightClick.ts",
+        "apps/*/src/three/contextmenu/snapshot.ts",
       ],
       // Baseline floor, set a couple points below the measured current
       // (stmts 82.5 / branch 70.5 / funcs 83.1 / lines 85.9) so the build fails

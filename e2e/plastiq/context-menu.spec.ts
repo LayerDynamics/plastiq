@@ -93,6 +93,73 @@ test("right-clicking a face opens its menu, selects it, and Shell runs", async (
   await expect(page.getByTestId("canvas-context-menu")).toBeHidden();
 });
 
+test("right-clicking in the sketcher offers the applicable constraints", async ({ page }) => {
+  await page.goto("/");
+  await expect(page.getByTestId("status")).toHaveText("ready", { timeout: 240_000 });
+
+  // Enter a sketch and draw + select a line through the store seam (real solver).
+  await expect(page.getByTestId("enter-sketch")).toBeEnabled({ timeout: 240_000 });
+  await page.getByTestId("enter-sketch").click();
+  await expect(page.getByTestId("sketcher")).toBeVisible();
+  await page.evaluate(() => {
+    const st = () =>
+      (
+        globalThis as {
+          __sketchStore?: {
+            getState(): {
+              setTool(t: string): void;
+              clickAt(u: number, v: number): void;
+              cancelGesture(): void;
+              setSelection(ids: string[]): void;
+              model: { entities: { id: string; kind: string }[]; constraints: unknown[] };
+            };
+          };
+        }
+      ).__sketchStore!.getState();
+    st().setTool("line");
+    st().clickAt(0, 0);
+    st().clickAt(0.03, 0);
+    st().cancelGesture();
+    const line = st().model.entities.find((e) => e.kind === "line")!;
+    st().setSelection([line.id]);
+  });
+
+  // Right-click the sketch surface → sketch context menu with line constraints.
+  const svg = page.getByTestId("sketch-svg");
+  const box = (await svg.boundingBox())!;
+  await page.evaluate(
+    ([x, y]) => {
+      document
+        .querySelector('[data-testid="sketch-svg"]')!
+        .dispatchEvent(
+          new MouseEvent("contextmenu", { clientX: x, clientY: y, bubbles: true, cancelable: true }),
+        );
+    },
+    [box.x + box.width / 2, box.y + box.height / 2],
+  );
+
+  await expect(page.getByTestId("sketch-context-menu")).toBeVisible();
+  await expect(page.getByTestId("ctx-sk-constraint-horizontal")).toBeVisible();
+  await expect(page.getByTestId("ctx-sk-finish")).toBeVisible();
+
+  // Apply Horizontal → a constraint is added to the live model.
+  const constraintsBefore = await page.evaluate(
+    () =>
+      (globalThis as { __sketchStore?: { getState(): { model: { constraints: unknown[] } } } })
+        .__sketchStore!.getState().model.constraints.length,
+  );
+  await page.getByTestId("ctx-sk-constraint-horizontal").click();
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          (globalThis as { __sketchStore?: { getState(): { model: { constraints: unknown[] } } } })
+            .__sketchStore!.getState().model.constraints.length,
+      ),
+    )
+    .toBe(constraintsBefore + 1);
+});
+
 test("right-clicking empty space shows the global menu and Escape dismisses it", async ({ page }) => {
   const b = await bootAndFit(page);
 

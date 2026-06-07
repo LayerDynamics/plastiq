@@ -4,7 +4,7 @@
 // opposite sides of the reconciler boundary that React Context does not cross.
 
 import { create } from "zustand";
-import { CONTEXT_ACTIONS } from "./config.js";
+import { runContextAction } from "./config.js";
 import type { ContextTarget } from "./contextSelection.js";
 import type { MenuSection } from "./contextOptions.js";
 
@@ -31,12 +31,9 @@ export const useContextMenu = create<ContextMenuState>((set, get) => ({
   close: () => set({ open: false, anchor: null, target: null, sections: [] }),
   runAction: (id) => {
     const { target } = get();
-    if (target) {
-      const action = CONTEXT_ACTIONS.find((a) => a.id === id);
-      // Honour the same precondition the menu rendered disabled — never run a
-      // greyed item even if something dispatches it.
-      if (action && action.enabled(target)) action.run(target);
-    }
+    // Honour the same precondition the menu rendered disabled — never run a
+    // greyed item even if something dispatches it.
+    if (target) runContextAction(id, target);
     get().close();
   },
 }));
