@@ -264,6 +264,15 @@ const RIBBON_ONLY: ActionDef[] = [
     enabled: always,
     run: () => cad().addInstance(),
   },
+  {
+    id: "mate-mode",
+    label: (ctx) => (ctx.mateMode ? "Exit mate" : "Mate"),
+    icon: "⚯",
+    enabled: always,
+    active: (ctx) => ctx.mateMode,
+    // Enter/leave mate authoring; the two-pick + apply flow lives in AssemblyTree.
+    run: (ctx) => cad().setMateMode(!ctx.mateMode),
+  },
 ];
 
 /** Re-expose each context-menu action as an ActionDef (drop menu-only fields,

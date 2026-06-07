@@ -101,6 +101,9 @@ export const RIBBON: Record<Workspace, RibbonTab[]> = {
       title: "Assemble",
       panels: [
         { title: "Components", items: [a("insert-instance")] },
+        // Mate authoring itself (pick two faces → apply) lives in AssemblyTree; this
+        // button just enters/leaves that mode.
+        { title: "Relationships", items: [a("mate-mode")] },
         { title: "Position", items: [a("explode")] },
         { title: "Inspect", items: [a("interference"), a("measure"), w("sectionControl")] },
       ],

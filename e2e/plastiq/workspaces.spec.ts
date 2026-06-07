@@ -58,6 +58,53 @@ test("the switcher flips workspaces and reconfigures the ribbon", async ({ page 
   await expect.poll(() => simulating(page)).toBe(false);
 });
 
+test("the Assemble workspace runs insert / explode / interference / mate mode", async ({ page }) => {
+  await bootReady(page);
+  await page.getByTestId("workspace-switcher").selectOption("assemble");
+  await expect(page.getByTestId("ribbon-tab-assemble")).toBeVisible();
+
+  // Insert two instances.
+  await page.getByTestId("ribbon-insert-instance").click();
+  await page.getByTestId("ribbon-insert-instance").click();
+  await expect.poll(() => instanceCount(page)).toBe(2);
+
+  // Explode spreads them (factor > 0).
+  await page.getByTestId("ribbon-explode").click();
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          (globalThis as { __cadStore?: { getState(): { explodeFactor: number } } }).__cadStore!
+            .getState().explodeFactor,
+      ),
+    )
+    .toBeGreaterThan(0);
+
+  // Interference check populates a result (clashing pairs, or [] when clear).
+  await page.getByTestId("ribbon-interference").click();
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          (globalThis as { __cadStore?: { getState(): { interferences: unknown } } }).__cadStore!
+            .getState().interferences !== null,
+      ),
+    )
+    .toBe(true);
+
+  // Mate mode toggles on (the two-pick authoring then happens in AssemblyTree).
+  await page.getByTestId("ribbon-mate-mode").click();
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          (globalThis as { __cadStore?: { getState(): { mateMode: boolean } } }).__cadStore!
+            .getState().mateMode,
+      ),
+    )
+    .toBe(true);
+});
+
 test("the ribbon fits its width without horizontal scrolling", async ({ page }) => {
   await bootReady(page);
   const fits = await page.evaluate(() => {
