@@ -141,11 +141,14 @@ export function Viewport(): React.JSX.Element {
     ).__plastiqExport = (format) =>
       client.exportFile(useCadStore.getState().toDocument(), format);
 
-    // Project thumbnails (M5.3): read back the preserved drawing buffer.
-    useProjectsStore.getState().setThumbnailProvider(() => {
+    // Projects (M5): start the store (loads SQLite, arms crash-recovery autosave,
+    // FR-40) and let Save capture the viewport canvas as the thumbnail (M5.3).
+    const projects = useProjectsStore.getState();
+    projects.setThumbnailProvider(() => {
       const c = document.querySelector("#viewport-root canvas") as HTMLCanvasElement | null;
       return c ? c.toDataURL("image/png") : null;
     });
+    void projects.init();
 
     let cancelled = false;
     let building = false;
