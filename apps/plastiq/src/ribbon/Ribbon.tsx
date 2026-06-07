@@ -14,6 +14,7 @@ import { RibbonButton } from "./RibbonButton.js";
 import { WorkspaceSwitcher } from "./WorkspaceSwitcher.js";
 import { SketchLauncher } from "./widgets/SketchLauncher.js";
 import { SectionControl } from "./widgets/SectionControl.js";
+import { SimReadout } from "./widgets/SimReadout.js";
 import { ProjectsMenu } from "../app/ProjectsMenu.js";
 
 const SELMODES = ["selmode-face", "selmode-edge", "selmode-vertex", "selmode-body"];
@@ -85,11 +86,9 @@ export function Ribbon(): React.JSX.Element {
 
   const renderItem = (item: RibbonItem, i: number): React.JSX.Element | null => {
     if (item.kind === "widget") {
-      return item.widget === "sketchLauncher" ? (
-        <SketchLauncher key="sketchLauncher" />
-      ) : (
-        <SectionControl key="sectionControl" />
-      );
+      if (item.widget === "sketchLauncher") return <SketchLauncher key="sketchLauncher" />;
+      if (item.widget === "simReadout") return <SimReadout key="simReadout" />;
+      return <SectionControl key="sectionControl" />;
     }
     return <RibbonButton key={item.id ?? i} id={item.id} ctx={ctx} />;
   };

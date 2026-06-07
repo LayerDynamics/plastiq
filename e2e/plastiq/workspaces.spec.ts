@@ -105,6 +105,26 @@ test("the Assemble workspace runs insert / explode / interference / mate mode", 
     .toBe(true);
 });
 
+test("the Simulate workspace shows playback + the elapsed-time readout", async ({ page }) => {
+  await bootReady(page);
+  await page.getByTestId("workspace-switcher").selectOption("simulate");
+  await expect(page.getByTestId("ribbon-tab-simulate")).toBeVisible();
+  await expect.poll(() => simulating(page)).toBe(true);
+  await expect(page.getByTestId("sim-time")).toBeVisible();
+
+  // Pause, then step one frame → the elapsed sim time advances.
+  const ticks = (): Promise<number> =>
+    page.evaluate(
+      () =>
+        (globalThis as { __cadStore?: { getState(): { simTicks: number } } }).__cadStore!.getState()
+          .simTicks,
+    );
+  await page.getByTestId("ribbon-sim-pause").click();
+  const t0 = await ticks();
+  await page.getByTestId("ribbon-sim-step").click();
+  await expect.poll(ticks).toBeGreaterThan(t0);
+});
+
 test("the ribbon fits its width without horizontal scrolling", async ({ page }) => {
   await bootReady(page);
   const fits = await page.evaluate(() => {

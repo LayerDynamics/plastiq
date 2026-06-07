@@ -7,7 +7,7 @@
 import type { Workspace } from "../store/types.js";
 
 /** Special controls that aren't single action buttons. */
-export type WidgetKey = "sketchLauncher" | "sectionControl";
+export type WidgetKey = "sketchLauncher" | "sectionControl" | "simReadout";
 
 export type RibbonItem = { kind: "action"; id: string } | { kind: "widget"; widget: WidgetKey };
 
@@ -114,7 +114,10 @@ export const RIBBON: Record<Workspace, RibbonTab[]> = {
       id: "simulate",
       title: "Simulate",
       panels: [
-        { title: "Playback", items: [a("sim-pause"), a("sim-step"), a("sim-rewind")] },
+        {
+          title: "Playback",
+          items: [a("sim-pause"), a("sim-step"), a("sim-rewind"), w("simReadout")],
+        },
         { title: "Inspect", items: [a("measure")] },
       ],
     },

@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { ACTIONS } from "../actions/registry.js";
 import { RIBBON, RIBBON_ICONS, type RibbonItem } from "./ribbonConfig.js";
 
-const KNOWN_WIDGETS = new Set(["sketchLauncher", "sectionControl"]);
+const KNOWN_WIDGETS = new Set(["sketchLauncher", "sectionControl", "simReadout"]);
 
 function actionIds(items: RibbonItem[]): string[] {
   return items.filter((i) => i.kind === "action").map((i) => (i as { id: string }).id);

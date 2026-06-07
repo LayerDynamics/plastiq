@@ -262,6 +262,7 @@ export function Viewport(): React.JSX.Element {
     let simulator: Simulator | null = null;
     let simBackend: BackendName | undefined;
     let raf = 0;
+    let simTicks = 0; // elapsed fixed ticks of the running sim (FR-41 playback)
     const TICKS_PER_FRAME = 4;
 
     // Render the document assembly (mate-solved + joint drives + explode); a no-op
@@ -275,6 +276,7 @@ export function Viewport(): React.JSX.Element {
     };
     // Lower the document, spawn the sim, render its bodies. Returns body count.
     const buildSimulator = async (): Promise<number> => {
+      simTicks = 0; // a fresh run starts at t=0
       const { manifest, localCom } = await client.lower(useCadStore.getState().toDocument());
       const bodies = simBodies(useCadStore.getState().assembly);
       setInstances(bodies);
@@ -282,10 +284,35 @@ export function Viewport(): React.JSX.Element {
       return simulator.start(simBackend);
     };
     const loop = (): void => {
+      if (!simulator) {
+        raf = 0;
+        return;
+      }
+      // Respect Pause (FR-41): keep the RAF alive so Resume/Step still work, but only
+      // advance + publish the elapsed tick count while running.
+      if (!useCadStore.getState().simPaused) {
+        simulator.step(TICKS_PER_FRAME);
+        simTicks += TICKS_PER_FRAME;
+        useCadStore.getState().setSimTicks(simTicks);
+        updatePoses();
+      }
+      raf = requestAnimationFrame(loop);
+    };
+    // Step exactly one frame (used while paused, FR-41).
+    const stepOnce = (): void => {
       if (!simulator) return;
       simulator.step(TICKS_PER_FRAME);
+      simTicks += TICKS_PER_FRAME;
+      useCadStore.getState().setSimTicks(simTicks);
       updatePoses();
-      raf = requestAnimationFrame(loop);
+    };
+    // Rewind to t=0 (FR-41): rebuild a fresh sim; the running loop picks up the new
+    // simulator, and buildSimulator re-seeds the bodies + resets simTicks.
+    const rewindSimulator = async (): Promise<void> => {
+      const old = simulator;
+      await buildSimulator();
+      old?.stop();
+      updatePoses();
     };
     const stopSimulator = (): void => {
       if (raf) cancelAnimationFrame(raf);
@@ -334,6 +361,9 @@ export function Viewport(): React.JSX.Element {
         }
         return;
       }
+      // Playback one-shots while simulating (FR-41): step one frame / rewind to t=0.
+      if (s.simStepReq !== prev.simStepReq) stepOnce();
+      if (s.simRewindReq !== prev.simRewindReq && s.simulating) void rewindSimulator();
       if (s.simulating) return; // the sim owns the poses
       if (
         s.assembly !== prev.assembly ||
