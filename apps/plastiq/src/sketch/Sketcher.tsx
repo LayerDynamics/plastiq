@@ -828,6 +828,7 @@ export function Sketcher(): React.JSX.Element | null {
             <ContextMenuView
               testid="sketch-context-menu"
               sections={ctxMenu.sections}
+              onClose={() => setCtxMenu(null)}
               onRun={(id) => {
                 runContextAction(id, ctxMenu.target);
                 setCtxMenu(null);

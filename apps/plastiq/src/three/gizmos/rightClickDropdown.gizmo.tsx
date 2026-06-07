@@ -23,6 +23,7 @@ export function RightClickDropdownGizmo({
   const anchor = useContextMenu((s) => s.anchor);
   const sections = useContextMenu((s) => s.sections);
   const runAction = useContextMenu((s) => s.runAction);
+  const close = useContextMenu((s) => s.close);
 
   // E2E seam: __plastiqViewport.gizmos.rightClickDropdown reflects open state.
   useGizmoPresence("rightClickDropdown", open);
@@ -30,7 +31,7 @@ export function RightClickDropdownGizmo({
   if (!open || !anchor) return null;
   return (
     <Html position={anchor} zIndexRange={[1000, 0]} pointerEvents="auto" wrapperClass="ctx-menu-wrap">
-      <ContextMenuView sections={sections} onRun={runAction} />
+      <ContextMenuView sections={sections} onRun={runAction} onClose={close} />
     </Html>
   );
 }
