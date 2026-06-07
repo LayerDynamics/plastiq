@@ -135,7 +135,10 @@ const CREATE: ContextAction[] = [
     label: () => "Extrude profile",
     visible: (ctx) => editing(ctx) && ctx.hasProfile && (ctx.kind === "empty" || ctx.kind === "body"),
     enabled: (ctx) => ctx.hasProfile,
-    run: () => cad().addFeature({ type: "extrude", params: { height: EXTRUDE_H } }),
+    run: () => {
+      const id = cad().addFeature({ type: "extrude", params: { height: EXTRUDE_H } });
+      cad().setActiveFeatureEdit({ id, param: "height", start: EXTRUDE_H });
+    },
   },
   {
     id: "cut",
