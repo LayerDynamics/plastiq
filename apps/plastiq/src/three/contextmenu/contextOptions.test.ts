@@ -134,9 +134,9 @@ describe("contextOptions — buildMenuSections (context-filtered)", () => {
     expect(ids).not.toContain("section");
   });
 
-  it("in sketch with nothing selected: only finish", () => {
+  it("in sketch with nothing selected: only finish + cancel", () => {
     const ids = menuItemIds(makeTarget({ kind: "sketchEntity", inSketch: true, sketchSelection: [], sketchModel: lineModel }));
-    expect(ids).toEqual(["sk-finish"]);
+    expect(ids).toEqual(["sk-finish", "sk-cancel"]);
   });
 
   it("an assembly instance: fixed/explode/interference + remove (danger)", () => {

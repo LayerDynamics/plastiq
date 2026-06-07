@@ -4,7 +4,7 @@
 // milestones (viewport = M0.5/three.js, feature tree = M2, properties = M2).
 
 import { useEffect, useRef, useState } from "react";
-import { Toolbar } from "./Toolbar.js";
+import { Ribbon } from "../ribbon/Ribbon.js";
 import { StatusBar } from "./StatusBar.js";
 import { FeatureTree } from "./FeatureTree.js";
 import { AssemblyTree } from "./AssemblyTree.js";
@@ -143,12 +143,12 @@ export function App(): React.JSX.Element {
 
   return (
     <div className="grid h-full grid-cols-1 grid-rows-[auto_1fr_auto] bg-[#0b0d12] text-[#cfe]">
-      {/* Toolbar + (optional) recovery banner share one grid row, so the `1fr`
-          row is always the viewport — RecoveryBanner returning null must not let
-          the StatusBar fall into the stretchy row. min-w-0 + overflow-x-auto keep
-          the dense toolbar from widening the page (it scrolls within its row). */}
-      <div className="min-w-0 overflow-x-auto">
-        <Toolbar />
+      {/* Ribbon + (optional) recovery banner share one grid row, so the `1fr` row
+          is always the viewport. The ribbon is workspace+tab scoped, so it fits the
+          width without horizontal scrolling (no overflow-x-auto) — the fix for the
+          old dense, scrolling toolbar. */}
+      <div className="min-w-0">
+        <Ribbon />
         <RecoveryBanner />
       </div>
       <div className="flex min-h-0 min-w-0">

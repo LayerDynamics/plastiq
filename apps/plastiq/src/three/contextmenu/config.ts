@@ -5,10 +5,11 @@
 
 import { useCadStore, type NewFeature } from "../../store/store.js";
 import { useSketchStore } from "../../sketch/sketchStore.js";
-import { editSketchFeature } from "../../sketch/editFeature.js";
+import { editSketchFeature, finishSketchFeature } from "../../sketch/editFeature.js";
 import { emptySketch, type SketchModel, type SketchPoint } from "../../sketch/model.js";
 import { canApply, type ConstraintKind } from "../../sketch/hit.js";
 import { canDimension, type DimensionKind } from "../../sketch/dim.js";
+import { extractProfile } from "../../sketch/profile.js";
 import {
   chamferFeature,
   draftFeature,
@@ -46,6 +47,8 @@ export interface ContextAction {
   visible: (ctx: ContextTarget) => boolean;
   /** Whether it can be invoked now (else shown greyed/disabled). */
   enabled: (ctx: ContextTarget) => boolean;
+  /** Optional toggle-active predicate (e.g. gizmo mode) — surfaced by the ribbon. */
+  active?: (ctx: ContextTarget) => boolean;
   /** Perform the action (calls the real store/dressup fn). */
   run: (ctx: ContextTarget) => void;
 }
@@ -131,7 +134,7 @@ const CREATE: ContextAction[] = [
     group: "create",
     label: () => "Extrude profile",
     visible: (ctx) => editing(ctx) && ctx.hasProfile && (ctx.kind === "empty" || ctx.kind === "body"),
-    enabled: always,
+    enabled: (ctx) => ctx.hasProfile,
     run: () => cad().addFeature({ type: "extrude", params: { height: EXTRUDE_H } }),
   },
   {
@@ -139,7 +142,7 @@ const CREATE: ContextAction[] = [
     group: "create",
     label: () => "Cut with profile",
     visible: (ctx) => editing(ctx) && ctx.hasProfile && (ctx.kind === "empty" || ctx.kind === "body"),
-    enabled: always,
+    enabled: (ctx) => ctx.hasProfile,
     run: () => cad().addFeature({ type: "cut", params: { depth: CUT_D } }),
   },
   {
@@ -147,7 +150,7 @@ const CREATE: ContextAction[] = [
     group: "create",
     label: () => "Revolve profile",
     visible: (ctx) => editing(ctx) && ctx.hasProfile && (ctx.kind === "empty" || ctx.kind === "body"),
-    enabled: always,
+    enabled: (ctx) => ctx.hasProfile,
     run: () => cad().addFeature({ type: "revolve", params: { angle: Math.PI * 2, ay: 1 } }),
   },
 ];
@@ -208,7 +211,7 @@ const MODIFY: ContextAction[] = [
     group: "modify",
     label: () => "Pad (two-sided)",
     visible: (ctx) => editing(ctx) && ctx.hasProfile && (ctx.kind === "empty" || ctx.kind === "body"),
-    enabled: always,
+    enabled: (ctx) => ctx.hasProfile,
     run: () => addOrStatus(extrudeTwoSidedFeature(PAD_H, PAD_H), "Pad"),
   },
   {
@@ -217,6 +220,7 @@ const MODIFY: ContextAction[] = [
     label: () => "Move (gizmo)",
     visible: (ctx) => editing(ctx) && ctx.kind === "body",
     enabled: always,
+    active: (ctx) => ctx.gizmoMode === "translate",
     run: () => cad().setGizmoMode("translate"),
   },
   {
@@ -225,6 +229,7 @@ const MODIFY: ContextAction[] = [
     label: () => "Rotate (gizmo)",
     visible: (ctx) => editing(ctx) && ctx.kind === "body",
     enabled: always,
+    active: (ctx) => ctx.gizmoMode === "rotate",
     run: () => cad().setGizmoMode("rotate"),
   },
 ];
@@ -443,7 +448,7 @@ const SELECTION: ContextAction[] = [
     group: "selection",
     label: () => "Clear selection",
     visible: (ctx) => !ctx.inSketch && ctx.picks.length > 0,
-    enabled: always,
+    enabled: (ctx) => ctx.picks.length > 0,
     run: () => cad().clearPicks(),
   },
 ];
@@ -518,6 +523,16 @@ const SKETCH: ContextAction[] = [
     id: "sk-finish",
     group: "sketch",
     label: () => "Finish sketch",
+    visible: (ctx) => ctx.inSketch,
+    // Only commit when a closed profile can be derived (matches the Sketcher's
+    // Finish gating); finishSketchFeature stays in the sketch otherwise.
+    enabled: (ctx) => ctx.sketchModel != null && extractProfile(ctx.sketchModel) != null,
+    run: () => finishSketchFeature(),
+  },
+  {
+    id: "sk-cancel",
+    group: "sketch",
+    label: () => "Cancel sketch",
     visible: (ctx) => ctx.inSketch,
     enabled: always,
     run: () => sketch().exitSketch(),

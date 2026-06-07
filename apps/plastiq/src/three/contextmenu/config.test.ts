@@ -154,13 +154,34 @@ describe("config — run() invokes the real store/dressup action", () => {
     expect(useCadStore.getState().simStepReq).toBe(before + 1);
   });
 
-  it("sk-finish exits the sketch (shared exitSketch)", () => {
+  it("sk-finish COMMITS the active sketch (persists a profile, not discard)", () => {
     const sk = useSketchStore.getState();
     sk.setSolverReady(true);
     sk.enterSketch("XY");
-    expect(useSketchStore.getState().active).toBe(true);
+    // Draw a closed triangle so a profile can be extracted.
+    const a = useSketchStore.getState().addPoint({ u: 0, v: 0 });
+    const b = useSketchStore.getState().addPoint({ u: 0.03, v: 0 });
+    const c = useSketchStore.getState().addPoint({ u: 0.015, v: 0.02 });
+    useSketchStore.getState().addEntity({ id: "L1", kind: "line", a, b });
+    useSketchStore.getState().addEntity({ id: "L2", kind: "line", a: b, b: c });
+    useSketchStore.getState().addEntity({ id: "L3", kind: "line", a: c, b: a });
+    const before = useCadStore.getState().features.length;
     byId("sk-finish").run(makeTarget({ inSketch: true }));
     expect(useSketchStore.getState().active).toBe(false);
+    expect(useCadStore.getState().features.length).toBe(before + 1);
+    const committed = useCadStore.getState().features.at(-1);
+    expect(committed?.type).toBe("sketch");
+    expect(committed?.data?.["profile"]).toBeDefined();
+  });
+
+  it("sk-cancel discards the active sketch (commits nothing)", () => {
+    const sk = useSketchStore.getState();
+    sk.setSolverReady(true);
+    sk.enterSketch("XY");
+    const before = useCadStore.getState().features.length;
+    byId("sk-cancel").run(makeTarget({ inSketch: true }));
+    expect(useSketchStore.getState().active).toBe(false);
+    expect(useCadStore.getState().features.length).toBe(before);
   });
 
   it("a sketch constraint applies to the live model (select-then-constrain)", () => {
