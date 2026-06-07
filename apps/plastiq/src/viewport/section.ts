@@ -28,3 +28,16 @@ export function sectionPlane(min: number, max: number, axis: SectionAxis, t: num
     axis === "x" ? [-1, 0, 0] : axis === "y" ? [0, -1, 0] : [0, 0, -1];
   return { normal, constant: offset };
 }
+
+/**
+ * Inverse of {@link sectionPlane}'s offset map: given a world-space coordinate
+ * `value` along the axis (e.g. the dragged gizmo handle's position), return the
+ * fraction `t ∈ [0,1]` of the extent `[min, max]` it represents. This is the
+ * draggable section gizmo's write-back: handle position → store `t`. A degenerate
+ * extent (`max === min`) maps everything to 0. Result is clamped to [0,1].
+ */
+export function sectionTFromOffset(min: number, max: number, value: number): number {
+  const span = max - min;
+  if (span === 0) return 0;
+  return clamp01((value - min) / span);
+}

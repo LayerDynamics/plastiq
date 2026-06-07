@@ -136,11 +136,14 @@ export function useCanvasRightClick(part: BuiltPart | null): void {
       invalidate();
     };
 
-    // Dismiss: a fresh pointer gesture on the canvas (outside the Html menu), the
-    // Escape key, or the start of an orbit. pointerdown fires before contextmenu,
-    // so the opening right-click's own pointerdown lands while the menu is closed
-    // (a no-op); the next gesture closes, and a right-click reopens via contextmenu.
-    const onPointerDown = (): void => close();
+    // Dismiss: a fresh LEFT/MIDDLE pointer gesture on the canvas (outside the Html
+    // menu), the Escape key, or the start of an orbit. The RIGHT button is the
+    // menu's own open gesture (button 2 → contextmenu), so it must NOT close —
+    // otherwise the opening right-click immediately dismisses the menu it just
+    // opened. Left/middle clicks elsewhere still close it.
+    const onPointerDown = (e: PointerEvent): void => {
+      if (e.button !== 2) close();
+    };
     const onKey = (e: KeyboardEvent): void => {
       if (e.key === "Escape") close();
     };

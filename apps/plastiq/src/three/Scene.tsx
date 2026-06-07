@@ -47,6 +47,9 @@ function publishBuiltPart(part: BuiltPart | null): void {
 interface OrbitLike {
   target: THREE.Vector3;
   update(): void;
+  /** The DOM element OrbitControls binds pointer events to (the r3f event
+   * source — the canvas's parent, NOT the canvas itself). */
+  domElement?: Element;
 }
 
 export function Scene({
@@ -60,6 +63,24 @@ export function Scene({
 }): React.JSX.Element {
   const camera = useThree((s) => s.camera);
   const controls = useThree((s) => s.controls) as OrbitLike | null;
+
+  // three-stdlib's OrbitControls calls `domElement.releasePointerCapture(id)` on
+  // pointerup even though it never calls setPointerCapture — so for any pointerup
+  // with no live capture (the common case here) the Pointer Events spec makes that
+  // throw `NotFoundError`. Guard the EXACT element OrbitControls uses (its
+  // `domElement`, the r3f-connected parent — not gl.domElement) so it only releases
+  // a capture that actually exists. Restored on teardown.
+  useEffect(() => {
+    const el = controls?.domElement;
+    if (!el) return;
+    const native = el.releasePointerCapture.bind(el);
+    el.releasePointerCapture = (id: number): void => {
+      if (el.hasPointerCapture(id)) native(id);
+    };
+    return () => {
+      el.releasePointerCapture = native;
+    };
+  }, [controls]);
 
   // Build the renderable part once per tessellation; shared by render + picking +
   // highlight (same object), and published for the test seams. Disposed on swap.
@@ -156,7 +177,16 @@ export function Scene({
       {/* While sketching, render through the plane-locked ortho camera and lock
           orbit (the 2D overlay owns interaction). */}
       <SketchCamera frame={sketchFrame} />
-      <OrbitControls makeDefault enableDamping enabled={sketchFrame == null} target={[0, 0, 0.02]} />
+      {/* Left = orbit, middle = pan, wheel = zoom. The RIGHT button is deliberately
+          left unbound so it's free for the right-click context menu (otherwise
+          OrbitControls' default right-drag pan steals the contextmenu gesture). */}
+      <OrbitControls
+        makeDefault
+        enableDamping
+        enabled={sketchFrame == null}
+        target={[0, 0, 0.02]}
+        mouseButtons={{ LEFT: THREE.MOUSE.ROTATE, MIDDLE: THREE.MOUSE.PAN }}
+      />
     </>
   );
 }
