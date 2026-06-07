@@ -160,6 +160,56 @@ test("right-clicking in the sketcher offers the applicable constraints", async (
     .toBe(constraintsBefore + 1);
 });
 
+test("right-clicking an assembly instance offers instance actions", async ({ page }) => {
+  await page.goto("/");
+  await expect(page.locator("#viewport-root canvas")).toBeVisible();
+  await expect(page.getByTestId("status")).toHaveText("ready", { timeout: 240_000 });
+  await page.waitForFunction(
+    () =>
+      (globalThis as { __plastiqViewport?: { builtPart: unknown } }).__plastiqViewport?.builtPart !=
+      null,
+    undefined,
+    { timeout: 240_000 },
+  );
+
+  // Insert a component instance; the assembly layer renders it (base part hides).
+  await page.evaluate(() =>
+    (globalThis as { __cadStore?: { getState(): { addInstance(): string } } }).__cadStore!
+      .getState()
+      .addInstance(),
+  );
+  await page.waitForFunction(
+    () =>
+      ((globalThis as { __plastiqViewport?: { instanceGroups?: unknown[] } }).__plastiqViewport
+        ?.instanceGroups?.length ?? 0) > 0,
+    undefined,
+    { timeout: 240_000 },
+  );
+  await page.evaluate(() => {
+    (globalThis as { __plastiqViewport?: { fitToView(): void } }).__plastiqViewport?.fitToView();
+  });
+  await page.waitForTimeout(700);
+
+  const box = (await page.locator("#viewport-root canvas").boundingBox())!;
+  await rightClick(page, box.x + box.width / 2, box.y + box.height / 2);
+
+  await expect(page.getByTestId("canvas-context-menu")).toBeVisible();
+  await expect(page.getByTestId("ctx-instance-fixed")).toBeVisible();
+  await expect(page.getByTestId("ctx-explode")).toBeVisible();
+  await expect(page.getByTestId("ctx-shell")).toHaveCount(0); // not a base-part face context
+
+  // Toggle the instance's ground flag via the menu.
+  const fixedOf = (): Promise<boolean> =>
+    page.evaluate(
+      () =>
+        (globalThis as { __cadStore?: { getState(): { assembly: { instances: { fixed: boolean }[] } } } })
+          .__cadStore!.getState().assembly.instances[0]!.fixed,
+    );
+  const before = await fixedOf();
+  await page.getByTestId("ctx-instance-fixed").click();
+  await expect.poll(fixedOf).toBe(!before);
+});
+
 test("right-clicking empty space shows the global menu and Escape dismisses it", async ({ page }) => {
   const b = await bootAndFit(page);
 

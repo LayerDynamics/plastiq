@@ -46,53 +46,82 @@ export function useCanvasRightClick(part: BuiltPart | null): void {
       return { x: ((cx - r.left) / r.width) * 2 - 1, y: -(((cy - r.top) / r.height) * 2 - 1) };
     };
 
-    /** The 3D point under the cursor: exact surface hit → ground plane → ray point. */
-    const worldPointAt = (ndc: { x: number; y: number }): [number, number, number] => {
-      const v = new THREE.Vector2(ndc.x, ndc.y);
-      const p = partRef.current;
-      if (p) {
-        const surface = picker.current.pickPoint(p, v, camera);
-        if (surface) return [surface.x, surface.y, surface.z];
-      }
+    /** Anchor fallback when nothing is hit: the ground (Z=0) plane, else a short
+     * way down the ray (when looking away from the ground). */
+    const fallbackPoint = (v: THREE.Vector2): [number, number, number] => {
       const ray = new THREE.Raycaster();
       ray.setFromCamera(v, camera);
-      const ground = new THREE.Plane(new THREE.Vector3(0, 0, 1), 0);
       const out = new THREE.Vector3();
-      if (ray.ray.intersectPlane(ground, out)) return [out.x, out.y, out.z];
-      ray.ray.at(0.2, out); // looking away from the ground — anchor a short way down the ray
+      if (ray.ray.intersectPlane(new THREE.Plane(new THREE.Vector3(0, 0, 1), 0), out))
+        return [out.x, out.y, out.z];
+      ray.ray.at(0.2, out);
       return [out.x, out.y, out.z];
     };
 
-    /** Resolve the entity under the cursor (raycast, GPU fallback for face/body). */
-    const hitAt = (ndc: { x: number; y: number }): RightClickHit | null => {
-      const p = partRef.current;
-      if (!p) return null;
-      const mode = useCadStore.getState().selMode;
+    /** The rendered assembly-instance groups (published by Assembly), or []. */
+    const instanceGroups = (): THREE.Object3D[] =>
+      ((globalThis as { __plastiqViewport?: { instanceGroups?: THREE.Object3D[] } })
+        .__plastiqViewport?.instanceGroups ?? []) as THREE.Object3D[];
+
+    /** Resolve what's under the cursor + the 3D anchor point. In assembly mode the
+     * base part isn't rendered, so pick the instance groups; otherwise pick the
+     * part (raycast, GPU fallback for face/body). */
+    const pickAt = (ndc: {
+      x: number;
+      y: number;
+    }): { hit: RightClickHit | null; worldPoint: [number, number, number] } => {
       const v = new THREE.Vector2(ndc.x, ndc.y);
-      const raycast = picker.current.pick(p, v, camera, mode);
-      if (raycast) return { kind: raycast.kind, id: raycast.id };
-      if ((mode === "face" || mode === "body") && gpu.current.rayHitsPart(p, camera, ndc)) {
-        const id = gpu.current.pick(gl, camera, p, ndc);
-        if (id != null) return { kind: mode, id };
+      const groups = instanceGroups();
+      if (groups.length > 0) {
+        const ray = new THREE.Raycaster();
+        ray.setFromCamera(v, camera);
+        const intersect = ray.intersectObjects(groups, true)[0];
+        if (intersect) {
+          let o: THREE.Object3D | null = intersect.object;
+          while (o && o.userData["instanceId"] == null) o = o.parent;
+          const instanceId = o?.userData["instanceId"];
+          const wp: [number, number, number] = [
+            intersect.point.x,
+            intersect.point.y,
+            intersect.point.z,
+          ];
+          return typeof instanceId === "string"
+            ? { hit: { kind: "body", id: 0, instanceId }, worldPoint: wp }
+            : { hit: null, worldPoint: wp };
+        }
+        return { hit: null, worldPoint: fallbackPoint(v) };
       }
-      return null;
+
+      const p = partRef.current;
+      if (!p) return { hit: null, worldPoint: fallbackPoint(v) };
+      const surface = picker.current.pickPoint(p, v, camera);
+      const worldPoint: [number, number, number] = surface
+        ? [surface.x, surface.y, surface.z]
+        : fallbackPoint(v);
+      const mode = useCadStore.getState().selMode;
+      let hit: RightClickHit | null = picker.current.pick(p, v, camera, mode);
+      if (!hit && (mode === "face" || mode === "body") && gpu.current.rayHitsPart(p, camera, ndc)) {
+        const id = gpu.current.pick(gl, camera, p, ndc);
+        if (id != null) hit = { kind: mode, id };
+      }
+      return { hit, worldPoint };
     };
 
     const onContextMenu = (e: MouseEvent): void => {
       e.preventDefault(); // suppress the browser's native menu
       const ndc = ndcFrom(e.clientX, e.clientY);
-      const hit = hitAt(ndc);
+      const { hit, worldPoint } = pickAt(ndc);
       const store = useCadStore.getState();
 
       // Select-then-menu (CAD-standard): clicking an unselected entity selects it
       // (replacing the prior selection); clicking inside an existing multi-select
-      // preserves it; clicking empty space clears. Sketch mode owns its own
-      // selection, so don't touch 3D picks while sketching.
+      // preserves it; clicking empty space clears. Skip for assembly instances
+      // (no instance-selection store concept) and while sketching (own selection).
       if (!useSketchStore.getState().active) {
-        if (hit) {
+        if (hit && !hit.instanceId) {
           const already = store.picks.some((q) => q.kind === hit.kind && q.id === hit.id);
           if (!already) store.pick({ kind: hit.kind, id: hit.id });
-        } else {
+        } else if (!hit) {
           store.clearPicks();
         }
       }
@@ -101,7 +130,7 @@ export function useCanvasRightClick(part: BuiltPart | null): void {
         cad: snapshotCad(), // fresh — reflects the selection just applied
         sketch: snapshotSketch(),
         hit,
-        worldPoint: worldPointAt(ndc),
+        worldPoint,
       });
       useContextMenu.getState().openAt(target, buildMenuSections(target));
       invalidate();
