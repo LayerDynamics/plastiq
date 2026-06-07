@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { sectionPlane } from "./section.js";
+import { sectionPlane, sectionTFromOffset } from "./section.js";
 
 describe("sectionPlane — clipping plane for a section cut", () => {
   /** three.js clips where normal·point + constant < 0. */
@@ -24,5 +24,30 @@ describe("sectionPlane — clipping plane for a section cut", () => {
     expect(sectionPlane(0, 10, "z", 2).constant).toBeCloseTo(10, 9); // clamped to 1
     expect(sectionPlane(0, 10, "z", -1).constant).toBeCloseTo(0, 9); // clamped to 0
     expect(sectionPlane(0, 10, "z", 0.5).normal).toEqual([0, 0, -1]);
+  });
+});
+
+describe("sectionTFromOffset — draggable gizmo write-back (handle position → t)", () => {
+  it("maps a handle coordinate to its fraction of [min,max]", () => {
+    expect(sectionTFromOffset(0, 1, 0.25)).toBeCloseTo(0.25, 9);
+    expect(sectionTFromOffset(-2, 6, 2)).toBeCloseTo(0.5, 9); // halfway across [-2,6]
+  });
+
+  it("is the inverse of sectionPlane's offset map (round-trips t)", () => {
+    const [min, max] = [-2, 6];
+    for (const t of [0, 0.1, 0.5, 0.73, 1]) {
+      const offset = sectionPlane(min, max, "y", t).constant; // t → world offset
+      expect(sectionTFromOffset(min, max, offset)).toBeCloseTo(t, 9); // offset → t
+    }
+  });
+
+  it("clamps handle positions dragged past the solid's extent to [0,1]", () => {
+    expect(sectionTFromOffset(0, 10, 15)).toBe(1); // dragged past max
+    expect(sectionTFromOffset(0, 10, -5)).toBe(0); // dragged before min
+  });
+
+  it("maps a degenerate (zero-thickness) extent to 0 instead of dividing by zero", () => {
+    expect(sectionTFromOffset(4, 4, 4)).toBe(0);
+    expect(Number.isNaN(sectionTFromOffset(4, 4, 9))).toBe(false);
   });
 });

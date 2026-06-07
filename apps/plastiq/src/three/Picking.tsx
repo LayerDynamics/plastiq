@@ -69,6 +69,9 @@ function selectionCandidates(
 interface ViewportGlobal {
   builtPart: BuiltPart | null;
   gpuPickFace?: (ndc: { x: number; y: number }) => number | null;
+  /** Client-pixel position of the first selectable candidate for `mode` — an E2E
+   * seam so a test can click exactly where an edge/vertex projects. */
+  candidatePx?: (mode: SelectionMode) => { x: number; y: number } | null;
 }
 
 const CLICK_TOL_PX = 4; // beyond this a press is an orbit/box drag, not a click
@@ -140,6 +143,32 @@ export function Picking({ part }: { part: BuiltPart | null }): null {
       const r = el.getBoundingClientRect();
       return { x: ((cx - r.left) / r.width) * 2 - 1, y: -(((cy - r.top) / r.height) * 2 - 1) };
     };
+    // Edges/vertices are thin targets the triangle/line raycast usually misses, so
+    // they were effectively unselectable. Fall back to the nearest PROJECTED edge/
+    // vertex within a pixel tolerance — click NEAR one and it selects. (Faces/bodies
+    // use the robust GPU-id buffer instead; this guard returns null for them.)
+    const NEAR_TOL_PX = 14;
+    const screenNearest = (
+      pt: BuiltPart,
+      mode: SelectionMode,
+      ndc: { x: number; y: number },
+    ): Pick | null => {
+      if (mode !== "edge" && mode !== "vertex") return null;
+      const w = el.clientWidth || 1;
+      const h = el.clientHeight || 1;
+      const cx = ((ndc.x + 1) / 2) * w;
+      const cy = ((1 - ndc.y) / 2) * h;
+      let best: Pick | null = null;
+      let bestD = NEAR_TOL_PX;
+      for (const c of selectionCandidates(pt, mode, camera)) {
+        const d = Math.hypot(((c.x + 1) / 2) * w - cx, ((1 - c.y) / 2) * h - cy);
+        if (d < bestD) {
+          bestD = d;
+          best = { kind: mode, id: c.id };
+        }
+      }
+      return best;
+    };
     let downAt: { x: number; y: number } | null = null;
     let boxStart: { x: number; y: number } | null = null;
 
@@ -169,12 +198,9 @@ export function Picking({ part }: { part: BuiltPart | null }): null {
         return;
       }
       const ndc = ndcFrom(e.clientX, e.clientY);
-      const next = picker.current.pick(
-        p,
-        new THREE.Vector2(ndc.x, ndc.y),
-        camera,
-        useCadStore.getState().selMode,
-      );
+      const mode = useCadStore.getState().selMode;
+      let next = picker.current.pick(p, new THREE.Vector2(ndc.x, ndc.y), camera, mode);
+      if (!next) next = screenNearest(p, mode, ndc); // edge/vertex near-miss → hover it
       if (
         (next?.id ?? null) !== (hoverRef.current?.id ?? null) ||
         (next?.kind ?? null) !== (hoverRef.current?.kind ?? null)
@@ -223,8 +249,23 @@ export function Picking({ part }: { part: BuiltPart | null }): null {
         const id = gpu.current.pick(gl, camera, p, ndc);
         if (id != null) hit = { kind: mode, id };
       }
+      // Screen-space fallback for thin edge/vertex targets (click near them).
+      if (!hit) hit = screenNearest(p, mode, ndc);
       if (hit) store.pick(hit, additive);
       else if (!additive) store.clearPicks();
+    };
+
+    // E2E seam: where the first selectable edge/vertex projects, in client px.
+    const vp = ((globalThis as { __plastiqViewport?: ViewportGlobal }).__plastiqViewport ??= {
+      builtPart: null,
+    });
+    vp.candidatePx = (mode): { x: number; y: number } | null => {
+      const pt = partRef.current;
+      if (!pt) return null;
+      const c = selectionCandidates(pt, mode, camera)[0];
+      if (!c) return null;
+      const r = el.getBoundingClientRect();
+      return { x: r.left + ((c.x + 1) / 2) * r.width, y: r.top + ((1 - c.y) / 2) * r.height };
     };
 
     el.addEventListener("pointerdown", onDown);
@@ -235,6 +276,7 @@ export function Picking({ part }: { part: BuiltPart | null }): null {
       el.removeEventListener("pointermove", onMove);
       window.removeEventListener("pointerup", onUp);
       overlay.remove();
+      delete vp.candidatePx;
     };
   }, [gl, camera, controls]);
 
