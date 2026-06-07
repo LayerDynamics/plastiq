@@ -1,16 +1,18 @@
 // Interactive feature-value gizmo (FR-11 extension): while a feature is being set
 // (store.activeFeatureEdit), show a draggable arrow in the viewport bound to its
 // primary numeric param (extrude → height) PLUS an inline value box. Dragging the
-// arrow or typing updates the param live (the document rebuilds), so the model
-// previews as you go. ✓/Enter commits (clears the edit); ✕/Esc cancels (removes the
-// just-created feature). The arrow runs along the upstream sketch plane's normal.
+// arrow (a drei TransformControls handle — orbit is disabled mid-drag for free) or
+// typing updates the param live, so the document rebuilds and the model previews as
+// you go. ✓/Enter commits (clears the edit); ✕/Esc cancels (removes the just-created
+// feature). The arrow runs along the upstream sketch plane's normal, anchored on the
+// plane itself so it stays put as the solid grows.
 
-import { useEffect, useRef } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
-import { useThree } from "@react-three/fiber";
-import { Html, Line } from "@react-three/drei";
+import { Html, Line, TransformControls } from "@react-three/drei";
 import { useCadStore } from "../../store/store.js";
 import { resolveDatumPlane } from "../../worker/sketchPlane.js";
+import { featureDragValue } from "../../viewport/featureGizmo.js";
 import { SELECT_ORANGE } from "../colors.js";
 import { useGizmoPresence } from "./presence.js";
 import type { BuiltPart } from "../../viewport/buildMesh.js";
@@ -19,31 +21,31 @@ import type { DatumPlaneId } from "../../sketch/model.js";
 const hex = (n: number): string => `#${n.toString(16).padStart(6, "0")}`;
 const MIN_VALUE = 5e-4; // 0.5 mm floor so the arrow never collapses to a point
 
-/** The extrude axis (unit) + a stable base anchor on the part, from the upstream
- * sketch's datum plane (defaults to XY / +Z when the plane isn't a base datum). */
+/** The extrude axis (unit) + a STABLE base anchor: the part's in-plane centre
+ * pinned onto the sketch plane along the axis, so it doesn't drift as the solid
+ * grows during the live preview (datum normals are axis-aligned). */
 function axisAndAnchor(
   part: BuiltPart,
   upstreamPlane: { base: DatumPlaneId; offset: number } | null,
-): { axis: THREE.Vector3; anchor: THREE.Vector3 } {
+): { axis: THREE.Vector3; anchor: THREE.Vector3; worldAxis: "x" | "y" | "z" } {
   const dp = resolveDatumPlane(upstreamPlane?.base ?? "XY", upstreamPlane?.offset ?? 0);
   const axis = new THREE.Vector3(dp.normal[0], dp.normal[1], dp.normal[2]).normalize();
-  const box = new THREE.Box3().setFromObject(part.group);
-  const center = box.getCenter(new THREE.Vector3());
-  // Start the arrow at the part's base face on the side the extrude grows FROM, so
-  // it points out along the axis (datum normals are axis-aligned).
-  const anchor = center.clone();
-  if (Math.abs(axis.x) > 0.5) anchor.x = axis.x > 0 ? box.min.x : box.max.x;
-  else if (Math.abs(axis.y) > 0.5) anchor.y = axis.y > 0 ? box.min.y : box.max.y;
-  else anchor.z = axis.z > 0 ? box.min.z : box.max.z;
-  return { axis, anchor };
+  const origin = new THREE.Vector3(dp.origin[0], dp.origin[1], dp.origin[2]);
+  const center = new THREE.Box3().setFromObject(part.group).getCenter(new THREE.Vector3());
+  // Project the part centre onto the sketch plane: keep its in-plane position (stable
+  // under extrude) but pin the along-axis coordinate to the plane (stable, period).
+  const along = center.clone().sub(origin).dot(axis);
+  const anchor = center.clone().addScaledVector(axis, -along);
+  const worldAxis =
+    Math.abs(axis.x) > 0.5 ? "x" : Math.abs(axis.y) > 0.5 ? "y" : "z";
+  return { axis, anchor, worldAxis };
 }
 
 export function FeatureEditGizmo({ part }: { part: BuiltPart | null }): React.JSX.Element | null {
   const edit = useCadStore((s) => s.activeFeatureEdit);
   const features = useCadStore((s) => s.features);
-  const camera = useThree((s) => s.camera);
-  const gl = useThree((s) => s.gl);
-  const invalidate = useThree((s) => s.invalidate);
+  const handle = useRef<THREE.Mesh>(null);
+  const input = useRef<HTMLInputElement>(null);
   const dragging = useRef(false);
 
   const feature = edit ? features.find((f) => f.id === edit.id) : undefined;
@@ -51,75 +53,66 @@ export function FeatureEditGizmo({ part }: { part: BuiltPart | null }): React.JS
   const active = !!(edit && feature && part);
   useGizmoPresence("featureEdit", active);
 
-  // Pointer-drag along the axis (cone handle) → set the param. Bound on the canvas
-  // while dragging; the closest point of the cursor ray to the axis gives the value.
-  useEffect(() => {
-    if (!active) return;
-    const el = gl.domElement;
-    const ray = new THREE.Raycaster();
-    const onMove = (e: PointerEvent): void => {
-      if (!dragging.current || !part) return;
-      const r = el.getBoundingClientRect();
-      const ndc = new THREE.Vector2(
-        ((e.clientX - r.left) / r.width) * 2 - 1,
-        -(((e.clientY - r.top) / r.height) * 2 - 1),
-      );
-      ray.setFromCamera(ndc, camera);
-      const upstream = upstreamPlaneOf(features, edit!.id);
-      const { axis, anchor } = axisAndAnchor(part, upstream);
-      // Closest parameter t along the axis line (anchor + t·axis) to the cursor ray.
-      const w0 = anchor.clone().sub(ray.ray.origin);
-      const b = axis.dot(ray.ray.direction);
-      const denom = 1 - b * b;
-      if (Math.abs(denom) < 1e-6) return; // ray ~parallel to the axis
-      const t = (b * ray.ray.direction.dot(w0) - axis.dot(w0)) / denom;
-      useCadStore.getState().updateParams(edit!.id, { [edit!.param]: Math.max(t, MIN_VALUE) });
-      invalidate();
-    };
-    const onUp = (): void => {
-      dragging.current = false;
-    };
-    window.addEventListener("pointermove", onMove);
-    window.addEventListener("pointerup", onUp);
-    return () => {
-      window.removeEventListener("pointermove", onMove);
-      window.removeEventListener("pointerup", onUp);
-    };
-  }, [active, gl, camera, invalidate, features, edit, part]);
+  const geom = useMemo(() => {
+    if (!active || !part || !edit) return null;
+    const { axis, anchor, worldAxis } = axisAndAnchor(part, upstreamPlaneOf(features, edit.id));
+    return { axis, anchor, worldAxis, anchorAxisCoord: anchor.dot(axis) };
+  }, [active, part, edit, features]);
 
-  // Esc cancels (remove the just-created feature); Enter commits.
-  useEffect(() => {
-    if (!active) return;
-    const onKey = (e: KeyboardEvent): void => {
-      if (e.key === "Escape") useCadStore.getState().removeFeature(edit!.id);
-      else if (e.key === "Enter") useCadStore.getState().setActiveFeatureEdit(null);
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [active, edit]);
+  const tip = geom ? geom.anchor.clone().addScaledVector(geom.axis, value) : null;
 
-  if (!active || !part || !edit) return null;
-  const { axis, anchor } = axisAndAnchor(part, upstreamPlaneOf(features, edit.id));
-  const tip = anchor.clone().addScaledVector(axis, value);
+  // Keep the drag handle at the tip when the value changes from elsewhere (typing,
+  // undo), but never while the user is actively dragging it.
+  useEffect(() => {
+    if (handle.current && tip && !dragging.current) handle.current.position.copy(tip);
+  }, [tip]);
+
+  // Auto-focus the value box when an edit opens, so Enter/Esc and typing work
+  // immediately (and App's Esc→clear-selection defers to a focused input — App.tsx
+  // ignores keys while an INPUT is focused, so there's no double-handling).
+  useEffect(() => {
+    if (active) {
+      input.current?.focus();
+      input.current?.select();
+    }
+  }, [active, edit?.id]);
+
+  if (!active || !part || !edit || !geom || !tip) return null;
+  const { axis, anchor, anchorAxisCoord, worldAxis } = geom;
   const commit = (): void => useCadStore.getState().setActiveFeatureEdit(null);
   const cancel = (): void => useCadStore.getState().removeFeature(edit.id);
 
+  // Drag → handle slides along the axis → new value (floored) → store → live rebuild.
+  const onObjectChange = (): void => {
+    if (!handle.current) return;
+    const v = featureDragValue(anchorAxisCoord, handle.current.position.dot(axis), MIN_VALUE);
+    useCadStore.getState().updateParams(edit.id, { [edit.param]: v });
+  };
+
   return (
     <group>
+      {/* The extent line from the sketch plane to the current tip. */}
       <Line points={[anchor.toArray(), tip.toArray()]} color={hex(SELECT_ORANGE)} lineWidth={2} />
-      {/* Draggable arrow head at the tip. */}
-      <mesh
-        position={tip.toArray()}
-        quaternion={new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), axis)}
-        onPointerDown={(e) => {
-          e.stopPropagation();
+      {/* Draggable single-axis handle; drei disables OrbitControls while dragging. */}
+      <TransformControls
+        mode="translate"
+        showX={worldAxis === "x"}
+        showY={worldAxis === "y"}
+        showZ={worldAxis === "z"}
+        onMouseDown={() => {
           dragging.current = true;
-          (e.target as Element).setPointerCapture?.(e.pointerId);
         }}
+        onMouseUp={() => {
+          dragging.current = false;
+          input.current?.focus();
+        }}
+        onObjectChange={onObjectChange}
       >
-        <coneGeometry args={[0.004, 0.01, 16]} />
-        <meshBasicMaterial color={hex(SELECT_ORANGE)} />
-      </mesh>
+        <mesh ref={handle} position={tip.toArray()} renderOrder={2}>
+          <sphereGeometry args={[0.005, 16, 16]} />
+          <meshBasicMaterial color={hex(SELECT_ORANGE)} />
+        </mesh>
+      </TransformControls>
       {/* Inline value box at the tip. */}
       <Html position={tip.toArray()} zIndexRange={[900, 0]} pointerEvents="auto" wrapperClass="feat-edit">
         <div
@@ -128,6 +121,7 @@ export function FeatureEditGizmo({ part }: { part: BuiltPart | null }): React.JS
           onPointerDown={(e) => e.stopPropagation()}
         >
           <input
+            ref={input}
             type="number"
             step="any"
             data-testid="feature-edit-value"
@@ -138,8 +132,13 @@ export function FeatureEditGizmo({ part }: { part: BuiltPart | null }): React.JS
                 useCadStore.getState().updateParams(edit.id, { [edit.param]: Math.max(mm / 1000, MIN_VALUE) });
             }}
             onKeyDown={(e) => {
-              if (e.key === "Enter") commit();
-              else if (e.key === "Escape") cancel();
+              if (e.key === "Enter") {
+                e.stopPropagation();
+                commit();
+              } else if (e.key === "Escape") {
+                e.stopPropagation();
+                cancel();
+              }
             }}
             className="w-16 rounded border border-[#2a3444] bg-black/40 px-1 py-0.5 text-right text-[11px] text-[#cfe] outline-none focus:border-[#ffa23a]"
           />

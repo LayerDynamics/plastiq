@@ -82,8 +82,13 @@ function useEditorShortcuts(): void {
         return;
       }
       if (typing) return;
-      if (e.key === "Escape") store.clearPicks();
-      else if (MODE_KEYS[e.key]) store.setSelMode(MODE_KEYS[e.key]!);
+      if (e.key === "Escape") {
+        // An in-progress feature edit owns Esc (cancel = remove the just-created
+        // feature); only otherwise does Esc clear the selection.
+        const edit = store.activeFeatureEdit;
+        if (edit) store.removeFeature(edit.id);
+        else store.clearPicks();
+      } else if (MODE_KEYS[e.key]) store.setSelMode(MODE_KEYS[e.key]!);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
