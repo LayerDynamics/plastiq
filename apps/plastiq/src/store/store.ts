@@ -27,6 +27,7 @@ import {
   type FeatureId,
   type Pick,
   type SelectionMode,
+  type Workspace,
 } from "./types.js";
 
 /** Persistent refs (SPEC-4 FR-16) for the current build's pickable entities,
@@ -76,6 +77,8 @@ export interface CadStore {
   selMode: SelectionMode;
   picks: Pick[];
   status: string;
+  /** Active editor workspace (Fusion-style mode). Authority over `simulating`. */
+  workspace: Workspace;
   /** Transform-gizmo mode (FR-11): translate or rotate the selected component. */
   gizmoMode: "translate" | "rotate";
   /** Measure tool (FR-13): active flag + latest readout (null when none). */
@@ -142,6 +145,9 @@ export interface CadStore {
   // --- selection actions ---
   selectFeature: (id: FeatureId | null) => void;
   setSelMode: (mode: SelectionMode) => void;
+  /** Switch the editor workspace (FR-4 Fusion-style). `simulate` drives the sim
+   * flag; the authority over `simulating`. */
+  setWorkspace: (w: Workspace) => void;
   /** Add or replace a 3D sub-entity pick (additive = multi-select). */
   pick: (p: Pick, additive?: boolean) => void;
   /** Replace (or, additive, merge) the pick set — the rubber-band box select. */
@@ -264,6 +270,7 @@ export const useCadStore = create<CadStore>((set, get) => ({
   selMode: "face",
   picks: [],
   status: "loading",
+  workspace: "design",
   gizmoMode: "translate",
   measuring: false,
   measureResult: null,
@@ -390,6 +397,12 @@ export const useCadStore = create<CadStore>((set, get) => ({
 
   selectFeature: (id) => set({ selectedFeatureId: id }),
   setSelMode: (mode) => set({ selMode: mode, picks: [] }),
+
+  // The workspace is the single authority over sim mode: entering `simulate`
+  // starts a fresh playing run, leaving stops it (mirrors setSimulating). Sketch
+  // mode is a contextual env handled in the UI, not a workspace.
+  setWorkspace: (w) =>
+    set({ workspace: w, simulating: w === "simulate", simPaused: false, simTicks: 0 }),
 
   pick: (p, additive = false) =>
     set((s) => {
@@ -677,6 +690,7 @@ export const useCadStore = create<CadStore>((set, get) => ({
       selectedFeatureId: null,
       picks: [],
       status: "loading",
+      workspace: "design",
       gizmoMode: "translate",
       measuring: false,
       measureResult: null,

@@ -31,6 +31,18 @@ export interface ActionDef {
 const cad = (): ReturnType<typeof useCadStore.getState> => useCadStore.getState();
 const always = (): boolean => true;
 
+/** A rectangle inside the seeded box footprint, so an appended Extrude/Cut has a
+ * profile to consume without opening the sketcher (the toolbar's demo "Sketch"). */
+const DEFAULT_RECT: Profile = {
+  kind: "loop",
+  start: [0.015, 0.01],
+  segments: [
+    { kind: "line", to: [0.045, 0.01] },
+    { kind: "line", to: [0.045, 0.03] },
+    { kind: "line", to: [0.015, 0.03] },
+  ],
+};
+
 /** A centred rectangle Profile (w × h) — the demo sections for loft/sweep, matching
  * Toolbar.tsx's existing defaults so behaviour is unchanged. */
 function rectProfile(w: number, h: number): Profile {
@@ -96,7 +108,14 @@ const hasExporter = (): boolean =>
 // Each `run` is the exact call the current Toolbar/AssemblyTree make, so behaviour
 // is preserved when the scrolling toolbar is replaced.
 const RIBBON_ONLY: ActionDef[] = [
-  // CREATE (profile-consuming solids the context menu doesn't carry)
+  // CREATE
+  {
+    id: "sketch-rect",
+    label: () => "Sketch",
+    icon: "✎",
+    enabled: always,
+    run: () => cad().addFeature({ type: "sketch", data: { profile: DEFAULT_RECT } }),
+  },
   {
     id: "loft",
     label: () => "Loft",
@@ -171,20 +190,7 @@ const RIBBON_ONLY: ActionDef[] = [
     run: () =>
       cad().addFeature(
         booleanBodyFeature("subtract", [
-          {
-            type: "sketch",
-            data: {
-              profile: {
-                kind: "loop",
-                start: [0.015, 0.01],
-                segments: [
-                  { kind: "line", to: [0.045, 0.01] },
-                  { kind: "line", to: [0.045, 0.03] },
-                  { kind: "line", to: [0.015, 0.03] },
-                ],
-              } satisfies Profile,
-            },
-          },
+          { type: "sketch", data: { profile: DEFAULT_RECT } },
           { type: "extrude", params: { height: 0.05 } },
         ]),
       ),
@@ -260,9 +266,13 @@ const RIBBON_ONLY: ActionDef[] = [
   },
 ];
 
-/** Re-expose each context-menu action as an ActionDef (drop menu-only fields). */
+/** Re-expose each context-menu action as an ActionDef (drop menu-only fields,
+ * keep the optional toggle-active predicate for ribbon highlighting). */
 const CONTEXT_DEFS: Record<string, ActionDef> = Object.fromEntries(
-  CONTEXT_ACTIONS.map((a) => [a.id, { id: a.id, label: a.label, enabled: a.enabled, run: a.run }]),
+  CONTEXT_ACTIONS.map((a) => [
+    a.id,
+    { id: a.id, label: a.label, enabled: a.enabled, run: a.run, active: a.active },
+  ]),
 );
 
 /** Every action by id — context-menu actions + ribbon-only actions. */

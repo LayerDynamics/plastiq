@@ -43,6 +43,11 @@ export interface CadDocument {
 /** Which kind of sub-entity the 3D viewport selects. */
 export type SelectionMode = "face" | "edge" | "vertex" | "body";
 
+/** Top-level editor mode (Fusion-style workspace). Reconfigures the ribbon + side
+ * panels to that mode's tools. Transient UI state (not serialized). `simulate` is
+ * the authority over the `simulating` flag. */
+export type Workspace = "design" | "assemble" | "simulate";
+
 /** A picked B-rep entity, by the kernel's persistent id (SPEC-4 FR-16).
  * `body` selects a whole solid (id = the part's body index, 0 for a single
  * part); face/edge/vertex select a sub-entity by its tagged id. */
