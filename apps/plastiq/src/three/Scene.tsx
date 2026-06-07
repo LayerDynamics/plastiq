@@ -156,7 +156,16 @@ export function Scene({
       {/* While sketching, render through the plane-locked ortho camera and lock
           orbit (the 2D overlay owns interaction). */}
       <SketchCamera frame={sketchFrame} />
-      <OrbitControls makeDefault enableDamping enabled={sketchFrame == null} target={[0, 0, 0.02]} />
+      {/* Left = orbit, middle = pan, wheel = zoom. The RIGHT button is deliberately
+          left unbound so it's free for the right-click context menu (otherwise
+          OrbitControls' default right-drag pan steals the contextmenu gesture). */}
+      <OrbitControls
+        makeDefault
+        enableDamping
+        enabled={sketchFrame == null}
+        target={[0, 0, 0.02]}
+        mouseButtons={{ LEFT: THREE.MOUSE.ROTATE, MIDDLE: THREE.MOUSE.PAN }}
+      />
     </>
   );
 }

@@ -35,14 +35,18 @@ const picks = (page: Page): Promise<{ kind: string; id: number }[]> =>
         .picks ?? [],
   );
 
-/** Dispatch a real right-click (contextmenu) at a client pixel on the canvas. */
+/** Dispatch a real right-click at a client pixel on the canvas: the full RIGHT-button
+ * pointer sequence (down/up) followed by `contextmenu`, exactly as a browser fires it
+ * — so the test exercises the same path real users do (regression guard for the
+ * OrbitControls-right-pan / close-on-pointerdown conflict). */
 async function rightClick(page: Page, x: number, y: number): Promise<void> {
   await page.evaluate(
     ([cx, cy]) => {
       const el = document.querySelector("#viewport-root canvas")!;
-      el.dispatchEvent(
-        new MouseEvent("contextmenu", { clientX: cx, clientY: cy, bubbles: true, cancelable: true }),
-      );
+      const opts = { clientX: cx, clientY: cy, button: 2, buttons: 2, bubbles: true, cancelable: true };
+      el.dispatchEvent(new PointerEvent("pointerdown", opts as PointerEventInit));
+      el.dispatchEvent(new PointerEvent("pointerup", opts as PointerEventInit));
+      el.dispatchEvent(new MouseEvent("contextmenu", opts));
     },
     [x, y],
   );
