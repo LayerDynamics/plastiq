@@ -16,6 +16,7 @@ import { PlaneGizmo } from "./gizmos/plane.gizmo.js";
 import { ConstructionGeometryGizmo } from "./gizmos/constructionGeometry.gizmo.js";
 import { SectionAnalysisGizmo } from "./gizmos/sectionAnalysis.gizmo.js";
 import { OffsetGizmo } from "./gizmos/offset.gizmo.js";
+import { RightClickDropdownGizmo } from "./gizmos/rightClickDropdown.gizmo.js";
 import { SketchCamera } from "./SketchCamera.js";
 import { Section } from "./Section.js";
 import { Assembly, type InstanceBody } from "./Assembly.js";
@@ -149,6 +150,9 @@ export function Scene({
       <OffsetGizmo />
       <TransformGizmo part={part} />
       <ViewCubeGizmo />
+      {/* Right-click context menu: reads the same part for pick-under-cursor;
+          renders a world-anchored DOM dropdown of the actions for the target. */}
+      <RightClickDropdownGizmo part={part} />
       {/* While sketching, render through the plane-locked ortho camera and lock
           orbit (the 2D overlay owns interaction). */}
       <SketchCamera frame={sketchFrame} />

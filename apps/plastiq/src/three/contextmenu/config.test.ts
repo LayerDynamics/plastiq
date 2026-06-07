@@ -1,0 +1,147 @@
+import { beforeEach, describe, expect, it } from "vitest";
+import type { FaceRef, EdgeRef } from "@plastiq/cad";
+import { useCadStore } from "../../store/store.js";
+import { CONTEXT_ACTIONS } from "./config.js";
+import type { ContextAction } from "./config.js";
+import type { ContextTarget } from "./contextSelection.js";
+
+function makeTarget(over: Partial<ContextTarget> = {}): ContextTarget {
+  return {
+    kind: "empty",
+    picks: [],
+    selMode: "face",
+    refs: { faces: {}, edges: {} },
+    features: [],
+    selectedFeatureId: null,
+    inSketch: false,
+    sketchSelection: [],
+    mateMode: false,
+    matePickCount: 0,
+    simulating: false,
+    simPaused: false,
+    hasProfile: false,
+    solverReady: true,
+    section: null,
+    measuring: false,
+    explodeFactor: 0,
+    gizmoMode: "translate",
+    instanceId: null,
+    worldPoint: [0, 0, 0],
+    ...over,
+  };
+}
+
+const byId = (id: string): ContextAction => {
+  const a = CONTEXT_ACTIONS.find((x) => x.id === id);
+  if (!a) throw new Error(`no action ${id}`);
+  return a;
+};
+
+const faceRef: FaceRef = { normal: [0, 0, 1] } as FaceRef;
+const edgeRef: EdgeRef = {
+  faceNormals: [
+    [0, 0, 1],
+    [1, 0, 0],
+  ],
+} as EdgeRef;
+
+describe("config — catalog integrity", () => {
+  it("action ids are unique", () => {
+    const ids = CONTEXT_ACTIONS.map((a) => a.id);
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+
+  it("every action has callable predicates + run", () => {
+    for (const a of CONTEXT_ACTIONS) {
+      const t = makeTarget();
+      expect(typeof a.label(t)).toBe("string");
+      expect(typeof a.visible(t)).toBe("boolean");
+      expect(typeof a.enabled(t)).toBe("boolean");
+      expect(typeof a.run).toBe("function");
+    }
+  });
+});
+
+describe("config — run() invokes the real store/dressup action", () => {
+  beforeEach(() => useCadStore.getState().reset());
+
+  it("extrude / cut / revolve append the matching feature", () => {
+    byId("extrude").run(makeTarget({ hasProfile: true }));
+    byId("cut").run(makeTarget({ hasProfile: true }));
+    byId("revolve").run(makeTarget({ hasProfile: true }));
+    const types = useCadStore.getState().features.map((f) => f.type);
+    expect(types).toEqual(["extrude", "cut", "revolve"]);
+  });
+
+  it("fillet builds from the picked edge + ref (FR-30)", () => {
+    byId("fillet").run(
+      makeTarget({ kind: "edge", picks: [{ kind: "edge", id: 5 }], refs: { faces: {}, edges: { 5: edgeRef } } }),
+    );
+    const f = useCadStore.getState().features.at(-1);
+    expect(f?.type).toBe("fillet");
+    expect((f?.data?.["edges"] as unknown[]).length).toBe(1);
+  });
+
+  it("shell builds from the picked face + ref", () => {
+    byId("shell").run(
+      makeTarget({ kind: "face", picks: [{ kind: "face", id: 1 }], refs: { faces: { 1: faceRef }, edges: {} } }),
+    );
+    expect(useCadStore.getState().features.at(-1)?.type).toBe("shell");
+  });
+
+  it("a dress-up with an unresolved selection surfaces a status, adds nothing", () => {
+    byId("fillet").run(makeTarget({ kind: "edge", picks: [{ kind: "edge", id: 99 }] }));
+    expect(useCadStore.getState().features).toHaveLength(0);
+    expect(useCadStore.getState().status).toMatch(/select the edges\/faces/);
+  });
+
+  it("section toggles on then off (driven by ctx.section)", () => {
+    byId("section").run(makeTarget({ section: null }));
+    expect(useCadStore.getState().section).toEqual({ axis: "x", t: 0.5 });
+    byId("section").run(makeTarget({ section: { axis: "x", t: 0.5 } }));
+    expect(useCadStore.getState().section).toBeNull();
+  });
+
+  it("measure toggles the tool", () => {
+    byId("measure").run(makeTarget());
+    expect(useCadStore.getState().measuring).toBe(true);
+  });
+
+  it("clear-selection empties the picks", () => {
+    useCadStore.getState().setPicks([{ kind: "face", id: 1 }]);
+    byId("clear-selection").run(makeTarget({ picks: [{ kind: "face", id: 1 }] }));
+    expect(useCadStore.getState().picks).toHaveLength(0);
+  });
+
+  it("gizmo-rotate sets the transform mode", () => {
+    byId("gizmo-rotate").run(makeTarget({ kind: "body" }));
+    expect(useCadStore.getState().gizmoMode).toBe("rotate");
+  });
+
+  it("explode toggles the exploded-view factor", () => {
+    byId("explode").run(makeTarget({ kind: "assemblyInstance", explodeFactor: 0 }));
+    expect(useCadStore.getState().explodeFactor).toBeGreaterThan(0);
+    byId("explode").run(makeTarget({ kind: "assemblyInstance", explodeFactor: 0.5 }));
+    expect(useCadStore.getState().explodeFactor).toBe(0);
+  });
+
+  it("suppress + delete act on the selected feature", () => {
+    const id = useCadStore.getState().addFeature({ type: "extrude", params: { height: 0.02 } });
+    const features = useCadStore.getState().features;
+    byId("suppress").run(makeTarget({ kind: "feature", selectedFeatureId: id, features }));
+    expect(useCadStore.getState().features.find((f) => f.id === id)?.suppressed).toBe(true);
+    byId("delete-feature").run(
+      makeTarget({ kind: "feature", selectedFeatureId: id, features: useCadStore.getState().features }),
+    );
+    expect(useCadStore.getState().features.find((f) => f.id === id)).toBeUndefined();
+  });
+
+  it("sim controls drive playback state", () => {
+    useCadStore.getState().setSimulating(true);
+    byId("sim-pause").run(makeTarget({ simulating: true, simPaused: false }));
+    expect(useCadStore.getState().simPaused).toBe(true);
+    const before = useCadStore.getState().simStepReq;
+    byId("sim-step").run(makeTarget({ simulating: true, simPaused: true }));
+    expect(useCadStore.getState().simStepReq).toBe(before + 1);
+  });
+});
