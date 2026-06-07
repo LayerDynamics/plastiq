@@ -8,8 +8,7 @@
 import { useEffect, useState } from "react";
 import { useCadStore } from "../store/store.js";
 import type { EditorFeature, FeatureId } from "../store/types.js";
-import { useSketchStore } from "../sketch/sketchStore.js";
-import type { SketchModel } from "../sketch/model.js";
+import { editSketchFeature } from "../sketch/editFeature.js";
 
 const ICONS: Record<string, string> = {
   box: "▢",
@@ -30,16 +29,6 @@ const ICONS: Record<string, string> = {
   placement: "✥",
   importStep: "⤒",
 };
-
-/** Open the sketch editor for a sketch feature (if it carries a model). */
-function editSketch(feature: EditorFeature): boolean {
-  if (feature.type === "sketch" && feature.data?.["model"] != null) {
-    const m = feature.data["model"] as SketchModel;
-    useSketchStore.getState().enterSketch(m.plane, m.offset ?? 0, feature.id, m);
-    return true;
-  }
-  return false;
-}
 
 interface MenuState {
   id: FeatureId;
@@ -139,7 +128,7 @@ function FeatureRow({
           data-testid="edit-sketch"
           onClick={(e) => {
             e.stopPropagation();
-            editSketch(feature);
+            editSketchFeature(feature);
           }}
           className="invisible rounded px-0.5 text-xs text-[#789] hover:text-[#cfe] group-hover:visible"
         >
@@ -267,7 +256,7 @@ function FeatureContextMenu({
           data-testid="ctx-edit"
           className={item}
           onClick={run(() => {
-            if (!editSketch(feature)) onBeginEdit(feature.id);
+            if (!editSketchFeature(feature)) onBeginEdit(feature.id);
           })}
         >
           {feature.type === "sketch" && feature.data?.["model"] != null ? "Edit sketch" : "Rename"}

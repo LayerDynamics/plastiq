@@ -5,6 +5,7 @@
 
 import { useCadStore, type NewFeature } from "../../store/store.js";
 import { useSketchStore } from "../../sketch/sketchStore.js";
+import { editSketchFeature } from "../../sketch/editFeature.js";
 import { emptySketch, type SketchModel } from "../../sketch/model.js";
 import {
   chamferFeature,
@@ -233,8 +234,7 @@ const FEATURE: ContextAction[] = [
     enabled: (ctx) => ctx.solverReady,
     run: (ctx) => {
       const f = selectedFeature(ctx);
-      const model = f?.data?.["model"] as SketchModel | undefined;
-      if (f && model) sketch().enterSketch("XY", 0, f.id, model);
+      if (f) editSketchFeature(f); // shared with the feature-tree FR-27 menu
     },
   },
   {
