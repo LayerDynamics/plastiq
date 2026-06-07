@@ -20,9 +20,9 @@ test.beforeEach(async ({ page }) => {
     (globalThis as { faceCount?: () => number }).faceCount = () => {
       const scene = (
         globalThis as {
-          __plastiqScene?: { builtPart: { mesh: { userData: { faceIds?: number[] } } } | null };
+          __plastiqViewport?: { builtPart: { mesh: { userData: { faceIds?: number[] } } } | null };
         }
-      ).__plastiqScene;
+      ).__plastiqViewport;
       return scene?.builtPart?.mesh.userData.faceIds?.length ?? 0;
     };
   });

@@ -27,7 +27,7 @@ for (const backend of ["ammo", "cannon"] as const) {
     await expect(page.getByTestId("status")).toHaveText("ready", { timeout: 240_000 });
     await page.waitForFunction(
       () =>
-        (globalThis as { __plastiqScene?: { builtPart: unknown } }).__plastiqScene
+        (globalThis as { __plastiqViewport?: { builtPart: unknown } }).__plastiqViewport
           ?.builtPart != null,
       undefined,
       { timeout: 240_000 },

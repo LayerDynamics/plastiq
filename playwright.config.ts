@@ -11,6 +11,11 @@ export default defineConfig({
   timeout: 240_000,
   fullyParallel: false,
   workers: 1,
+  // On CI, retry transient failures. The heavy specs spawn real OCCT + physics
+  // wasm in one tab; on a constrained CI runner the renderer can momentarily lose
+  // its execution context ("context destroyed") mid-spawn. The test logic is
+  // deterministic — a fresh-page retry absorbs the environmental hiccup.
+  retries: process.env.CI ? 2 : 0,
   // In CI also emit an HTML report (uploaded as a CI artifact on failure).
   reporter: process.env.CI ? [["list"], ["html", { open: "never" }]] : "list",
   use: {

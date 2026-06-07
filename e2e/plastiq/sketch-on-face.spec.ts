@@ -11,13 +11,13 @@ test("sketch on a picked face opens the sketcher normal-to that face", async ({ 
   await expect(page.getByTestId("status")).toHaveText("ready", { timeout: 240_000 });
   await page.waitForFunction(
     () =>
-      (globalThis as { __plastiqScene?: { builtPart: unknown } }).__plastiqScene?.builtPart != null,
+      (globalThis as { __plastiqViewport?: { builtPart: unknown } }).__plastiqViewport?.builtPart != null,
     undefined,
     { timeout: 240_000 },
   );
   // Frame the part so the centre ray lands on a face; let the tween settle.
   await page.evaluate(() =>
-    (globalThis as { __plastiqScene?: { fitToView(): void } }).__plastiqScene?.fitToView(),
+    (globalThis as { __plastiqViewport?: { fitToView(): void } }).__plastiqViewport?.fitToView?.(),
   );
   await page.waitForTimeout(700);
 

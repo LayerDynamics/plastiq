@@ -9,7 +9,7 @@ import { StatusBar } from "./StatusBar.js";
 import { FeatureTree } from "./FeatureTree.js";
 import { AssemblyTree } from "./AssemblyTree.js";
 import { PropertiesPanel } from "./PropertiesPanel.js";
-import { Viewport } from "../viewport/Viewport.js";
+import { Viewport } from "../three/index.js";
 import { Sketcher } from "../sketch/Sketcher.js";
 import { useCadStore } from "../store/store.js";
 import { useProjectsStore } from "../persistence/projectsStore.js";

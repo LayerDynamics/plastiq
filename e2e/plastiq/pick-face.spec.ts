@@ -19,7 +19,7 @@ test("clicking a face selects it and highlights its render group", async ({ page
   await expect(page.getByTestId("status")).toHaveText("ready", { timeout: 240_000 });
   await page.waitForFunction(
     () =>
-      (globalThis as { __plastiqScene?: { builtPart: unknown } }).__plastiqScene?.builtPart !=
+      (globalThis as { __plastiqViewport?: { builtPart: unknown } }).__plastiqViewport?.builtPart !=
       null,
     undefined,
     { timeout: 240_000 },
@@ -28,7 +28,7 @@ test("clicking a face selects it and highlights its render group", async ({ page
   // Frame the part so the canvas centre ray lands on it, then let the camera
   // tween settle.
   await page.evaluate(() => {
-    (globalThis as { __plastiqScene?: { fitToView(): void } }).__plastiqScene?.fitToView();
+    (globalThis as { __plastiqViewport?: { fitToView(): void } }).__plastiqViewport?.fitToView();
   });
   await page.waitForTimeout(700);
 
@@ -66,11 +66,11 @@ test.beforeEach(async ({ page }) => {
     (globalThis as { countSelectedGroups?: () => number }).countSelectedGroups = () => {
       const scene = (
         globalThis as {
-          __plastiqScene?: {
+          __plastiqViewport?: {
             builtPart: { mesh: { geometry: { groups: { materialIndex: number }[] } } } | null;
           };
         }
-      ).__plastiqScene;
+      ).__plastiqViewport;
       const groups = scene?.builtPart?.mesh.geometry.groups ?? [];
       return groups.filter((g) => g.materialIndex === slot).length;
     };

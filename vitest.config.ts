@@ -43,6 +43,11 @@ export default defineConfig({
         "apps/*/src/viewport/SceneController.ts",
         "apps/*/src/worker/geometry.worker.ts",
         "apps/*/src/persistence/idb.ts",
+        // r3f viewport runtime that needs a real WebGL context (e2e-only), same
+        // rationale as SceneController: GPU-id render-target picking + the colour
+        // constants. Pure-logic three/ modules (e.g. sketch-camera math) stay IN.
+        "apps/*/src/three/gpuPick.ts",
+        "apps/*/src/three/colors.ts",
       ],
       // Baseline floor, set a couple points below the measured current
       // (stmts 82.5 / branch 70.5 / funcs 83.1 / lines 85.9) so the build fails

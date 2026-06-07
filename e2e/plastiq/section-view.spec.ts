@@ -11,7 +11,7 @@ test("section view clips the model and restores on toggle off", async ({ page })
   // Wait until the part is actually built — there must be geometry to clip.
   await page.waitForFunction(
     () =>
-      (globalThis as { __plastiqScene?: { builtPart: unknown } }).__plastiqScene?.builtPart != null,
+      (globalThis as { __plastiqViewport?: { builtPart: unknown } }).__plastiqViewport?.builtPart != null,
     undefined,
     { timeout: 240_000 },
   );
@@ -34,6 +34,14 @@ test("section view clips the model and restores on toggle off", async ({ page })
   await settle();
   const before = await shot();
 
+  const sectionGizmo = (): Promise<boolean> =>
+    page.evaluate(
+      () =>
+        (globalThis as { __plastiqViewport?: { gizmos?: Record<string, boolean> } })
+          .__plastiqViewport?.gizmos?.sectionAnalysis === true,
+    );
+  expect(await sectionGizmo()).toBe(false); // no cut yet → no section gizmo
+
   // Enabling the section defaults to a mid-model cut (axis X, t=0.5), which
   // removes the far half of the solid — the render must change.
   await page.getByTestId("section-toggle").click();
@@ -41,10 +49,12 @@ test("section view clips the model and restores on toggle off", async ({ page })
   await settle();
   const cut = await shot();
   expect(cut).not.toBe(before);
+  await expect.poll(() => sectionGizmo()).toBe(true); // section-analysis quad shown
 
   // Disabling restores the full solid — identical render (static camera + geometry).
   await page.getByTestId("section-toggle").click();
   await settle();
   const restored = await shot();
   expect(restored).toBe(before);
+  await expect.poll(() => sectionGizmo()).toBe(false); // gizmo cleared
 });
