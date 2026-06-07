@@ -14,7 +14,10 @@ import { OriginGizmo } from "./gizmos/origin.gizmo.js";
 import { ObjectCenterGizmo } from "./gizmos/objectCenter.gizmo.js";
 import { PlaneGizmo } from "./gizmos/plane.gizmo.js";
 import { ConstructionGeometryGizmo } from "./gizmos/constructionGeometry.gizmo.js";
+import { SectionAnalysisGizmo } from "./gizmos/sectionAnalysis.gizmo.js";
+import { OffsetGizmo } from "./gizmos/offset.gizmo.js";
 import { SketchCamera } from "./SketchCamera.js";
+import { Section } from "./Section.js";
 import type { DatumPlane } from "@plastiq/cad";
 import { GRID_CENTER, GRID_CELL } from "./colors.js";
 import { buildPart, disposePart, type BuiltPart } from "../viewport/buildMesh.js";
@@ -131,10 +134,13 @@ export function Scene({
       <gridHelper args={[0.4, 40, GRID_CENTER, GRID_CELL]} rotation={[Math.PI / 2, 0, 0]} />
       <Part part={part} />
       <Picking part={part} />
+      <Section part={part} />
       <OriginGizmo />
       <PlaneGizmo />
       <ConstructionGeometryGizmo />
       <ObjectCenterGizmo />
+      <SectionAnalysisGizmo part={part} />
+      <OffsetGizmo />
       <TransformGizmo part={part} />
       <ViewCubeGizmo />
       {/* While sketching, render through the plane-locked ortho camera and lock
