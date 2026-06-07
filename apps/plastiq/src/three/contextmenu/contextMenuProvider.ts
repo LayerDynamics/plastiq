@@ -40,3 +40,10 @@ export const useContextMenu = create<ContextMenuState>((set, get) => ({
     get().close();
   },
 }));
+
+// Read-only E2E seam: lets the no-mock specs assert the open menu's resolved
+// target + sections (the menu DOM lives inside the WebGL canvas via drei <Html>).
+if (typeof globalThis !== "undefined") {
+  (globalThis as { __plastiqContextMenu?: typeof useContextMenu }).__plastiqContextMenu =
+    useContextMenu;
+}

@@ -44,6 +44,12 @@ export function RightClickDropdownGizmo({
         role="menu"
         className="min-w-40 select-none rounded border border-[#2a3444] bg-[#0e1219] py-1 shadow-lg"
         onContextMenu={(e) => e.preventDefault()}
+        // Keep pointer gestures on the menu from reaching the canvas/OrbitControls
+        // underneath (which would "start" an orbit and dismiss the menu before the
+        // item's click lands). React stops the native event too, so the canvas
+        // pointerdown-to-close + controls "start" never fire for in-menu clicks.
+        onPointerDown={(e) => e.stopPropagation()}
+        onPointerUp={(e) => e.stopPropagation()}
       >
         {sections.map((sec, si) => (
           <div key={sec.group}>
