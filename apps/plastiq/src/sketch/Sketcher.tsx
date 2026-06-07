@@ -13,7 +13,7 @@ import { nearestSnap, segmentHint, type SegHint, type Snap } from "./infer.js";
 import { canApply, hitTest, type ConstraintKind } from "./hit.js";
 import { canDimension, type DimensionKind } from "./dim.js";
 import { extractProfile } from "./profile.js";
-import { useCadStore } from "../store/store.js";
+import { finishSketchFeature } from "./editFeature.js";
 import { resolveContextTarget, type ContextTarget } from "../three/contextmenu/contextSelection.js";
 import { buildMenuSections, type MenuSection } from "../three/contextmenu/contextOptions.js";
 import { runContextAction } from "../three/contextmenu/config.js";
@@ -443,31 +443,10 @@ export function Sketcher(): React.JSX.Element | null {
   const result = useSketchStore((s) => s.result);
   const movePoint = useSketchStore((s) => s.movePoint);
   const solve = useSketchStore((s) => s.solve);
-  const editingFeatureId = useSketchStore((s) => s.editingFeatureId);
 
-  // Finish (FR-21): solve, derive the closed profile, persist the constrained
-  // model + derived points into the sketch feature, and leave sketch mode.
-  const finishSketch = (): void => {
-    solve();
-    const m = useSketchStore.getState().model;
-    const profile = extractProfile(m);
-    if (!profile) return; // no buildable profile yet — Finish stays disabled
-    // The compiled plane spec rebuild consumes (alongside `profile`), so the
-    // feature builds on the sketch's plane — a base datum + offset, or a model
-    // face + offset — rather than always world-XY.
-    const plane = m.face
-      ? { kind: "face" as const, face: m.face, offset: m.offset ?? 0 }
-      : { base: m.plane, offset: m.offset ?? 0 };
-    const data = {
-      model: structuredClone(m),
-      profile,
-      plane,
-    };
-    const cad = useCadStore.getState();
-    if (editingFeatureId) cad.setFeatureData(editingFeatureId, data);
-    else cad.addFeature({ type: "sketch", data });
-    exitSketch();
-  };
+  // Finish (FR-21): commit the sketch via the shared helper (solve → derive the
+  // closed profile → persist model+profile+plane → exit), used identically by the
+  // ribbon / context-menu "Finish sketch" so the surfaces can't diverge.
   const profileReady = extractProfile(model) !== null;
 
   const hostRef = useRef<HTMLDivElement>(null);
@@ -593,7 +572,7 @@ export function Sketcher(): React.JSX.Element | null {
           type="button"
           data-testid="sketch-finish"
           disabled={!profileReady}
-          onClick={finishSketch}
+          onClick={() => finishSketchFeature()}
           className="rounded border border-[#3a6b3a] bg-[#1c2a14] px-2 py-0.5 text-[#cfe6a0] enabled:hover:bg-[#24341a] disabled:opacity-40"
           title={
             profileReady ? "Finish: use this profile in a feature" : "Draw a closed profile first"

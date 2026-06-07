@@ -73,7 +73,11 @@ export const RIBBON: Record<Workspace, RibbonTab[]> = {
       ],
     },
     {
-      // Contextual SKETCH tab — populated + auto-selected while sketching (W2).
+      // Contextual SKETCH tab — present + auto-selected only while the sketcher is
+      // open. Kept thin (Finish, the prominent Fusion verb): the Sketcher overlay
+      // owns the draw tools + constraint/dimension palette + its own Cancel button
+      // next to the 2D canvas (not duplicated here), and the right-click menu offers
+      // the applicable constraints + Cancel.
       id: "sketch",
       title: "Sketch",
       contextual: "sketch",

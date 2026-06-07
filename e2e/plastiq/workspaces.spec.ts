@@ -84,3 +84,49 @@ test("the SKETCH tab is contextual — present only while sketching", async ({ p
   await expect(page.getByTestId("sketcher")).toBeHidden();
   await expect(page.getByTestId("ribbon-tab-sketch")).toHaveCount(0);
 });
+
+test("the SKETCH tab's Finish commits the sketch (no data loss)", async ({ page }) => {
+  await bootReady(page);
+  const sketchCount = (): Promise<number> =>
+    page.evaluate(
+      () =>
+        (globalThis as { __cadStore?: { getState(): { features: { type: string }[] } } }).__cadStore!
+          .getState()
+          .features.filter((f) => f.type === "sketch").length,
+    );
+  const before = await sketchCount(page);
+
+  await expect(page.getByTestId("enter-sketch")).toBeEnabled({ timeout: 240_000 });
+  await page.getByTestId("enter-sketch").click();
+  await expect(page.getByTestId("sketcher")).toBeVisible();
+
+  // Draw a closed triangle through the store seam (real solver), then Finish via the
+  // ribbon's SKETCH tab — it must COMMIT (persist a sketch feature), not discard.
+  await page.evaluate(() => {
+    const st = () =>
+      (
+        globalThis as {
+          __sketchStore?: {
+            getState(): {
+              setTool(t: string): void;
+              clickAt(u: number, v: number, o?: { reusePointId?: string }): void;
+              model: { points: { id: string }[] };
+            };
+          };
+        }
+      ).__sketchStore!.getState();
+    st().setTool("line");
+    st().clickAt(0, 0);
+    const firstId = st().model.points[0]!.id;
+    st().clickAt(0.03, 0);
+    st().clickAt(0.015, 0.02);
+    st().clickAt(0, 0, { reusePointId: firstId }); // close the loop on the first point
+  });
+
+  await expect(page.getByTestId("ribbon-sk-finish")).toBeEnabled();
+  await page.getByTestId("ribbon-sk-finish").click();
+  await expect(page.getByTestId("sketcher")).toBeHidden();
+  await expect.poll(() => sketchCount(page)).toBe(before + 1);
+  // Back to a non-contextual Design tab.
+  await expect(page.getByTestId("ribbon-tab-sketch")).toHaveCount(0);
+});

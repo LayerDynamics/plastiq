@@ -5,10 +5,11 @@
 
 import { useCadStore, type NewFeature } from "../../store/store.js";
 import { useSketchStore } from "../../sketch/sketchStore.js";
-import { editSketchFeature } from "../../sketch/editFeature.js";
+import { editSketchFeature, finishSketchFeature } from "../../sketch/editFeature.js";
 import { emptySketch, type SketchModel, type SketchPoint } from "../../sketch/model.js";
 import { canApply, type ConstraintKind } from "../../sketch/hit.js";
 import { canDimension, type DimensionKind } from "../../sketch/dim.js";
+import { extractProfile } from "../../sketch/profile.js";
 import {
   chamferFeature,
   draftFeature,
@@ -522,6 +523,16 @@ const SKETCH: ContextAction[] = [
     id: "sk-finish",
     group: "sketch",
     label: () => "Finish sketch",
+    visible: (ctx) => ctx.inSketch,
+    // Only commit when a closed profile can be derived (matches the Sketcher's
+    // Finish gating); finishSketchFeature stays in the sketch otherwise.
+    enabled: (ctx) => ctx.sketchModel != null && extractProfile(ctx.sketchModel) != null,
+    run: () => finishSketchFeature(),
+  },
+  {
+    id: "sk-cancel",
+    group: "sketch",
+    label: () => "Cancel sketch",
     visible: (ctx) => ctx.inSketch,
     enabled: always,
     run: () => sketch().exitSketch(),
