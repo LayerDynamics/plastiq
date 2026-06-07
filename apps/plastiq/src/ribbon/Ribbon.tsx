@@ -125,6 +125,7 @@ export function Ribbon(): React.JSX.Element {
             <RibbonButton key={id} id={id} ctx={ctx} />
           ))}
         </div>
+        <RibbonButton id="clear-selection" ctx={ctx} />
         <div className="mx-1 h-4 w-px bg-[#2a3444]" />
         <div className="flex gap-1">
           {tabs.map((t) => (

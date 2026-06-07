@@ -448,7 +448,7 @@ const SELECTION: ContextAction[] = [
     group: "selection",
     label: () => "Clear selection",
     visible: (ctx) => !ctx.inSketch && ctx.picks.length > 0,
-    enabled: always,
+    enabled: (ctx) => ctx.picks.length > 0,
     run: () => cad().clearPicks(),
   },
 ];
