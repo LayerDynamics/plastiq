@@ -66,6 +66,69 @@ const extrudeHeight = (page: Page): Promise<number> =>
     return f?.params?.height ?? 0;
   });
 
+/** The current build's volume (mass-properties readout the worker publishes). */
+const volume = (page: Page): Promise<number> =>
+  page.evaluate(
+    () =>
+      (globalThis as { __cadStore?: { getState(): { massProps: { volume: number } | null } } }).__cadStore!
+        .getState()
+        .massProps?.volume ?? 0,
+  );
+
+/** A feature's numeric param by type — e.g. the cut's depth or the fillet's radius. */
+const paramOf = (page: Page, type: string, param: string): Promise<number> =>
+  page.evaluate(
+    ([t, p]) => {
+      const f = (
+        globalThis as {
+          __cadStore?: { getState(): { features: { type: string; params?: Record<string, number> }[] } };
+        }
+      )
+        .__cadStore!.getState()
+        .features.find((x) => x.type === t);
+      return f?.params?.[p] ?? 0;
+    },
+    [type, param] as const,
+  );
+
+/** Switch to edge mode and click the first projectable edge (the candidatePx seam),
+ * so a dress-up that needs an edge selection has one. */
+async function selectFirstEdge(page: Page): Promise<void> {
+  await page.evaluate(() =>
+    (globalThis as { __cadStore?: { getState(): { setSelMode(m: string): void } } }).__cadStore!
+      .getState()
+      .setSelMode("edge"),
+  );
+  const px = await page.evaluate(
+    () =>
+      (
+        globalThis as {
+          __plastiqViewport?: { candidatePx?: (m: string) => { x: number; y: number } | null };
+        }
+      ).__plastiqViewport?.candidatePx?.("edge") ?? null,
+  );
+  if (!px) throw new Error("no edge candidate on screen");
+  await page.evaluate(
+    ([x, y]) => {
+      const el = document.querySelector("#viewport-root canvas")!;
+      const o = { clientX: x, clientY: y, button: 0, bubbles: true } as PointerEventInit;
+      el.dispatchEvent(new PointerEvent("pointerdown", o));
+      el.dispatchEvent(new PointerEvent("pointerup", o));
+    },
+    [px.x, px.y],
+  );
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          (globalThis as { __cadStore?: { getState(): { picks: { kind: string }[] } } }).__cadStore!
+            .getState()
+            .picks.filter((p) => p.kind === "edge").length,
+      ),
+    )
+    .toBeGreaterThan(0);
+}
+
 /** Boot, draw a closed triangle, Finish, and Extrude it — leaving an active edit. */
 async function drawTriangleAndExtrude(page: Page): Promise<void> {
   await page.goto("/");
@@ -135,4 +198,105 @@ test("cancel (✕) removes the just-created extrude — back to the seeded box",
   // The extrude feature is gone → the build falls back to the seeded box (6 faces).
   await page.waitForFunction(() => faceCount() === 6, undefined, { timeout: 240_000 });
   expect(await extrudeHeight(page)).toBe(0); // no extrude feature remains
+});
+
+test("editing cut depth in the gizmo previews the real solid live (linear, world arrow)", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await expect(page.getByTestId("status")).toHaveText("ready", { timeout: 240_000 });
+
+  // Draw a rectangle inside the seeded box footprint, Finish, then Cut it.
+  await page.getByTestId("enter-sketch").click();
+  await expect(page.getByTestId("sketcher")).toBeVisible();
+  await page.evaluate(() => {
+    const st = () =>
+      (
+        globalThis as {
+          __sketchStore?: {
+            getState: () => {
+              setTool(t: string): void;
+              clickAt(u: number, v: number, o?: { reusePointId?: string }): void;
+              model: { points: { id: string }[] };
+            };
+          };
+        }
+      ).__sketchStore!.getState();
+    st().setTool("line");
+    st().clickAt(0.02, 0.015);
+    const first = st().model.points[0]!.id;
+    st().clickAt(0.04, 0.015);
+    st().clickAt(0.04, 0.025);
+    st().clickAt(0.02, 0.025);
+    st().clickAt(0.02, 0.015, { reusePointId: first }); // close the rectangle
+  });
+  await page.getByTestId("sketch-finish").click();
+  await expect(page.getByTestId("sketcher")).toHaveCount(0);
+  await page.getByTestId("add-cut").click();
+
+  await expect.poll(() => editActive(page)).toBe(true);
+  await page.waitForFunction(
+    () => (globalThis as { __cadStore?: { getState(): { massProps: unknown } } }).__cadStore!.getState().massProps != null,
+    undefined,
+    { timeout: 240_000 },
+  );
+  const v0 = await volume(page); // default 50mm depth → cuts through
+
+  // 5mm depth removes far less material → the rebuilt solid has MORE volume.
+  await page.getByTestId("feature-edit-value").fill("5");
+  await expect.poll(() => paramOf(page, "cut", "depth")).toBeCloseTo(0.005, 3);
+  await page.waitForFunction((v) => {
+    const m = (globalThis as { __cadStore?: { getState(): { massProps: { volume: number } | null } } })
+      .__cadStore!.getState().massProps;
+    return m != null && m.volume > (v as number);
+  }, v0, { timeout: 240_000 });
+  expect(await volume(page)).toBeGreaterThan(v0); // the rendered solid actually changed
+});
+
+test("editing fillet radius in the gizmo previews the real solid live (scalar, value box)", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await expect(page.getByTestId("status")).toHaveText("ready", { timeout: 240_000 });
+  await page.waitForFunction(
+    () => (globalThis as { __plastiqViewport?: { builtPart: unknown } }).__plastiqViewport?.builtPart != null,
+    undefined,
+    { timeout: 240_000 },
+  );
+  await page.evaluate(() =>
+    (globalThis as { __plastiqViewport?: { fitToView?: () => void } }).__plastiqViewport?.fitToView?.(),
+  );
+  await page.waitForTimeout(400);
+  const vBox = await volume(page); // the plain seeded box
+
+  await selectFirstEdge(page);
+  await page.getByTestId("act-fillet").click();
+
+  await expect.poll(() => editActive(page)).toBe(true);
+  // Dress-up has no natural world axis → value box only (no drag arrow), units mm.
+  await expect(page.getByTestId("feature-edit-box")).toBeVisible();
+  await page.waitForFunction((v) => {
+    const m = (globalThis as { __cadStore?: { getState(): { massProps: { volume: number } | null } } })
+      .__cadStore!.getState().massProps;
+    return m != null && m.volume < (v as number);
+  }, vBox, { timeout: 240_000 }); // a fillet rounds the edge → removes a sliver
+  const v0 = await volume(page);
+  expect(v0).toBeLessThan(vBox);
+
+  // A bigger radius removes more material → less volume (live preview).
+  await page.getByTestId("feature-edit-value").fill("6");
+  await expect.poll(() => paramOf(page, "fillet", "radius")).toBeCloseTo(0.006, 3);
+  await page.waitForFunction((v) => {
+    const m = (globalThis as { __cadStore?: { getState(): { massProps: { volume: number } | null } } })
+      .__cadStore!.getState().massProps;
+    return m != null && m.volume < (v as number);
+  }, v0, { timeout: 240_000 });
+  expect(await volume(page)).toBeLessThan(v0);
+
+  // A value that fails the OCCT rebuild (radius ≫ the box) must NOT make the gizmo
+  // vanish — the part holds at last-good, so the user can still correct the value.
+  await page.getByTestId("feature-edit-value").fill("999");
+  await expect.poll(() => paramOf(page, "fillet", "radius")).toBeCloseTo(0.999, 2);
+  await expect.poll(() => editActive(page)).toBe(true); // edit survives the failed build
+  await expect(page.getByTestId("feature-edit-box")).toBeVisible();
 });
