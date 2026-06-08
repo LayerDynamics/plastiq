@@ -438,6 +438,11 @@ const TOOL_KEYS: Record<string, SketchTool> = {
   p: "point",
 };
 
+/** Tools where a left press-drag-release draws the shape (press = first click,
+ * release = second click). The 2-click primitives; other tools keep click-by-click
+ * and left-drag still pans. Pan is always available on the middle mouse button. */
+const DRAG_DRAW: ReadonlySet<SketchTool> = new Set(["line", "rectangle", "rectCenter", "circle"]);
+
 /** Order the smart-dimension (D) key tries — the first that fits the selection wins.
  * distance/radius/angle are mutually exclusive by selection shape, so this just sets
  * the tie-break for a 2-point selection (aligned distance, like Fusion). */
@@ -606,6 +611,11 @@ export function Sketcher(): React.JSX.Element | null {
   const moved = useRef(false);
   /** The point being dragged in the Select tool (live re-solve), if any. */
   const dragPoint = useRef<string | null>(null);
+  /** A press that may become a drag-draw (DRAG_DRAW tools): the press point in px +
+   * snapped world. Set on pointerdown when a fresh shape can start there. */
+  const dragDraw = useRef<{ px: Px; snap: Snap } | null>(null);
+  /** Live drag-draw rubber-band (press → cursor) for the preview overlay. */
+  const [dragPreview, setDragPreview] = useState<{ from: Px; to: Px } | null>(null);
   const baseColor = verdictColor(result?.verdict);
 
   // The world point the in-progress gesture started from (rubber-band anchor).
@@ -967,16 +977,31 @@ export function Sketcher(): React.JSX.Element | null {
           setView(zoomAt(view, anchorPx, e.deltaY < 0 ? 1.1 : 1 / 1.1));
         }}
         onPointerDown={(e) => {
-          if (e.button !== 0) return; // left button only — right-click opens the menu
-          (e.currentTarget as SVGElement).setPointerCapture(e.pointerId);
           const p = rectPx(e);
-          pan.current = p;
+          // Middle button always pans (Fusion convention), in any tool.
+          if (e.button === 1) {
+            e.preventDefault();
+            (e.currentTarget as SVGElement).setPointerCapture(e.pointerId);
+            pan.current = p;
+            moved.current = false;
+            return;
+          }
+          if (e.button !== 0) return; // right-click opens the menu
+          (e.currentTarget as SVGElement).setPointerCapture(e.pointerId);
           moved.current = false;
           // In Select, pressing on a point starts a live drag (FR-20 re-solve).
           if (tool === "select") {
             const hit = hitTest(model, view, p);
             dragPoint.current = hit?.kind === "point" ? hit.id : null;
+            pan.current = p; // left-drag pans in Select
+            return;
           }
+          // A fresh DRAG_DRAW shape: arm a press-drag-release draw (no left-pan).
+          if (DRAG_DRAW.has(tool) && pending.length === 0 && !draft) {
+            dragDraw.current = { px: p, snap: nearestSnap(model, view, p) };
+            return;
+          }
+          pan.current = p; // other drawing tools: left-drag still pans
         }}
         onPointerMove={(e) => {
           const p = rectPx(e);
@@ -988,9 +1013,18 @@ export function Sketcher(): React.JSX.Element | null {
             solve();
             return;
           }
+          // A drag-draw in progress: rubber-band from the press to the cursor.
+          if (dragDraw.current) {
+            if (moved.current || Math.hypot(p.x - dragDraw.current.px.x, p.y - dragDraw.current.px.y) >= 3) {
+              moved.current = true;
+              setDragPreview({ from: dragDraw.current.px, to: p });
+              setHover({ px: p, ...inferAt(p) });
+            }
+            return;
+          }
           const start = pan.current;
           if (start && (moved.current || Math.hypot(p.x - start.x, p.y - start.y) >= 3)) {
-            moved.current = true; // a drag → pan (in any tool)
+            moved.current = true; // a drag → pan
             setView(panBy(view, p.x - start.x, p.y - start.y));
             pan.current = p;
             return;
@@ -1000,14 +1034,25 @@ export function Sketcher(): React.JSX.Element | null {
         }}
         onPointerLeave={() => setHover(null)}
         onPointerUp={(e) => {
-          if (e.button !== 0) return; // left button only — right-click opens the menu
+          if (e.button !== 0 && e.button !== 1) return;
           const wasMove = moved.current;
           const wasDrag = dragPoint.current !== null;
+          const draw = dragDraw.current;
           const p = rectPx(e);
           pan.current = null;
           moved.current = false;
           dragPoint.current = null;
-          if (wasMove || wasDrag) return;
+          dragDraw.current = null;
+          setDragPreview(null);
+          // Completed drag-draw: press = first click, release = second click.
+          if (draw && wasMove) {
+            clickAt(draw.snap.u, draw.snap.v, { reusePointId: draw.snap.pointId });
+            const rel = inferAt(p);
+            clickAt(rel.snap.u, rel.snap.v, { reusePointId: rel.snap.pointId });
+            setHover({ px: p, ...rel });
+            return;
+          }
+          if (wasMove || wasDrag) return; // a pan / point-drag, not a click
           if (tool === "select") {
             // Select-then-constrain: pick the entity under the cursor (Shift adds).
             const hit = hitTest(model, view, p);
@@ -1047,6 +1092,7 @@ export function Sketcher(): React.JSX.Element | null {
             anchor={anchor ? toScreen(view, { u: anchor.u, v: anchor.v }) : null}
           />
         )}
+        {dragPreview && <DragDrawPreview tool={tool} from={dragPreview.from} to={dragPreview.to} />}
       </svg>
       {/* Inline precise-value box: appears during a drawing gesture near the cursor;
           shows live values, type to lock + auto-dimension (FR — Fusion precise input). */}
@@ -1087,6 +1133,38 @@ export function Sketcher(): React.JSX.Element | null {
       )}
     </div>
   );
+}
+
+/** Dashed rubber-band shown while drag-drawing a 2-click primitive (press → cursor):
+ * a line, an axis-aligned rectangle (corner or centred), or a circle. Display only —
+ * the real geometry is built on release. */
+function DragDrawPreview({ tool, from, to }: { tool: SketchTool; from: Px; to: Px }): React.JSX.Element {
+  const stroke = "#4ea1ff";
+  const common = { fill: "none", stroke, strokeWidth: 1.5, strokeDasharray: "5 4" } as const;
+  if (tool === "circle") {
+    const r = Math.hypot(to.x - from.x, to.y - from.y);
+    return <circle cx={from.x} cy={from.y} r={r} {...common} pointerEvents="none" />;
+  }
+  if (tool === "rectangle") {
+    return (
+      <rect
+        x={Math.min(from.x, to.x)}
+        y={Math.min(from.y, to.y)}
+        width={Math.abs(to.x - from.x)}
+        height={Math.abs(to.y - from.y)}
+        {...common}
+        pointerEvents="none"
+      />
+    );
+  }
+  if (tool === "rectCenter") {
+    const hw = Math.abs(to.x - from.x);
+    const hh = Math.abs(to.y - from.y);
+    return (
+      <rect x={from.x - hw} y={from.y - hh} width={hw * 2} height={hh * 2} {...common} pointerEvents="none" />
+    );
+  }
+  return <line x1={from.x} y1={from.y} x2={to.x} y2={to.y} {...common} pointerEvents="none" />;
 }
 
 /** Snap marker (per kind) + rubber-band + inferred-constraint glyph (FR-17). */
