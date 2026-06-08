@@ -78,3 +78,58 @@ test("named standard views reorient the camera (FR-12)", async ({ page }) => {
   await settle();
   expect(await shot()).not.toBe(top);
 });
+
+test("the 3D view cube is unobstructed and reorients the camera on click (FR-12)", async ({
+  page,
+}) => {
+  await ready(page);
+  const canvas = page.locator("#viewport-root canvas");
+  const box = (await canvas.boundingBox())!;
+
+  // 1) Deterministic: nothing with pointer-events sits over the cube's top-right
+  //    region any more — document.elementFromPoint there is the CANVAS, not a HUD div.
+  //    (Before the declutter it returned the floating named-view panel.)
+  const tags = await page.evaluate(() => {
+    const c = document.querySelector("#viewport-root canvas")!.getBoundingClientRect();
+    return [80, 100, 120].map((dx) => {
+      const el = document.elementFromPoint(c.right - dx, c.top + 90) as HTMLElement | null;
+      return el?.tagName ?? "null";
+    });
+  });
+  expect(tags.every((t) => t === "CANVAS")).toBe(true);
+
+  // 2) Real interaction: clicking a cube face tweens the main camera → the rendered
+  //    model changes. Try a few face pixels (the cube spans ~the 64px-margin corner);
+  //    succeed as soon as one click reorients. Mouse parks on an empty corner between
+  //    attempts so a gizmo hover-highlight can't masquerade as a camera move.
+  const shot = (): Promise<string> =>
+    page.evaluate(
+      () => (document.querySelector("#viewport-root canvas") as HTMLCanvasElement).toDataURL(),
+    );
+  const settle = (): Promise<void> =>
+    page.evaluate(
+      () => new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r()))),
+    );
+  const neutral: [number, number] = [box.x + 8, box.y + box.height - 8];
+  await page.mouse.move(...neutral);
+  await settle();
+  const before = await shot();
+
+  let reoriented = false;
+  for (const [dx, dy] of [
+    [100, 90],
+    [110, 70],
+    [90, 105],
+    [120, 100],
+  ] as const) {
+    await page.mouse.click(box.x + box.width - dx, box.y + dy);
+    await page.mouse.move(...neutral); // clear the cube hover-highlight
+    await page.waitForTimeout(1100); // drei tweens the camera over ~1s
+    await settle();
+    if ((await shot()) !== before) {
+      reoriented = true;
+      break;
+    }
+  }
+  expect(reoriented).toBe(true);
+});

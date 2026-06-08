@@ -75,6 +75,14 @@ const volume = (page: Page): Promise<number> =>
         .massProps?.volume ?? 0,
   );
 
+/** The world drag-arrow's unit axis (null for value-box-only ops). */
+const gizmoAxis = (page: Page): Promise<number[] | null> =>
+  page.evaluate(
+    () =>
+      (globalThis as { __plastiqViewport?: { featureGizmoAxis?: number[] | null } }).__plastiqViewport
+        ?.featureGizmoAxis ?? null,
+  );
+
 /** A feature's numeric param by type — e.g. the cut's depth or the fillet's radius. */
 const paramOf = (page: Page, type: string, param: string): Promise<number> =>
   page.evaluate(
@@ -235,6 +243,13 @@ test("editing cut depth in the gizmo previews the real solid live (linear, world
   await page.getByTestId("add-cut").click();
 
   await expect.poll(() => editActive(page)).toBe(true);
+
+  // The arrow must point the way the cut actually removes material. The profile is on
+  // the XY plane (z=0); the box sits on the +Z side, and the kernel cut sweeps +normal
+  // — so the drag arrow has to read +Z (into the body), NOT the opposite. (This is the
+  // claim I earlier hand-waved as "cosmetic"; here it's asserted.)
+  await expect.poll(() => gizmoAxis(page)).toEqual([0, 0, 1]);
+
   await page.waitForFunction(
     () => (globalThis as { __cadStore?: { getState(): { massProps: unknown } } }).__cadStore!.getState().massProps != null,
     undefined,
@@ -299,4 +314,26 @@ test("editing fillet radius in the gizmo previews the real solid live (scalar, v
   await expect.poll(() => paramOf(page, "fillet", "radius")).toBeCloseTo(0.999, 2);
   await expect.poll(() => editActive(page)).toBe(true); // edit survives the failed build
   await expect(page.getByTestId("feature-edit-box")).toBeVisible();
+});
+
+test("dragging the scrub grip changes the value and rebuilds the solid live", async ({ page }) => {
+  await drawTriangleAndExtrude(page); // opens an extrude edit (value box + scrub grip)
+  await expect.poll(() => editActive(page)).toBe(true);
+
+  const before = await extrudeHeight(page); // ~20mm default
+  const h0 = await page.evaluate(() => solidHeight());
+  const grip = page.getByTestId("feature-edit-scrub");
+  await expect(grip).toBeVisible();
+  const gb = (await grip.boundingBox())!;
+
+  // A real DOM pointer-drag of the grip to the RIGHT → larger value (scrubToSI). This
+  // also exercises pointer-capture surviving the per-move setSI re-render.
+  await page.mouse.move(gb.x + gb.width / 2, gb.y + gb.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(gb.x + gb.width / 2 + 80, gb.y + gb.height / 2, { steps: 12 });
+  await page.mouse.up();
+
+  await expect.poll(() => extrudeHeight(page)).toBeGreaterThan(before); // value scrubbed up
+  await page.waitForFunction((h) => solidHeight() > (h as number), h0, { timeout: 240_000 });
+  expect(await page.evaluate(() => solidHeight())).toBeGreaterThan(h0); // solid rebuilt taller
 });

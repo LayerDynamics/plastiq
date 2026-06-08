@@ -77,6 +77,22 @@ export function FeatureEditGizmo({ part }: { part: BuiltPart | null }): React.JS
     geom?.world && spec ? geom.anchor.clone().addScaledVector(geom.axis, value) : null;
   const boxPos = geom ? (geom.world ? tip : geom.center) : null;
 
+  // E2E seam: the world arrow's unit axis — the direction the linear op extends/cuts
+  // (null for the value-box-only ops). Lets a test PROVE the arrow points along the
+  // feature's actual sweep: a cut on the XY plane removes material in +Z, so the
+  // arrow must read [0,0,1], not the opposite.
+  useEffect(() => {
+    const g = globalThis as {
+      __plastiqViewport?: { featureGizmoAxis?: [number, number, number] | null };
+    };
+    if (!g.__plastiqViewport) return;
+    g.__plastiqViewport.featureGizmoAxis =
+      geom?.world === true ? (geom.axis.toArray() as [number, number, number]) : null;
+    return () => {
+      if (g.__plastiqViewport) g.__plastiqViewport.featureGizmoAxis = null;
+    };
+  }, [geom]);
+
   // Keep the drag handle at the tip when the value changes from elsewhere (typing,
   // scrub, undo), but never while the user is actively dragging it.
   useEffect(() => {
