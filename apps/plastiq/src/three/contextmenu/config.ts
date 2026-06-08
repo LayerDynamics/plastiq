@@ -19,6 +19,7 @@ import {
   filletFeature,
   shellFeature,
 } from "../../viewport/dressup.js";
+import { FEATURE_EDIT_SPECS } from "../../viewport/featureGizmo.js";
 import type { EditorFeature } from "../../store/types.js";
 import type { FaceRef } from "@plastiq/cad";
 import type { ContextTarget } from "./contextSelection.js";
@@ -68,10 +69,24 @@ const CUT_D = 0.05;
 const ALONG_EDGE_H = 0.02;
 const PAD_H = 0.02;
 
-/** Add the built feature, or surface why the selection couldn't (mirrors Toolbar's `apply`). */
-function addOrStatus(f: NewFeature | null, what: string): void {
-  if (f) cad().addFeature(f);
-  else cad().setStatus(`${what}: select the edges/faces it needs first`);
+/** Open the interactive edit on a just-created feature, keyed off its type's spec
+ * (param + unit live in FEATURE_EDIT_SPECS — single source of truth). `start` is the
+ * default size the action seeded. No-op for types the gizmo doesn't edit. */
+function openEdit(id: string, type: string, start: number): void {
+  const spec = FEATURE_EDIT_SPECS[type];
+  if (spec) cad().setActiveFeatureEdit({ id, param: spec.param, start });
+}
+
+/** Add the built feature (opening its interactive edit), or surface why the
+ * selection couldn't (mirrors Toolbar's `apply`). The edit only opens when a feature
+ * was actually created — dress-up builders return null without a valid selection. */
+function addOrStatus(f: NewFeature | null, what: string, start?: number): void {
+  if (!f) {
+    cad().setStatus(`${what}: select the edges/faces it needs first`);
+    return;
+  }
+  const id = cad().addFeature(f);
+  if (start != null) openEdit(id, f.type, start);
 }
 
 const faceCount = (ctx: ContextTarget): number => ctx.picks.filter((p) => p.kind === "face").length;
@@ -135,7 +150,10 @@ const CREATE: ContextAction[] = [
     label: () => "Extrude profile",
     visible: (ctx) => editing(ctx) && ctx.hasProfile && (ctx.kind === "empty" || ctx.kind === "body"),
     enabled: (ctx) => ctx.hasProfile,
-    run: () => cad().addFeature({ type: "extrude", params: { height: EXTRUDE_H } }),
+    run: () => {
+      const id = cad().addFeature({ type: "extrude", params: { height: EXTRUDE_H } });
+      openEdit(id, "extrude", EXTRUDE_H);
+    },
   },
   {
     id: "cut",
@@ -143,7 +161,10 @@ const CREATE: ContextAction[] = [
     label: () => "Cut with profile",
     visible: (ctx) => editing(ctx) && ctx.hasProfile && (ctx.kind === "empty" || ctx.kind === "body"),
     enabled: (ctx) => ctx.hasProfile,
-    run: () => cad().addFeature({ type: "cut", params: { depth: CUT_D } }),
+    run: () => {
+      const id = cad().addFeature({ type: "cut", params: { depth: CUT_D } });
+      openEdit(id, "cut", CUT_D);
+    },
   },
   {
     id: "revolve",
@@ -151,7 +172,10 @@ const CREATE: ContextAction[] = [
     label: () => "Revolve profile",
     visible: (ctx) => editing(ctx) && ctx.hasProfile && (ctx.kind === "empty" || ctx.kind === "body"),
     enabled: (ctx) => ctx.hasProfile,
-    run: () => cad().addFeature({ type: "revolve", params: { angle: Math.PI * 2, ay: 1 } }),
+    run: () => {
+      const id = cad().addFeature({ type: "revolve", params: { angle: Math.PI * 2, ay: 1 } });
+      openEdit(id, "revolve", Math.PI * 2);
+    },
   },
 ];
 
@@ -163,7 +187,7 @@ const MODIFY: ContextAction[] = [
     label: () => "Fillet edges",
     visible: (ctx) => editing(ctx) && ctx.kind === "edge",
     enabled: (ctx) => edgeCount(ctx) > 0,
-    run: (ctx) => addOrStatus(filletFeature(ctx.picks, ctx.refs, FILLET_R), "Fillet"),
+    run: (ctx) => addOrStatus(filletFeature(ctx.picks, ctx.refs, FILLET_R), "Fillet", FILLET_R),
   },
   {
     id: "chamfer",
@@ -171,7 +195,7 @@ const MODIFY: ContextAction[] = [
     label: () => "Chamfer edges",
     visible: (ctx) => editing(ctx) && ctx.kind === "edge",
     enabled: (ctx) => edgeCount(ctx) > 0,
-    run: (ctx) => addOrStatus(chamferFeature(ctx.picks, ctx.refs, CHAMFER_D), "Chamfer"),
+    run: (ctx) => addOrStatus(chamferFeature(ctx.picks, ctx.refs, CHAMFER_D), "Chamfer", CHAMFER_D),
   },
   {
     id: "extrude-along-edge",
@@ -188,7 +212,7 @@ const MODIFY: ContextAction[] = [
     label: () => "Shell faces",
     visible: (ctx) => editing(ctx) && ctx.kind === "face",
     enabled: (ctx) => faceCount(ctx) > 0,
-    run: (ctx) => addOrStatus(shellFeature(ctx.picks, ctx.refs, SHELL_T), "Shell"),
+    run: (ctx) => addOrStatus(shellFeature(ctx.picks, ctx.refs, SHELL_T), "Shell", SHELL_T),
   },
   {
     id: "draft",
@@ -196,7 +220,7 @@ const MODIFY: ContextAction[] = [
     label: () => "Draft face",
     visible: (ctx) => editing(ctx) && ctx.kind === "face",
     enabled: (ctx) => faceCount(ctx) > 0,
-    run: (ctx) => addOrStatus(draftFeature(ctx.picks, ctx.refs, DRAFT_A), "Draft"),
+    run: (ctx) => addOrStatus(draftFeature(ctx.picks, ctx.refs, DRAFT_A), "Draft", DRAFT_A),
   },
   {
     id: "extrude-to-face",

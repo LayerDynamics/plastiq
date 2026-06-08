@@ -79,6 +79,10 @@ export interface CadStore {
   status: string;
   /** Active editor workspace (Fusion-style mode). Authority over `simulating`. */
   workspace: Workspace;
+  /** A feature being set interactively via the in-viewport value gizmo (drag arrow
+   * + value box). `start` is the value at edit-start so Cancel can revert/remove.
+   * Transient UI state (not serialized). */
+  activeFeatureEdit: { id: FeatureId; param: string; start: number } | null;
   /** Transform-gizmo mode (FR-11): translate or rotate the selected component. */
   gizmoMode: "translate" | "rotate";
   /** Measure tool (FR-13): active flag + latest readout (null when none). */
@@ -148,6 +152,10 @@ export interface CadStore {
   /** Switch the editor workspace (FR-4 Fusion-style). `simulate` drives the sim
    * flag; the authority over `simulating`. */
   setWorkspace: (w: Workspace) => void;
+  /** Begin/end an in-viewport interactive value edit for a feature (drag gizmo). */
+  setActiveFeatureEdit: (
+    edit: { id: FeatureId; param: string; start: number } | null,
+  ) => void;
   /** Add or replace a 3D sub-entity pick (additive = multi-select). */
   pick: (p: Pick, additive?: boolean) => void;
   /** Replace (or, additive, merge) the pick set — the rubber-band box select. */
@@ -271,6 +279,7 @@ export const useCadStore = create<CadStore>((set, get) => ({
   picks: [],
   status: "loading",
   workspace: "design",
+  activeFeatureEdit: null,
   gizmoMode: "translate",
   measuring: false,
   measureResult: null,
@@ -324,6 +333,7 @@ export const useCadStore = create<CadStore>((set, get) => ({
         ...pushHistory(s),
         features,
         selectedFeatureId: s.selectedFeatureId === id ? null : s.selectedFeatureId,
+        activeFeatureEdit: s.activeFeatureEdit?.id === id ? null : s.activeFeatureEdit,
         rollbackIndex: reconcileRollback(features, s.rollbackBeforeId),
       };
     }),
@@ -403,6 +413,8 @@ export const useCadStore = create<CadStore>((set, get) => ({
   // mode is a contextual env handled in the UI, not a workspace.
   setWorkspace: (w) =>
     set({ workspace: w, simulating: w === "simulate", simPaused: false, simTicks: 0 }),
+
+  setActiveFeatureEdit: (edit) => set({ activeFeatureEdit: edit }),
 
   pick: (p, additive = false) =>
     set((s) => {
@@ -691,6 +703,7 @@ export const useCadStore = create<CadStore>((set, get) => ({
       picks: [],
       status: "loading",
       workspace: "design",
+      activeFeatureEdit: null,
       gizmoMode: "translate",
       measuring: false,
       measureResult: null,

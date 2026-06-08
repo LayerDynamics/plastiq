@@ -13,6 +13,7 @@ import { useActionContext } from "./useActionContext.js";
 import { SketchLauncher } from "./widgets/SketchLauncher.js";
 import { SectionControl } from "./widgets/SectionControl.js";
 import { SimReadout } from "./widgets/SimReadout.js";
+import { ViewControl } from "./widgets/ViewControl.js";
 
 interface Group {
   key: string;
@@ -56,6 +57,7 @@ export function WorkspacePanel(): React.JSX.Element {
     if (item.kind === "widget") {
       if (item.widget === "sketchLauncher") return <SketchLauncher key="sketchLauncher" />;
       if (item.widget === "simReadout") return <SimReadout key="simReadout" />;
+      if (item.widget === "viewControl") return <ViewControl key="viewControl" />;
       return <SectionControl key="sectionControl" />;
     }
     return <ActionButton key={item.id ?? i} id={item.id} ctx={ctx} variant="row" />;

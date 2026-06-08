@@ -13,7 +13,6 @@ import { PLACEMENT_TYPE, type CadDocument } from "../store/types.js";
 import { GeometryClient } from "../worker/bridge.js";
 import { useProjectsStore } from "../persistence/projectsStore.js";
 import { Viewport3D } from "./Viewport3D.js";
-import { standardViewDirection } from "../viewport/views.js";
 import { resolveDatumPlane } from "../worker/sketchPlane.js";
 import { useSketchStore } from "../sketch/sketchStore.js";
 import { explodeInstances } from "../viewport/explode.js";
@@ -410,42 +409,9 @@ export function Viewport(): React.JSX.Element {
   return (
     <>
       <Viewport3D mesh={mesh} sketchFrame={sketchFrame} instances={instances} />
-      {/* Named standard views + Fit (FR-12); the in-scene cube (viewCube.gizmo)
-          handles click-to-orient. Both drive the camera via __plastiqViewport. */}
-      <div
-        data-testid="viewcube"
-        className="pointer-events-auto absolute right-2 top-2 flex max-w-[10rem] flex-wrap justify-end gap-1 rounded border border-[#2a3444] bg-black/50 p-1 text-[11px] text-[#9ab] backdrop-blur"
-      >
-        {(["top", "bottom", "front", "back", "right", "left", "iso"] as const).map((v) => (
-          <button
-            key={v}
-            type="button"
-            onClick={() => {
-              const d = standardViewDirection(v);
-              (
-                globalThis as {
-                  __plastiqViewport?: { setView?: (dir: [number, number, number]) => void };
-                }
-              ).__plastiqViewport?.setView?.([d.x, d.y, d.z]);
-            }}
-            className="rounded px-1.5 py-0.5 capitalize hover:bg-[#1b2230]"
-          >
-            {v}
-          </button>
-        ))}
-        <button
-          type="button"
-          data-testid="fit-view"
-          onClick={() =>
-            (
-              globalThis as { __plastiqViewport?: { fitToView?: () => void } }
-            ).__plastiqViewport?.fitToView?.()
-          }
-          className="rounded px-1.5 py-0.5 hover:bg-[#1b2230]"
-        >
-          Fit
-        </button>
-      </div>
+      {/* The in-scene 3D view cube (viewCube.gizmo, top-right) owns click-to-orient;
+          explicit named views + Fit live in the sidebar's Inspect panel (ViewControl
+          + the fit-view action). No floating panel sits over the cube any more. */}
       {measuring && (
         <div
           data-testid="measure-readout"

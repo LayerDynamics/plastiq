@@ -15,6 +15,7 @@ import { ObjectCenterGizmo } from "./gizmos/objectCenter.gizmo.js";
 import { PlaneGizmo } from "./gizmos/plane.gizmo.js";
 import { ConstructionGeometryGizmo } from "./gizmos/constructionGeometry.gizmo.js";
 import { SectionAnalysisGizmo } from "./gizmos/sectionAnalysis.gizmo.js";
+import { FeatureEditGizmo } from "./gizmos/featureEdit.gizmo.js";
 import { OffsetGizmo } from "./gizmos/offset.gizmo.js";
 import { RightClickDropdownGizmo } from "./gizmos/rightClickDropdown.gizmo.js";
 import { SketchCamera } from "./SketchCamera.js";
@@ -168,6 +169,7 @@ export function Scene({
       <ConstructionGeometryGizmo />
       <ObjectCenterGizmo />
       <SectionAnalysisGizmo part={part} />
+      <FeatureEditGizmo part={part} />
       <OffsetGizmo />
       <TransformGizmo part={part} />
       <ViewCubeGizmo />
