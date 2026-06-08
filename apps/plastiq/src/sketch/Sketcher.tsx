@@ -243,10 +243,11 @@ function DimensionEditor({
 }): React.JSX.Element | null {
   const c = model.constraints.find((x) => x.id === id);
   if (!c || !("value" in c)) return null;
-  const isAngle = c.kind === "angle";
+  const isAngle = c.kind === "angle" || c.kind === "lineAngle";
   const factor = isAngle ? DEG : MM;
   const unitLabel: Record<string, string> = {
     angle: "angle (°)",
+    lineAngle: "angle (°)",
     radius: "radius (mm)",
     diameter: "diameter (mm)",
     hDistance: "Δx (mm)",
@@ -332,6 +333,7 @@ function ConstraintGlyphs({
     else if (c.kind === "radius") base = `R${mm(c.value)}`;
     else if (c.kind === "diameter") base = `⌀${mm(c.value)}`;
     else if (c.kind === "angle") base = `${(c.value * DEG).toFixed(1)}°`;
+    else if (c.kind === "lineAngle") base = `∠${(c.value * DEG).toFixed(1)}°`;
     if (base === null) return null;
     return "driven" in c && c.driven ? `(${base})` : base;
   };
@@ -693,6 +695,7 @@ export function Sketcher(): React.JSX.Element | null {
             ["radius", "Radius"],
             ["diameter", "⌀"],
             ["angle", "Angle"],
+            ["lineAngle", "∠X"],
           ] as [DimensionKind, string][]
         ).map(([kind, label]) => (
           <button

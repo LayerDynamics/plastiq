@@ -12,7 +12,8 @@ export type DimensionKind =
   | "vDistance"
   | "radius"
   | "diameter"
-  | "angle";
+  | "angle"
+  | "lineAngle";
 
 function point(model: SketchModel, id: string): { u: number; v: number } | undefined {
   return model.points.find((p) => p.id === id);
@@ -37,7 +38,8 @@ export function canDimension(
     return pointSel(model, sel).length === 2;
   }
   if (kind === "radius" || kind === "diameter") return circleSel(model, sel).length === 1;
-  return lineSel(model, sel).length === 2; // angle
+  if (kind === "lineAngle") return lineSel(model, sel).length === 1; // one line ∠ to X axis
+  return lineSel(model, sel).length === 2; // angle (between two lines)
 }
 
 /** Angle (radians) of the directed line a→b. */
@@ -71,6 +73,10 @@ export function measure(
     if (!c || c.kind !== "circle") return null;
     return kind === "diameter" ? 2 * c.radius : c.radius;
   }
+  if (kind === "lineAngle") {
+    const [lid] = lineSel(model, sel);
+    return lid != null ? lineAngle(model, lid) : null; // radians from +X
+  }
   const [l1, l2] = lineSel(model, sel);
   const a1 = l1 ? lineAngle(model, l1) : null;
   const a2 = l2 ? lineAngle(model, l2) : null;
@@ -95,6 +101,10 @@ export function buildDimension(
   if (kind === "radius" || kind === "diameter") {
     const [circle] = circleSel(model, sel);
     return circle ? { id, kind, circle, value } : null;
+  }
+  if (kind === "lineAngle") {
+    const [line] = lineSel(model, sel);
+    return line ? { id, kind: "lineAngle", line, value } : null;
   }
   const [line1, line2] = lineSel(model, sel);
   return line1 && line2 ? { id, kind: "angle", line1, line2, value } : null;
