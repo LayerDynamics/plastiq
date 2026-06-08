@@ -7,12 +7,14 @@ import { WorkspaceSwitcher } from "./WorkspaceSwitcher.js";
 import { ActionButton } from "./ActionButton.js";
 import { ProjectsMenu } from "../app/ProjectsMenu.js";
 import { useActionContext } from "./useActionContext.js";
+import { useWelcome } from "../app/Welcome.js";
 
 const SELMODES = ["selmode-face", "selmode-edge", "selmode-vertex", "selmode-body"];
 const GIZMO_MODES = ["gizmo-translate", "gizmo-rotate"];
 
 export function TopBar(): React.JSX.Element {
   const ctx = useActionContext();
+  const showWelcome = useWelcome((s) => s.show);
   return (
     <div
       data-testid="topbar"
@@ -48,6 +50,16 @@ export function TopBar(): React.JSX.Element {
       <div className="mx-1 h-4 w-px bg-[#2a3444]" />
       <ActionButton id="undo" ctx={ctx} variant="chip" />
       <ActionButton id="redo" ctx={ctx} variant="chip" />
+      <button
+        type="button"
+        data-testid="welcome-help"
+        aria-label="How to use Plastiq"
+        title="How to use Plastiq"
+        onClick={showWelcome}
+        className="ml-auto flex h-5 w-5 items-center justify-center rounded-full border border-[#2a3444] text-xs text-[#9ab] hover:bg-[#1b2230] hover:text-[#cfe]"
+      >
+        ?
+      </button>
     </div>
   );
 }
