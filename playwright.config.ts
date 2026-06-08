@@ -21,6 +21,10 @@ export default defineConfig({
   use: {
     baseURL: "http://localhost:4177",
     launchOptions: { args: ["--no-sandbox"] },
+    // Seed the "welcome screen already dismissed" flag so the first-run how-to
+    // overlay never covers the editor during tests (the welcome.spec overrides this
+    // with an empty state to exercise the first-run flow itself).
+    storageState: "./e2e/.storage.json",
     // Capture diagnostics for failing runs (collected under test-results/).
     trace: "retain-on-failure",
     screenshot: "only-on-failure",

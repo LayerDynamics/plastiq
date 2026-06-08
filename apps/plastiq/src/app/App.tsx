@@ -12,6 +12,7 @@ import { AssemblyTree } from "./AssemblyTree.js";
 import { PropertiesPanel } from "./PropertiesPanel.js";
 import { Viewport } from "../three/index.js";
 import { Sketcher } from "../sketch/Sketcher.js";
+import { Welcome } from "./Welcome.js";
 import { useCadStore } from "../store/store.js";
 import { useProjectsStore } from "../persistence/projectsStore.js";
 import type { SelectionMode } from "../store/types.js";
@@ -228,6 +229,8 @@ export function App(): React.JSX.Element {
         )}
       </div>
       <StatusBar />
+      {/* First-run how-to overlay (reopenable from the top bar's "?"). */}
+      <Welcome />
     </div>
   );
 }
