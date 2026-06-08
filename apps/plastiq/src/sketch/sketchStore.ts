@@ -87,6 +87,11 @@ export interface SketchStore {
   addConstraint: (c: SketchConstraint) => void;
   /** Apply a select-then-constrain constraint to the current selection (M3.4). */
   applyConstraint: (kind: ConstraintKind) => void;
+  /** Add the driving dimensions a type-while-drawing commit produced, in ONE step:
+   * no own history push (the preceding clickAt already snapshotted, so the whole
+   * typed shape is a single undo), and any dim that would over-constrain is demoted
+   * to driven (reference) — same rule as addDimension. */
+  addDrawDimensions: (constraints: SketchConstraint[]) => void;
   removeConstraint: (id: string) => void;
   /** Anchor / unanchor a point (the "fix" constraint). */
   toggleFix: (pointId: string) => void;
@@ -205,6 +210,30 @@ export const useSketchStore = create<SketchStore>((set, get) => ({
       selection: [],
     }));
     get().solve();
+  },
+
+  addDrawDimensions: (constraints) => {
+    if (constraints.length === 0) return;
+    // No pushHistory: the clickAt that placed this shape already snapshotted, so the
+    // geometry + its typed dimensions undo together as one step.
+    set((s) => ({
+      model: { ...s.model, constraints: [...s.model.constraints, ...constraints] },
+    }));
+    const result = get().solve();
+    // A typed value that would over-constrain becomes a driven (reference) dimension
+    // (FR-19) — it reports its value but adds no solver equation, so it never conflicts.
+    if (result.verdict === "over-constrained") {
+      const ids = new Set(constraints.map((c) => c.id));
+      set((s) => ({
+        model: {
+          ...s.model,
+          constraints: s.model.constraints.map((c) =>
+            ids.has(c.id) && "value" in c ? { ...c, driven: true } : c,
+          ),
+        },
+      }));
+      get().solve();
+    }
   },
 
   toggleFix: (pointId) => {

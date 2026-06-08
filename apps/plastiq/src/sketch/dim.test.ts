@@ -44,6 +44,21 @@ describe("dimensions — measure / canDimension / build (FR-19)", () => {
     expect(canDimension("angle", model, ["l0", "l1"])).toBe(true);
   });
 
+  it("lineAngle: one line ∠ to the X axis — canDimension, measure, build, drive", () => {
+    expect(canDimension("lineAngle", model, ["l0"])).toBe(true); // exactly one line
+    expect(canDimension("lineAngle", model, ["l0", "l1"])).toBe(false); // two → use `angle`
+    // l0 = p0→p1 = atan2(4,3) ≈ 53.13°.
+    expect(measure("lineAngle", model, ["l0"])! * (180 / Math.PI)).toBeCloseTo(53.13, 1);
+    const dim = buildDimension("lineAngle", model, ["l0"], Math.PI / 6, "la")!;
+    expect(dim).toMatchObject({ kind: "lineAngle", line: "l0", value: Math.PI / 6 });
+    const input = toSolverInput({ ...model, constraints: [dim] });
+    expect(input.constraints).toEqual([{ kind: "lineAngle", a: 0, b: 1, value: Math.PI / 6 }]);
+    // The solver tilts the free endpoint so the line sits at exactly 30°.
+    const r = solveSketch(input.points, input.circles, input.constraints);
+    const [a, b] = r.points;
+    expect(Math.atan2(b!.y - a!.y, b!.x - a!.x)).toBeCloseTo(Math.PI / 6, 5);
+  });
+
   it("a distance dimension drives the geometry when solved", () => {
     const dim = buildDimension("distance", model, ["p0", "p1"], 0.08, "d1")!;
     expect(dim).toMatchObject({ kind: "distance", a: "p0", b: "p1", value: 0.08 });

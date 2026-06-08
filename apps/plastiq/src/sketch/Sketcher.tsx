@@ -589,7 +589,7 @@ export function Sketcher(): React.JSX.Element | null {
   const result = useSketchStore((s) => s.result);
   const movePoint = useSketchStore((s) => s.movePoint);
   const solve = useSketchStore((s) => s.solve);
-  const addConstraint = useSketchStore((s) => s.addConstraint);
+  const addDrawDimensions = useSketchStore((s) => s.addDrawDimensions);
 
   // Finish (FR-21): commit the sketch via the shared helper (solve → derive the
   // closed profile → persist model+profile+plane → exit), used identically by the
@@ -664,17 +664,18 @@ export function Sketcher(): React.JSX.Element | null {
     const after = useSketchStore.getState().model;
     const createdPointIds = after.points.filter((p) => !beforePts.has(p.id)).map((p) => p.id);
     const createdEntityIds = after.entities.filter((e) => !beforeEnts.has(e.id)).map((e) => e.id);
-    for (const c of drawDims({
-      tool,
-      fields,
-      values: valuesSI,
-      anchorPointIds,
-      createdPointIds,
-      createdEntityIds,
-      mkId: () => sketchId("c"),
-    })) {
-      addConstraint(c);
-    }
+    // Add the typed dims in one step (no extra history; demotes if over-constrained).
+    addDrawDimensions(
+      drawDims({
+        tool,
+        fields,
+        values: valuesSI,
+        anchorPointIds,
+        createdPointIds,
+        createdEntityIds,
+        mkId: () => sketchId("c"),
+      }),
+    );
     setDraft(null);
   };
 
