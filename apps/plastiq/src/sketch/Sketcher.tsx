@@ -263,7 +263,7 @@ function DimensionEditor({
     distance: "length (mm)",
   };
   return (
-    <div className="absolute left-2 top-[5.5rem] z-30 flex items-center gap-1 rounded border border-[#4ea1ff] bg-black/80 px-2 py-1 text-xs text-[#cfe]">
+    <div className="absolute left-2 top-22 z-30 flex items-center gap-1 rounded border border-[#4ea1ff] bg-black/80 px-2 py-1 text-xs text-[#cfe]">
       <span className="text-[#789]">{unitLabel[c.kind] ?? "length (mm)"}</span>
       <input
         data-testid="dim-input"
