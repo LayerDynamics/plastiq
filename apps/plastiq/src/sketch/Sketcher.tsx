@@ -6,8 +6,16 @@
 // text and trivial hit-testing for selectable glyphs.
 
 import { useEffect, useRef, useState } from "react";
-import { useSketchStore, type SketchTool } from "./sketchStore.js";
+import { useSketchStore, sketchId, type SketchTool } from "./sketchStore.js";
 import { circumcircle, type SketchModel } from "./model.js";
+import {
+  drawDims,
+  drawFields,
+  liveValues,
+  resolveCursor,
+  type DrawField,
+  type Vec2,
+} from "./drawInput.js";
 import { catmullRomPoints } from "./spline2d.js";
 import { nearestSnap, segmentHint, type SegHint, type Snap } from "./infer.js";
 import { canApply, hitTest, type ConstraintKind } from "./hit.js";
@@ -442,6 +450,112 @@ const DIMENSION_PRIORITY: DimensionKind[] = [
   "vDistance",
 ];
 
+/** Draft entry for the inline value box: the typed string per field (""=live) and
+ * which field has keyboard focus (-1 = none yet). */
+interface Draft {
+  values: string[];
+  focus: number;
+}
+
+/** SI/radian → display number (mm or degrees). */
+const toDisplay = (si: number, unit: "mm" | "deg"): number => (unit === "deg" ? si * DEG : si * MM);
+/** A typed display string → SI/radian, or null when blank/invalid (= leave live). */
+const parseField = (s: string, unit: "mm" | "deg"): number | null => {
+  if (s.trim() === "") return null;
+  const n = Number(s);
+  if (!Number.isFinite(n)) return null;
+  return unit === "deg" ? n / DEG : n / MM;
+};
+const fmt = (n: number): string => {
+  const r = Math.round(n * 1000) / 1000;
+  return Object.is(r, -0) ? "0" : String(r);
+};
+
+/**
+ * The Fusion-style inline value box shown during a drawing gesture. Each field shows
+ * its live (cursor-implied) value until you type; typing locks it, Tab cycles fields,
+ * Enter commits. Positioned just off the cursor.
+ */
+function DrawInputBox({
+  fields,
+  live,
+  draft,
+  setDraft,
+  onCommit,
+  at,
+}: {
+  fields: DrawField[];
+  live: number[];
+  draft: Draft | null;
+  setDraft: (d: Draft | null) => void;
+  onCommit: () => void;
+  at: Px;
+}): React.JSX.Element {
+  const start = (i: number): Draft => draft ?? { values: fields.map(() => ""), focus: i };
+  return (
+    <div
+      data-testid="draw-input"
+      className="absolute z-30 flex items-center gap-1 rounded border border-[#4ea1ff] bg-black/80 px-1.5 py-1 text-[11px] text-[#cfe]"
+      style={{ left: at.x + 16, top: at.y + 16 }}
+      onPointerDown={(e) => e.stopPropagation()}
+    >
+      {fields.map((f, i) => {
+        const typed = draft?.values[i] ?? "";
+        const shown = typed !== "" ? typed : fmt(toDisplay(live[i] ?? 0, f.unit));
+        const focused = draft?.focus === i;
+        return (
+          <span key={f.key} className="flex items-center gap-0.5">
+            <span className="text-[#789]">{f.label}</span>
+            {focused ? (
+              <input
+                key={`in-${f.key}`}
+                autoFocus
+                data-testid={`draw-input-${f.key}`}
+                type="text"
+                inputMode="decimal"
+                value={typed}
+                onChange={(e) => {
+                  const d = start(i);
+                  const values = [...d.values];
+                  values[i] = e.currentTarget.value;
+                  setDraft({ values, focus: i });
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    onCommit();
+                  } else if (e.key === "Tab") {
+                    e.preventDefault();
+                    setDraft({ ...start(i), focus: (i + 1) % fields.length });
+                  } else if (e.key === "Escape") {
+                    e.preventDefault();
+                    setDraft(null);
+                  }
+                }}
+                className="w-14 rounded border border-[#2a3444] bg-[#0e1219] px-1 py-0.5 text-right tabular-nums text-[#cfe] outline-none"
+              />
+            ) : (
+              <button
+                type="button"
+                data-testid={`draw-field-${f.key}`}
+                onClick={() => setDraft({ ...start(i), focus: i })}
+                className={`min-w-14 rounded border px-1 py-0.5 text-right tabular-nums ${
+                  typed !== ""
+                    ? "border-[#4ea1ff] text-[#cfe]"
+                    : "border-transparent text-[#9ab] hover:border-[#2a3444]"
+                }`}
+              >
+                {shown}
+              </button>
+            )}
+            <span className="text-[#567]">{f.unit === "deg" ? "°" : "mm"}</span>
+          </span>
+        );
+      })}
+    </div>
+  );
+}
+
 export function Sketcher(): React.JSX.Element | null {
   const active = useSketchStore((s) => s.active);
   const view = useSketchStore((s) => s.view);
@@ -470,6 +584,7 @@ export function Sketcher(): React.JSX.Element | null {
   const result = useSketchStore((s) => s.result);
   const movePoint = useSketchStore((s) => s.movePoint);
   const solve = useSketchStore((s) => s.solve);
+  const addConstraint = useSketchStore((s) => s.addConstraint);
 
   // Finish (FR-21): commit the sketch via the shared helper (solve → derive the
   // closed profile → persist model+profile+plane → exit), used identically by the
@@ -496,6 +611,73 @@ export function Sketcher(): React.JSX.Element | null {
   // The world point the in-progress gesture started from (rubber-band anchor).
   const anchorId = pending[0];
   const anchor = anchorId ? model.points.find((p) => p.id === anchorId) : undefined;
+
+  // --- Type-exact-dimensions-while-drawing (Fusion precise input) ---
+  // The fields the next click exposes, their live (cursor-implied) values, and the
+  // typed draft. Typing a value locks it; Enter (or a click) commits geometry at the
+  // resolved point and adds the matching driving dimension(s).
+  const [draft, setDraft] = useState<Draft | null>(null);
+  const drawFieldsNow = active && tool !== "select" ? drawFields(tool, pending.length) : [];
+  const anchorsW: Vec2[] = pending
+    .map((id) => model.points.find((p) => p.id === id))
+    .filter((p): p is NonNullable<typeof p> => p != null)
+    .map((p) => ({ u: p.u, v: p.v }));
+  const cursorW: Vec2 = hover ? toWorld(view, hover.px) : { u: 0, v: 0 };
+  const liveNow = drawFieldsNow.length
+    ? liveValues(tool, pending.length, anchorsW, cursorW)
+    : [];
+  // Box position: follows the cursor (or anchor) while idle, but FREEZES once value
+  // entry starts so its fields don't jump out from under the pointer mid-type.
+  const drawBoxPos = useRef<Px | null>(null);
+  const liveBoxPos: Px | null = hover
+    ? hover.px
+    : anchor
+      ? toScreen(view, { u: anchor.u, v: anchor.v })
+      : null;
+  if (!draft && liveBoxPos) drawBoxPos.current = liveBoxPos;
+  const boxPos = draft ? (drawBoxPos.current ?? liveBoxPos) : liveBoxPos;
+  // Reset the draft whenever the tool or gesture step changes.
+  useEffect(() => setDraft(null), [tool, pending.length]);
+
+  // Place geometry from the (typed-or-live) field values and lock typed fields with
+  // driving dimensions. Diffs the model around clickAt to learn the created ids.
+  const commitDraft = (): void => {
+    const fields = drawFieldsNow;
+    if (fields.length === 0) return;
+    const valuesSI = fields.map((f, i) => parseField(draft?.values[i] ?? "", f.unit));
+    const target = resolveCursor(tool, pending.length, anchorsW, cursorW, valuesSI);
+    const beforeState = useSketchStore.getState();
+    const beforePts = new Set(beforeState.model.points.map((p) => p.id));
+    const beforeEnts = new Set(beforeState.model.entities.map((e) => e.id));
+    const anchorPointIds = [...beforeState.pending];
+    clickAt(target.u, target.v);
+    const after = useSketchStore.getState().model;
+    const createdPointIds = after.points.filter((p) => !beforePts.has(p.id)).map((p) => p.id);
+    const createdEntityIds = after.entities.filter((e) => !beforeEnts.has(e.id)).map((e) => e.id);
+    for (const c of drawDims({
+      tool,
+      fields,
+      values: valuesSI,
+      anchorPointIds,
+      createdPointIds,
+      createdEntityIds,
+      mkId: () => sketchId("c"),
+    })) {
+      addConstraint(c);
+    }
+    setDraft(null);
+  };
+
+  // Bridge so the window keydown can start value entry when the user types a digit
+  // over the canvas (Fusion: just start typing). Kept in a ref to avoid resubscribing.
+  const startDraftRef = useRef<((k: string) => void) | null>(null);
+  startDraftRef.current =
+    drawFieldsNow.length > 0
+      ? (k: string): void =>
+          setDraft({ values: drawFieldsNow.map((_, i) => (i === 0 ? k : "")), focus: 0 })
+      : null;
+  const commitRef = useRef<() => void>(() => {});
+  commitRef.current = commitDraft;
 
   const inferAt = (p: Px): { snap: Snap; hint: SegHint | null } => {
     const snap = nearestSnap(model, view, p);
@@ -535,6 +717,13 @@ export function Sketcher(): React.JSX.Element | null {
       if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable)) return;
       if (e.metaKey || e.ctrlKey || e.altKey) return;
       const st = useSketchStore.getState();
+      // Start typing a value over the canvas → open the inline value box seeded with
+      // the digit (Fusion: just start typing the dimension).
+      if (/^[-0-9.]$/.test(e.key) && startDraftRef.current) {
+        e.preventDefault();
+        startDraftRef.current(e.key);
+        return;
+      }
       if (e.key === "Escape") {
         // Abort an in-progress gesture; if there's none, drop back to the Select tool.
         if (st.pending.length > 0) st.cancelGesture();
@@ -542,7 +731,9 @@ export function Sketcher(): React.JSX.Element | null {
         return;
       }
       if (e.key === "Enter") {
-        st.finishGesture();
+        // Commit a typed value if the box is open mid-draw; else finish a gesture.
+        if (drawFields(st.tool, st.pending.length).length > 0) commitRef.current();
+        else st.finishGesture();
         return;
       }
       const k = e.key.toLowerCase();
@@ -825,6 +1016,13 @@ export function Sketcher(): React.JSX.Element | null {
             else setSelection([hit.id]);
             return;
           }
+          // A typed value in the inline box wins: commit geometry at the resolved
+          // (exact) point + its driving dimension(s).
+          if (draft && draft.values.some((v) => v !== "")) {
+            commitDraft();
+            setHover({ px: p, ...inferAt(p) });
+            return;
+          }
           // Place at the snapped point; persist the inferred constraint unless Shift.
           const { snap, hint } = inferAt(p);
           clickAt(snap.u, snap.v, {
@@ -850,6 +1048,18 @@ export function Sketcher(): React.JSX.Element | null {
           />
         )}
       </svg>
+      {/* Inline precise-value box: appears during a drawing gesture near the cursor;
+          shows live values, type to lock + auto-dimension (FR — Fusion precise input). */}
+      {drawFieldsNow.length > 0 && boxPos && (
+        <DrawInputBox
+          fields={drawFieldsNow}
+          live={liveNow}
+          draft={draft}
+          setDraft={setDraft}
+          onCommit={commitDraft}
+          at={boxPos}
+        />
+      )}
       {ctxMenu && (
         <>
           {/* Backdrop dismisses on the next click (matches the feature-tree menu). */}
