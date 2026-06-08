@@ -7,7 +7,7 @@
 import type { Workspace } from "../store/types.js";
 
 /** Special controls that aren't single action buttons. */
-export type WidgetKey = "sketchLauncher" | "sectionControl" | "simReadout";
+export type WidgetKey = "sketchLauncher" | "sectionControl" | "simReadout" | "viewControl";
 
 export type RibbonItem = { kind: "action"; id: string } | { kind: "widget"; widget: WidgetKey };
 
@@ -69,7 +69,10 @@ export const RIBBON: Record<Workspace, RibbonTab[]> = {
             a("transform"),
           ],
         },
-        { title: "Inspect", items: [a("measure"), w("sectionControl"), a("fit-view")] },
+        {
+          title: "Inspect",
+          items: [a("measure"), w("sectionControl"), a("fit-view"), w("viewControl")],
+        },
       ],
     },
     {
@@ -105,7 +108,10 @@ export const RIBBON: Record<Workspace, RibbonTab[]> = {
         // button just enters/leaves that mode.
         { title: "Relationships", items: [a("mate-mode")] },
         { title: "Position", items: [a("explode")] },
-        { title: "Inspect", items: [a("interference"), a("measure"), w("sectionControl")] },
+        {
+          title: "Inspect",
+          items: [a("interference"), a("measure"), w("sectionControl"), w("viewControl")],
+        },
       ],
     },
   ],
