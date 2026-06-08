@@ -6,8 +6,16 @@
 // text and trivial hit-testing for selectable glyphs.
 
 import { useEffect, useRef, useState } from "react";
-import { useSketchStore, type SketchTool } from "./sketchStore.js";
+import { useSketchStore, sketchId, type SketchTool } from "./sketchStore.js";
 import { circumcircle, type SketchModel } from "./model.js";
+import {
+  drawDims,
+  drawFields,
+  liveValues,
+  resolveCursor,
+  type DrawField,
+  type Vec2,
+} from "./drawInput.js";
 import { catmullRomPoints } from "./spline2d.js";
 import { nearestSnap, segmentHint, type SegHint, type Snap } from "./infer.js";
 import { canApply, hitTest, type ConstraintKind } from "./hit.js";
@@ -243,10 +251,11 @@ function DimensionEditor({
 }): React.JSX.Element | null {
   const c = model.constraints.find((x) => x.id === id);
   if (!c || !("value" in c)) return null;
-  const isAngle = c.kind === "angle";
+  const isAngle = c.kind === "angle" || c.kind === "lineAngle";
   const factor = isAngle ? DEG : MM;
   const unitLabel: Record<string, string> = {
     angle: "angle (°)",
+    lineAngle: "angle (°)",
     radius: "radius (mm)",
     diameter: "diameter (mm)",
     hDistance: "Δx (mm)",
@@ -254,7 +263,7 @@ function DimensionEditor({
     distance: "length (mm)",
   };
   return (
-    <div className="absolute left-2 top-[5.5rem] z-30 flex items-center gap-1 rounded border border-[#4ea1ff] bg-black/80 px-2 py-1 text-xs text-[#cfe]">
+    <div className="absolute left-2 top-22 z-30 flex items-center gap-1 rounded border border-[#4ea1ff] bg-black/80 px-2 py-1 text-xs text-[#cfe]">
       <span className="text-[#789]">{unitLabel[c.kind] ?? "length (mm)"}</span>
       <input
         data-testid="dim-input"
@@ -332,6 +341,7 @@ function ConstraintGlyphs({
     else if (c.kind === "radius") base = `R${mm(c.value)}`;
     else if (c.kind === "diameter") base = `⌀${mm(c.value)}`;
     else if (c.kind === "angle") base = `${(c.value * DEG).toFixed(1)}°`;
+    else if (c.kind === "lineAngle") base = `∠${(c.value * DEG).toFixed(1)}°`;
     if (base === null) return null;
     return "driven" in c && c.driven ? `(${base})` : base;
   };
@@ -414,6 +424,143 @@ const TOOLS: { tool: SketchTool; label: string }[] = [
   { tool: "point", label: "Point" },
 ];
 
+/** Single-key tool shortcuts (lowercased), Fusion-style: the primary tool of each
+ * family (the centre/3-point variants stay on their toolbar buttons). */
+const TOOL_KEYS: Record<string, SketchTool> = {
+  v: "select",
+  l: "line",
+  r: "rectangle",
+  c: "circle",
+  a: "arc3",
+  g: "polygon",
+  o: "slot",
+  s: "spline",
+  p: "point",
+};
+
+/** Tools where a left press-drag-release draws the shape (press = first click,
+ * release = second click). The 2-click primitives; other tools keep click-by-click
+ * and left-drag still pans. Pan is always available on the middle mouse button. */
+const DRAG_DRAW: ReadonlySet<SketchTool> = new Set(["line", "rectangle", "rectCenter", "circle"]);
+
+/** Order the smart-dimension (D) key tries — the first that fits the selection wins.
+ * distance/radius/angle are mutually exclusive by selection shape, so this just sets
+ * the tie-break for a 2-point selection (aligned distance, like Fusion). */
+const DIMENSION_PRIORITY: DimensionKind[] = [
+  "distance",
+  "radius",
+  "angle",
+  "diameter",
+  "hDistance",
+  "vDistance",
+];
+
+/** Draft entry for the inline value box: the typed string per field (""=live) and
+ * which field has keyboard focus (-1 = none yet). */
+interface Draft {
+  values: string[];
+  focus: number;
+}
+
+/** SI/radian → display number (mm or degrees). */
+const toDisplay = (si: number, unit: "mm" | "deg"): number => (unit === "deg" ? si * DEG : si * MM);
+/** A typed display string → SI/radian, or null when blank/invalid (= leave live). */
+const parseField = (s: string, unit: "mm" | "deg"): number | null => {
+  if (s.trim() === "") return null;
+  const n = Number(s);
+  if (!Number.isFinite(n)) return null;
+  return unit === "deg" ? n / DEG : n / MM;
+};
+const fmt = (n: number): string => {
+  const r = Math.round(n * 1000) / 1000;
+  return Object.is(r, -0) ? "0" : String(r);
+};
+
+/**
+ * The Fusion-style inline value box shown during a drawing gesture. Each field shows
+ * its live (cursor-implied) value until you type; typing locks it, Tab cycles fields,
+ * Enter commits. Positioned just off the cursor.
+ */
+function DrawInputBox({
+  fields,
+  live,
+  draft,
+  setDraft,
+  onCommit,
+  at,
+}: {
+  fields: DrawField[];
+  live: number[];
+  draft: Draft | null;
+  setDraft: (d: Draft | null) => void;
+  onCommit: () => void;
+  at: Px;
+}): React.JSX.Element {
+  const start = (i: number): Draft => draft ?? { values: fields.map(() => ""), focus: i };
+  return (
+    <div
+      data-testid="draw-input"
+      className="absolute z-30 flex items-center gap-1 rounded border border-[#4ea1ff] bg-black/80 px-1.5 py-1 text-[11px] text-[#cfe]"
+      style={{ left: at.x + 16, top: at.y + 16 }}
+      onPointerDown={(e) => e.stopPropagation()}
+    >
+      {fields.map((f, i) => {
+        const typed = draft?.values[i] ?? "";
+        const shown = typed !== "" ? typed : fmt(toDisplay(live[i] ?? 0, f.unit));
+        const focused = draft?.focus === i;
+        return (
+          <span key={f.key} className="flex items-center gap-0.5">
+            <span className="text-[#789]">{f.label}</span>
+            {focused ? (
+              <input
+                key={`in-${f.key}`}
+                autoFocus
+                data-testid={`draw-input-${f.key}`}
+                type="text"
+                inputMode="decimal"
+                value={typed}
+                onChange={(e) => {
+                  const d = start(i);
+                  const values = [...d.values];
+                  values[i] = e.currentTarget.value;
+                  setDraft({ values, focus: i });
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    onCommit();
+                  } else if (e.key === "Tab") {
+                    e.preventDefault();
+                    setDraft({ ...start(i), focus: (i + 1) % fields.length });
+                  } else if (e.key === "Escape") {
+                    e.preventDefault();
+                    setDraft(null);
+                  }
+                }}
+                className="w-14 rounded border border-[#2a3444] bg-[#0e1219] px-1 py-0.5 text-right tabular-nums text-[#cfe] outline-none"
+              />
+            ) : (
+              <button
+                type="button"
+                data-testid={`draw-field-${f.key}`}
+                onClick={() => setDraft({ ...start(i), focus: i })}
+                className={`min-w-14 rounded border px-1 py-0.5 text-right tabular-nums ${
+                  typed !== ""
+                    ? "border-[#4ea1ff] text-[#cfe]"
+                    : "border-transparent text-[#9ab] hover:border-[#2a3444]"
+                }`}
+              >
+                {shown}
+              </button>
+            )}
+            <span className="text-[#567]">{f.unit === "deg" ? "°" : "mm"}</span>
+          </span>
+        );
+      })}
+    </div>
+  );
+}
+
 export function Sketcher(): React.JSX.Element | null {
   const active = useSketchStore((s) => s.active);
   const view = useSketchStore((s) => s.view);
@@ -428,7 +575,6 @@ export function Sketcher(): React.JSX.Element | null {
   const polygonSides = useSketchStore((s) => s.polygonSides);
   const setPolygonSides = useSketchStore((s) => s.setPolygonSides);
   const clickAt = useSketchStore((s) => s.clickAt);
-  const cancelGesture = useSketchStore((s) => s.cancelGesture);
   const finishGesture = useSketchStore((s) => s.finishGesture);
   const pending = useSketchStore((s) => s.pending);
   const selection = useSketchStore((s) => s.selection);
@@ -443,6 +589,7 @@ export function Sketcher(): React.JSX.Element | null {
   const result = useSketchStore((s) => s.result);
   const movePoint = useSketchStore((s) => s.movePoint);
   const solve = useSketchStore((s) => s.solve);
+  const addDrawDimensions = useSketchStore((s) => s.addDrawDimensions);
 
   // Finish (FR-21): commit the sketch via the shared helper (solve → derive the
   // closed profile → persist model+profile+plane → exit), used identically by the
@@ -464,11 +611,84 @@ export function Sketcher(): React.JSX.Element | null {
   const moved = useRef(false);
   /** The point being dragged in the Select tool (live re-solve), if any. */
   const dragPoint = useRef<string | null>(null);
+  /** A press that may become a drag-draw (DRAG_DRAW tools): the press point in px +
+   * snapped world. Set on pointerdown when a fresh shape can start there. */
+  const dragDraw = useRef<{ px: Px; snap: Snap } | null>(null);
+  /** Live drag-draw rubber-band (press → cursor) for the preview overlay. */
+  const [dragPreview, setDragPreview] = useState<{ from: Px; to: Px } | null>(null);
   const baseColor = verdictColor(result?.verdict);
 
   // The world point the in-progress gesture started from (rubber-band anchor).
   const anchorId = pending[0];
   const anchor = anchorId ? model.points.find((p) => p.id === anchorId) : undefined;
+
+  // --- Type-exact-dimensions-while-drawing (Fusion precise input) ---
+  // The fields the next click exposes, their live (cursor-implied) values, and the
+  // typed draft. Typing a value locks it; Enter (or a click) commits geometry at the
+  // resolved point and adds the matching driving dimension(s).
+  const [draft, setDraft] = useState<Draft | null>(null);
+  const drawFieldsNow = active && tool !== "select" ? drawFields(tool, pending.length) : [];
+  const anchorsW: Vec2[] = pending
+    .map((id) => model.points.find((p) => p.id === id))
+    .filter((p): p is NonNullable<typeof p> => p != null)
+    .map((p) => ({ u: p.u, v: p.v }));
+  const cursorW: Vec2 = hover ? toWorld(view, hover.px) : { u: 0, v: 0 };
+  const liveNow = drawFieldsNow.length
+    ? liveValues(tool, pending.length, anchorsW, cursorW)
+    : [];
+  // Box position: follows the cursor (or anchor) while idle, but FREEZES once value
+  // entry starts so its fields don't jump out from under the pointer mid-type.
+  const drawBoxPos = useRef<Px | null>(null);
+  const liveBoxPos: Px | null = hover
+    ? hover.px
+    : anchor
+      ? toScreen(view, { u: anchor.u, v: anchor.v })
+      : null;
+  if (!draft && liveBoxPos) drawBoxPos.current = liveBoxPos;
+  const boxPos = draft ? (drawBoxPos.current ?? liveBoxPos) : liveBoxPos;
+  // Reset the draft whenever the tool or gesture step changes.
+  useEffect(() => setDraft(null), [tool, pending.length]);
+
+  // Place geometry from the (typed-or-live) field values and lock typed fields with
+  // driving dimensions. Diffs the model around clickAt to learn the created ids.
+  const commitDraft = (): void => {
+    const fields = drawFieldsNow;
+    if (fields.length === 0) return;
+    const valuesSI = fields.map((f, i) => parseField(draft?.values[i] ?? "", f.unit));
+    const target = resolveCursor(tool, pending.length, anchorsW, cursorW, valuesSI);
+    const beforeState = useSketchStore.getState();
+    const beforePts = new Set(beforeState.model.points.map((p) => p.id));
+    const beforeEnts = new Set(beforeState.model.entities.map((e) => e.id));
+    const anchorPointIds = [...beforeState.pending];
+    clickAt(target.u, target.v);
+    const after = useSketchStore.getState().model;
+    const createdPointIds = after.points.filter((p) => !beforePts.has(p.id)).map((p) => p.id);
+    const createdEntityIds = after.entities.filter((e) => !beforeEnts.has(e.id)).map((e) => e.id);
+    // Add the typed dims in one step (no extra history; demotes if over-constrained).
+    addDrawDimensions(
+      drawDims({
+        tool,
+        fields,
+        values: valuesSI,
+        anchorPointIds,
+        createdPointIds,
+        createdEntityIds,
+        mkId: () => sketchId("c"),
+      }),
+    );
+    setDraft(null);
+  };
+
+  // Bridge so the window keydown can start value entry when the user types a digit
+  // over the canvas (Fusion: just start typing). Kept in a ref to avoid resubscribing.
+  const startDraftRef = useRef<((k: string) => void) | null>(null);
+  startDraftRef.current =
+    drawFieldsNow.length > 0
+      ? (k: string): void =>
+          setDraft({ values: drawFieldsNow.map((_, i) => (i === 0 ? k : "")), focus: 0 })
+      : null;
+  const commitRef = useRef<() => void>(() => {});
+  commitRef.current = commitDraft;
 
   const inferAt = (p: Px): { snap: Snap; hint: SegHint | null } => {
     const snap = nearestSnap(model, view, p);
@@ -496,16 +716,56 @@ export function Sketcher(): React.JSX.Element | null {
     if (active) setView(centeredView(size.w, size.h, view.scale));
   }, [active, setView, size.w, size.h, view.scale]);
 
-  // Esc aborts the in-progress drawing gesture.
+  // Keyboard shortcuts (Fusion-style): single letters switch tools, D dimensions the
+  // selection, X toggles construction, Esc backs out (abort gesture → select), Enter
+  // finishes a multi-click gesture. Reads fresh store state so the listener needn't
+  // re-subscribe on every keystroke. Suppressed while typing in a field (the value
+  // editors own their keys) or with a modifier held (Ctrl+Z etc. belong to App).
   useEffect(() => {
     if (!active) return;
     const onKey = (e: KeyboardEvent): void => {
-      if (e.key === "Escape") cancelGesture();
-      else if (e.key === "Enter") finishGesture();
+      const el = e.target as HTMLElement | null;
+      if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable)) return;
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      const st = useSketchStore.getState();
+      // Start typing a value over the canvas → open the inline value box seeded with
+      // the digit (Fusion: just start typing the dimension).
+      if (/^[-0-9.]$/.test(e.key) && startDraftRef.current) {
+        e.preventDefault();
+        startDraftRef.current(e.key);
+        return;
+      }
+      if (e.key === "Escape") {
+        // Abort an in-progress gesture; if there's none, drop back to the Select tool.
+        if (st.pending.length > 0) st.cancelGesture();
+        else st.setTool("select");
+        return;
+      }
+      if (e.key === "Enter") {
+        // Commit a typed value if the box is open mid-draw; else finish a gesture.
+        if (drawFields(st.tool, st.pending.length).length > 0) commitRef.current();
+        else st.finishGesture();
+        return;
+      }
+      const k = e.key.toLowerCase();
+      const toolKey = TOOL_KEYS[k];
+      if (toolKey) {
+        st.setTool(toolKey);
+        return;
+      }
+      if (k === "x") {
+        st.setConstruction(!st.construction);
+        return;
+      }
+      if (k === "d") {
+        // Smart dimension: apply the first dimension kind that fits the selection.
+        const kind = DIMENSION_PRIORITY.find((d) => canDimension(d, st.model, st.selection));
+        if (kind) st.addDimension(kind);
+      }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [active, cancelGesture, finishGesture]);
+  }, [active]);
 
   if (!active) return null;
 
@@ -637,6 +897,7 @@ export function Sketcher(): React.JSX.Element | null {
             ["radius", "Radius"],
             ["diameter", "⌀"],
             ["angle", "Angle"],
+            ["lineAngle", "∠X"],
           ] as [DimensionKind, string][]
         ).map(([kind, label]) => (
           <button
@@ -717,16 +978,31 @@ export function Sketcher(): React.JSX.Element | null {
           setView(zoomAt(view, anchorPx, e.deltaY < 0 ? 1.1 : 1 / 1.1));
         }}
         onPointerDown={(e) => {
-          if (e.button !== 0) return; // left button only — right-click opens the menu
-          (e.currentTarget as SVGElement).setPointerCapture(e.pointerId);
           const p = rectPx(e);
-          pan.current = p;
+          // Middle button always pans (Fusion convention), in any tool.
+          if (e.button === 1) {
+            e.preventDefault();
+            (e.currentTarget as SVGElement).setPointerCapture(e.pointerId);
+            pan.current = p;
+            moved.current = false;
+            return;
+          }
+          if (e.button !== 0) return; // right-click opens the menu
+          (e.currentTarget as SVGElement).setPointerCapture(e.pointerId);
           moved.current = false;
           // In Select, pressing on a point starts a live drag (FR-20 re-solve).
           if (tool === "select") {
             const hit = hitTest(model, view, p);
             dragPoint.current = hit?.kind === "point" ? hit.id : null;
+            pan.current = p; // left-drag pans in Select
+            return;
           }
+          // A fresh DRAG_DRAW shape: arm a press-drag-release draw (no left-pan).
+          if (DRAG_DRAW.has(tool) && pending.length === 0 && !draft) {
+            dragDraw.current = { px: p, snap: nearestSnap(model, view, p) };
+            return;
+          }
+          pan.current = p; // other drawing tools: left-drag still pans
         }}
         onPointerMove={(e) => {
           const p = rectPx(e);
@@ -738,9 +1014,18 @@ export function Sketcher(): React.JSX.Element | null {
             solve();
             return;
           }
+          // A drag-draw in progress: rubber-band from the press to the cursor.
+          if (dragDraw.current) {
+            if (moved.current || Math.hypot(p.x - dragDraw.current.px.x, p.y - dragDraw.current.px.y) >= 3) {
+              moved.current = true;
+              setDragPreview({ from: dragDraw.current.px, to: p });
+              setHover({ px: p, ...inferAt(p) });
+            }
+            return;
+          }
           const start = pan.current;
           if (start && (moved.current || Math.hypot(p.x - start.x, p.y - start.y) >= 3)) {
-            moved.current = true; // a drag → pan (in any tool)
+            moved.current = true; // a drag → pan
             setView(panBy(view, p.x - start.x, p.y - start.y));
             pan.current = p;
             return;
@@ -750,20 +1035,38 @@ export function Sketcher(): React.JSX.Element | null {
         }}
         onPointerLeave={() => setHover(null)}
         onPointerUp={(e) => {
-          if (e.button !== 0) return; // left button only — right-click opens the menu
+          if (e.button !== 0 && e.button !== 1) return;
           const wasMove = moved.current;
           const wasDrag = dragPoint.current !== null;
+          const draw = dragDraw.current;
           const p = rectPx(e);
           pan.current = null;
           moved.current = false;
           dragPoint.current = null;
-          if (wasMove || wasDrag) return;
+          dragDraw.current = null;
+          setDragPreview(null);
+          // Completed drag-draw: press = first click, release = second click.
+          if (draw && wasMove) {
+            clickAt(draw.snap.u, draw.snap.v, { reusePointId: draw.snap.pointId });
+            const rel = inferAt(p);
+            clickAt(rel.snap.u, rel.snap.v, { reusePointId: rel.snap.pointId });
+            setHover({ px: p, ...rel });
+            return;
+          }
+          if (wasMove || wasDrag) return; // a pan / point-drag, not a click
           if (tool === "select") {
             // Select-then-constrain: pick the entity under the cursor (Shift adds).
             const hit = hitTest(model, view, p);
             if (!hit) setSelection([]);
             else if (e.shiftKey) toggleSelect(hit.id);
             else setSelection([hit.id]);
+            return;
+          }
+          // A typed value in the inline box wins: commit geometry at the resolved
+          // (exact) point + its driving dimension(s).
+          if (draft && draft.values.some((v) => v !== "")) {
+            commitDraft();
+            setHover({ px: p, ...inferAt(p) });
             return;
           }
           // Place at the snapped point; persist the inferred constraint unless Shift.
@@ -790,7 +1093,20 @@ export function Sketcher(): React.JSX.Element | null {
             anchor={anchor ? toScreen(view, { u: anchor.u, v: anchor.v }) : null}
           />
         )}
+        {dragPreview && <DragDrawPreview tool={tool} from={dragPreview.from} to={dragPreview.to} />}
       </svg>
+      {/* Inline precise-value box: appears during a drawing gesture near the cursor;
+          shows live values, type to lock + auto-dimension (FR — Fusion precise input). */}
+      {drawFieldsNow.length > 0 && boxPos && (
+        <DrawInputBox
+          fields={drawFieldsNow}
+          live={liveNow}
+          draft={draft}
+          setDraft={setDraft}
+          onCommit={commitDraft}
+          at={boxPos}
+        />
+      )}
       {ctxMenu && (
         <>
           {/* Backdrop dismisses on the next click (matches the feature-tree menu). */}
@@ -818,6 +1134,38 @@ export function Sketcher(): React.JSX.Element | null {
       )}
     </div>
   );
+}
+
+/** Dashed rubber-band shown while drag-drawing a 2-click primitive (press → cursor):
+ * a line, an axis-aligned rectangle (corner or centred), or a circle. Display only —
+ * the real geometry is built on release. */
+function DragDrawPreview({ tool, from, to }: { tool: SketchTool; from: Px; to: Px }): React.JSX.Element {
+  const stroke = "#4ea1ff";
+  const common = { fill: "none", stroke, strokeWidth: 1.5, strokeDasharray: "5 4" } as const;
+  if (tool === "circle") {
+    const r = Math.hypot(to.x - from.x, to.y - from.y);
+    return <circle cx={from.x} cy={from.y} r={r} {...common} pointerEvents="none" />;
+  }
+  if (tool === "rectangle") {
+    return (
+      <rect
+        x={Math.min(from.x, to.x)}
+        y={Math.min(from.y, to.y)}
+        width={Math.abs(to.x - from.x)}
+        height={Math.abs(to.y - from.y)}
+        {...common}
+        pointerEvents="none"
+      />
+    );
+  }
+  if (tool === "rectCenter") {
+    const hw = Math.abs(to.x - from.x);
+    const hh = Math.abs(to.y - from.y);
+    return (
+      <rect x={from.x - hw} y={from.y - hh} width={hw * 2} height={hh * 2} {...common} pointerEvents="none" />
+    );
+  }
+  return <line x1={from.x} y1={from.y} x2={to.x} y2={to.y} {...common} pointerEvents="none" />;
 }
 
 /** Snap marker (per kind) + rubber-band + inferred-constraint glyph (FR-17). */

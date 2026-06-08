@@ -103,6 +103,7 @@ export type SketchConstraint =
   | { id: string; kind: "hDistance"; a: string; b: string; value: number; driven?: boolean }
   | { id: string; kind: "vDistance"; a: string; b: string; value: number; driven?: boolean }
   | { id: string; kind: "angle"; line1: string; line2: string; value: number; driven?: boolean }
+  | { id: string; kind: "lineAngle"; line: string; value: number; driven?: boolean }
   | { id: string; kind: "radius"; circle: string; value: number; driven?: boolean }
   | { id: string; kind: "diameter"; circle: string; value: number; driven?: boolean }
   | { id: string; kind: "concentric"; circle1: string; circle2: string }
@@ -117,6 +118,7 @@ export type ValuedConstraintKind =
   | "hDistance"
   | "vDistance"
   | "angle"
+  | "lineAngle"
   | "radius"
   | "diameter";
 
@@ -363,6 +365,17 @@ export function toSolverInput(model: SketchModel): {
             value: c.value,
           });
         }
+        break;
+      }
+      case "lineAngle": {
+        const l = line(model, c.line);
+        if (l)
+          constraints.push({
+            kind: "lineAngle",
+            a: pointIndex(model, l.a),
+            b: pointIndex(model, l.b),
+            value: c.value,
+          });
         break;
       }
       case "radius": {

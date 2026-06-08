@@ -65,6 +65,27 @@ describe("geometric constraints", () => {
     expect(r.points[2]!.x).toBeCloseTo(0.03, 6);
     expect(r.points[2]!.y).toBeCloseTo(0, 6);
   });
+
+  it("lineAngle drives a line's angle to the +X axis (Fusion type-while-drawing)", () => {
+    // A free endpoint of a 50mm-ish line, angle-constrained to 30° from a fixed start.
+    const pts: SolverPoint[] = [
+      { x: 0, y: 0, fixed: true },
+      { x: 0.05, y: 0.001, fixed: false }, // ~horizontal; the constraint must tilt it
+    ];
+    const r = solveSketch(
+      pts,
+      [],
+      [
+        { kind: "distance", a: 0, b: 1, value: 0.05 },
+        { kind: "lineAngle", a: 0, b: 1, value: Math.PI / 6 }, // 30°
+      ],
+    );
+    const dx = r.points[1]!.x - r.points[0]!.x;
+    const dy = r.points[1]!.y - r.points[0]!.y;
+    expect(Math.atan2(dy, dx)).toBeCloseTo(Math.PI / 6, 5); // solved to exactly 30°
+    expect(Math.hypot(dx, dy)).toBeCloseTo(0.05, 6); // and 50mm long
+    expect(r.verdict).toBe("well-constrained"); // distance + angle fully fix the point
+  });
 });
 
 describe("verdict + degrees of freedom", () => {

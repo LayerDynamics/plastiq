@@ -63,6 +63,10 @@ export interface SketchStore {
   /** True once the planegcs solver wasm has loaded — sketching is gated on it so
    * the synchronous `solveSketch` never races the (small, fast) wasm load (FR). */
   solverReady: boolean;
+  /** Sketch-local undo/redo stacks of model snapshots (transient; never persisted
+   * and separate from the document store's history per ADR-0013). */
+  past: SketchModel[];
+  future: SketchModel[];
   /** Mark the solver ready (called when initSketchSolver resolves). */
   setSolverReady: (ready: boolean) => void;
 
@@ -83,6 +87,11 @@ export interface SketchStore {
   addConstraint: (c: SketchConstraint) => void;
   /** Apply a select-then-constrain constraint to the current selection (M3.4). */
   applyConstraint: (kind: ConstraintKind) => void;
+  /** Add the driving dimensions a type-while-drawing commit produced, in ONE step:
+   * no own history push (the preceding clickAt already snapshotted, so the whole
+   * typed shape is a single undo), and any dim that would over-constrain is demoted
+   * to driven (reference) — same rule as addDimension. */
+  addDrawDimensions: (constraints: SketchConstraint[]) => void;
   removeConstraint: (id: string) => void;
   /** Anchor / unanchor a point (the "fix" constraint). */
   toggleFix: (pointId: string) => void;
@@ -108,7 +117,20 @@ export interface SketchStore {
   finishGesture: () => void;
   /** Re-solve the current model and store the result; returns it. */
   solve: () => SolveResult;
+
+  /** Snapshot the current model onto the undo stack before a mutation (clears the
+   * redo stack). Called by every model-mutating action; also exposed so the
+   * overlay can snapshot once at the start of a point drag (not per move). */
+  pushHistory: () => void;
+  /** Undo the last sketch action (sketch-local; the document store is untouched —
+   * ADR-0013). No-op when there's nothing to undo. */
+  undo: () => void;
+  /** Redo the last undone sketch action. No-op when there's nothing to redo. */
+  redo: () => void;
 }
+
+/** Cap the sketch undo history so a long session can't grow it without bound. */
+const HISTORY_LIMIT = 200;
 
 let seq = 0;
 /** Deterministic-enough id for transient sketch entities (no RNG/time). */
@@ -130,6 +152,8 @@ export const useSketchStore = create<SketchStore>((set, get) => ({
   selection: [],
   editingDim: null,
   solverReady: false,
+  past: [],
+  future: [],
   setSolverReady: (ready) => set({ solverReady: ready }),
 
   enterSketch: (plane, offset = 0, featureId, model) => {
@@ -146,24 +170,32 @@ export const useSketchStore = create<SketchStore>((set, get) => ({
       result: null,
       selection: [],
       editingDim: null,
+      past: [],
+      future: [],
     });
   },
 
-  exitSketch: () => set({ active: false, editingFeatureId: null, selection: [], pending: [] }),
+  exitSketch: () =>
+    set({ active: false, editingFeatureId: null, selection: [], pending: [], past: [], future: [] }),
   setView: (view) => set({ view }),
   setTool: (tool) => set({ tool, selection: [], pending: [] }),
   setConstruction: (on) => set({ construction: on }),
   setPolygonSides: (n) => set({ polygonSides: Math.max(3, Math.round(n)) }),
 
   addPoint: (p) => {
+    get().pushHistory();
     const pid = id("p");
     set((s) => ({ model: { ...s.model, points: [...s.model.points, { ...p, id: pid }] } }));
     return pid;
   },
 
-  addEntity: (e) => set((s) => ({ model: { ...s.model, entities: [...s.model.entities, e] } })),
+  addEntity: (e) => {
+    get().pushHistory();
+    set((s) => ({ model: { ...s.model, entities: [...s.model.entities, e] } }));
+  },
 
   addConstraint: (c) => {
+    get().pushHistory();
     set((s) => ({ model: { ...s.model, constraints: [...s.model.constraints, c] } }));
     get().solve();
   },
@@ -172,6 +204,7 @@ export const useSketchStore = create<SketchStore>((set, get) => ({
     const { model, selection } = get();
     const added = buildConstraints(kind, model, selection, () => id("c"));
     if (added.length === 0) return;
+    get().pushHistory();
     set((s) => ({
       model: { ...s.model, constraints: [...s.model.constraints, ...added] },
       selection: [],
@@ -179,7 +212,32 @@ export const useSketchStore = create<SketchStore>((set, get) => ({
     get().solve();
   },
 
+  addDrawDimensions: (constraints) => {
+    if (constraints.length === 0) return;
+    // No pushHistory: the clickAt that placed this shape already snapshotted, so the
+    // geometry + its typed dimensions undo together as one step.
+    set((s) => ({
+      model: { ...s.model, constraints: [...s.model.constraints, ...constraints] },
+    }));
+    const result = get().solve();
+    // A typed value that would over-constrain becomes a driven (reference) dimension
+    // (FR-19) — it reports its value but adds no solver equation, so it never conflicts.
+    if (result.verdict === "over-constrained") {
+      const ids = new Set(constraints.map((c) => c.id));
+      set((s) => ({
+        model: {
+          ...s.model,
+          constraints: s.model.constraints.map((c) =>
+            ids.has(c.id) && "value" in c ? { ...c, driven: true } : c,
+          ),
+        },
+      }));
+      get().solve();
+    }
+  },
+
   toggleFix: (pointId) => {
+    get().pushHistory();
     set((s) => ({
       model: {
         ...s.model,
@@ -196,6 +254,7 @@ export const useSketchStore = create<SketchStore>((set, get) => ({
     const cid = id("c");
     const dim = buildDimension(kind, model, selection, value, cid);
     if (!dim) return;
+    get().pushHistory();
     set((s) => ({
       model: { ...s.model, constraints: [...s.model.constraints, dim] },
       selection: [],
@@ -220,6 +279,7 @@ export const useSketchStore = create<SketchStore>((set, get) => ({
   },
 
   setConstraintValue: (cid, value) => {
+    get().pushHistory();
     set((s) => ({
       model: {
         ...s.model,
@@ -234,6 +294,7 @@ export const useSketchStore = create<SketchStore>((set, get) => ({
   setEditingDim: (cid) => set({ editingDim: cid }),
 
   removeConstraint: (cid) => {
+    get().pushHistory();
     set((s) => ({
       model: { ...s.model, constraints: s.model.constraints.filter((c) => c.id !== cid) },
     }));
@@ -261,6 +322,7 @@ export const useSketchStore = create<SketchStore>((set, get) => ({
   finishGesture: () => {
     const { tool, pending, construction } = get();
     if (tool === "spline" && pending.length >= 2) {
+      get().pushHistory();
       const ctor = construction ? { construction: true } : {};
       set((s) => ({
         model: {
@@ -280,6 +342,8 @@ export const useSketchStore = create<SketchStore>((set, get) => ({
 
   clickAt: (u, v, opts) => {
     const { tool, construction } = get();
+    // Each placement is an undo step (select clicks aren't routed here).
+    if (tool !== "select") get().pushHistory();
     const ctor = construction ? { construction: true } : {};
     const newPoint = (pu: number, pv: number): string => {
       const pid = id("p");
@@ -583,6 +647,41 @@ export const useSketchStore = create<SketchStore>((set, get) => ({
       },
     }));
     return result;
+  },
+
+  pushHistory: () =>
+    set((s) => ({
+      past: [...s.past, structuredClone(s.model)].slice(-HISTORY_LIMIT),
+      future: [], // a new action invalidates the redo stack
+    })),
+
+  undo: () => {
+    const { past } = get();
+    if (past.length === 0) return;
+    set((s) => ({
+      model: s.past[s.past.length - 1]!,
+      past: s.past.slice(0, -1),
+      future: [structuredClone(s.model), ...s.future].slice(0, HISTORY_LIMIT),
+      // A restore invalidates any in-progress gesture / selection / dim edit.
+      pending: [],
+      selection: [],
+      editingDim: null,
+    }));
+    get().solve(); // refresh the solver result (DOF/verdict) for the restored model
+  },
+
+  redo: () => {
+    const { future } = get();
+    if (future.length === 0) return;
+    set((s) => ({
+      model: s.future[0]!,
+      future: s.future.slice(1),
+      past: [...s.past, structuredClone(s.model)].slice(-HISTORY_LIMIT),
+      pending: [],
+      selection: [],
+      editingDim: null,
+    }));
+    get().solve();
   },
 }));
 

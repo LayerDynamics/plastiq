@@ -30,6 +30,7 @@ export type Constraint =
   | { kind: "perpendicular"; a: number; b: number; c: number; d: number }
   | { kind: "equalLength"; a: number; b: number; c: number; d: number }
   | { kind: "angle"; a: number; b: number; c: number; d: number; value: number }
+  | { kind: "lineAngle"; a: number; b: number; value: number }
   | { kind: "radius"; circle: number; value: number }
   | { kind: "concentric"; a: number; b: number }
   | { kind: "tangentLineCircle"; a: number; b: number; circle: number }
@@ -193,6 +194,11 @@ export function solveSketch(
           l2p2_id: px(c.d),
           angle: c.value,
         });
+        break;
+      case "lineAngle":
+        // Angle of the directed line a→b measured from the +X axis (planegcs
+        // p2p_angle). The single-line angle dimension Fusion shows while drawing.
+        add({ type: "p2p_angle", p1_id: px(c.a), p2_id: px(c.b), angle: c.value });
         break;
       case "radius":
         add({ type: "circle_radius", c_id: cx(c.circle), radius: c.value });

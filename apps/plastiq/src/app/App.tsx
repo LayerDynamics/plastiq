@@ -13,6 +13,7 @@ import { PropertiesPanel } from "./PropertiesPanel.js";
 import { Viewport } from "../three/index.js";
 import { Sketcher } from "../sketch/Sketcher.js";
 import { Welcome } from "./Welcome.js";
+import { useSketchStore } from "../sketch/sketchStore.js";
 import { useCadStore } from "../store/store.js";
 import { useProjectsStore } from "../persistence/projectsStore.js";
 import type { SelectionMode } from "../store/types.js";
@@ -69,20 +70,42 @@ function useEditorShortcuts(): void {
       const typing =
         t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable);
       const store = useCadStore.getState();
-      // Undo/redo work everywhere (incl. while focused on the tree); Cmd/Ctrl+Z,
-      // Shift+Cmd/Ctrl+Z (or Ctrl+Y) to redo.
+      // While a sketch is open it owns its own undo/redo, Esc and number keys —
+      // these global viewport shortcuts must NOT also fire (else Esc double-acts,
+      // 1–4 switch the hidden 3D mode, and Ctrl+Z reverts a committed feature
+      // instead of the last sketch action). The sketch is transient (ADR-0013),
+      // so its history is separate from the document store's.
+      const sketch = useSketchStore.getState();
+      const sketching = sketch.active;
+      // Undo/redo: Cmd/Ctrl+Z, Shift+… (or Ctrl+Y) to redo. Routed to the sketch
+      // when sketching; to the document otherwise (unchanged). While typing in a
+      // field mid-sketch, let the input handle its own native text undo.
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "z") {
+        if (sketching) {
+          if (typing) return;
+          e.preventDefault();
+          if (e.shiftKey) sketch.redo();
+          else sketch.undo();
+          return;
+        }
         e.preventDefault();
         if (e.shiftKey) store.redo();
         else store.undo();
         return;
       }
       if (e.ctrlKey && e.key.toLowerCase() === "y") {
+        if (sketching) {
+          if (typing) return;
+          e.preventDefault();
+          sketch.redo();
+          return;
+        }
         e.preventDefault();
         store.redo();
         return;
       }
       if (typing) return;
+      if (sketching) return; // Esc + mode keys belong to the sketcher while it's open
       if (e.key === "Escape") {
         // An in-progress feature edit owns Esc (cancel = remove the just-created
         // feature); only otherwise does Esc clear the selection.
