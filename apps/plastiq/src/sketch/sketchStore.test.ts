@@ -250,3 +250,62 @@ describe("solver feedback (M3.6)", () => {
     expect(pts[1]!.v).toBeCloseTo(pts[0]!.v, 6);
   });
 });
+
+describe("sketch-local undo/redo (FR — Fusion-style sketch history)", () => {
+  it("undo steps back through drawing actions; redo replays them", () => {
+    s().setTool("line");
+    s().clickAt(0, 0); // 1 point
+    s().clickAt(0.05, 0); // +point +line
+    s().clickAt(0.05, 0.03); // +point +line
+    expect(s().model.points).toHaveLength(3);
+    expect(s().model.entities).toHaveLength(2);
+
+    s().undo(); // back to 2 points / 1 line
+    expect(s().model.points).toHaveLength(2);
+    expect(s().model.entities).toHaveLength(1);
+    s().undo(); // back to the first point only
+    expect(s().model.points).toHaveLength(1);
+    expect(s().model.entities).toHaveLength(0);
+
+    s().redo(); // replay the second click
+    expect(s().model.points).toHaveLength(2);
+    expect(s().model.entities).toHaveLength(1);
+  });
+
+  it("a new action after an undo clears the redo stack", () => {
+    s().setTool("line");
+    s().clickAt(0, 0);
+    s().clickAt(0.05, 0);
+    s().undo(); // 1 point, redo available
+    expect(s().future).toHaveLength(1);
+    s().clickAt(0.02, 0.02); // a fresh action invalidates redo
+    expect(s().future).toHaveLength(0);
+    s().redo(); // no-op
+    expect(s().model.points).toHaveLength(2);
+  });
+
+  it("undo restores a removed dimension and re-solves the verdict", () => {
+    s().setTool("circle");
+    s().clickAt(0, 0); // centre
+    s().clickAt(0.02, 0); // radius 20mm
+    const circle = s().model.entities.find((e) => e.kind === "circle")!;
+    s().setSelection([circle.id]);
+    s().addDimension("radius");
+    expect(s().model.constraints.some((c) => c.kind === "radius")).toBe(true);
+    s().undo(); // remove the dimension
+    expect(s().model.constraints.some((c) => c.kind === "radius")).toBe(false);
+    expect(s().result).not.toBeNull(); // re-solved after the restore
+  });
+
+  it("undo is a no-op with empty history; entering a sketch clears history", () => {
+    s().undo(); // nothing to undo — must not throw
+    expect(s().model.points).toHaveLength(0);
+    s().setTool("line");
+    s().clickAt(0, 0);
+    s().clickAt(0.05, 0);
+    expect(s().past.length).toBeGreaterThan(0);
+    s().enterSketch("XY"); // re-entering resets the transient history
+    expect(s().past).toHaveLength(0);
+    expect(s().future).toHaveLength(0);
+  });
+});
