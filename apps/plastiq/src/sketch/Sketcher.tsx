@@ -414,6 +414,32 @@ const TOOLS: { tool: SketchTool; label: string }[] = [
   { tool: "point", label: "Point" },
 ];
 
+/** Single-key tool shortcuts (lowercased), Fusion-style: the primary tool of each
+ * family (the centre/3-point variants stay on their toolbar buttons). */
+const TOOL_KEYS: Record<string, SketchTool> = {
+  v: "select",
+  l: "line",
+  r: "rectangle",
+  c: "circle",
+  a: "arc3",
+  g: "polygon",
+  o: "slot",
+  s: "spline",
+  p: "point",
+};
+
+/** Order the smart-dimension (D) key tries — the first that fits the selection wins.
+ * distance/radius/angle are mutually exclusive by selection shape, so this just sets
+ * the tie-break for a 2-point selection (aligned distance, like Fusion). */
+const DIMENSION_PRIORITY: DimensionKind[] = [
+  "distance",
+  "radius",
+  "angle",
+  "diameter",
+  "hDistance",
+  "vDistance",
+];
+
 export function Sketcher(): React.JSX.Element | null {
   const active = useSketchStore((s) => s.active);
   const view = useSketchStore((s) => s.view);
@@ -428,7 +454,6 @@ export function Sketcher(): React.JSX.Element | null {
   const polygonSides = useSketchStore((s) => s.polygonSides);
   const setPolygonSides = useSketchStore((s) => s.setPolygonSides);
   const clickAt = useSketchStore((s) => s.clickAt);
-  const cancelGesture = useSketchStore((s) => s.cancelGesture);
   const finishGesture = useSketchStore((s) => s.finishGesture);
   const pending = useSketchStore((s) => s.pending);
   const selection = useSketchStore((s) => s.selection);
@@ -496,16 +521,47 @@ export function Sketcher(): React.JSX.Element | null {
     if (active) setView(centeredView(size.w, size.h, view.scale));
   }, [active, setView, size.w, size.h, view.scale]);
 
-  // Esc aborts the in-progress drawing gesture.
+  // Keyboard shortcuts (Fusion-style): single letters switch tools, D dimensions the
+  // selection, X toggles construction, Esc backs out (abort gesture → select), Enter
+  // finishes a multi-click gesture. Reads fresh store state so the listener needn't
+  // re-subscribe on every keystroke. Suppressed while typing in a field (the value
+  // editors own their keys) or with a modifier held (Ctrl+Z etc. belong to App).
   useEffect(() => {
     if (!active) return;
     const onKey = (e: KeyboardEvent): void => {
-      if (e.key === "Escape") cancelGesture();
-      else if (e.key === "Enter") finishGesture();
+      const el = e.target as HTMLElement | null;
+      if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable)) return;
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      const st = useSketchStore.getState();
+      if (e.key === "Escape") {
+        // Abort an in-progress gesture; if there's none, drop back to the Select tool.
+        if (st.pending.length > 0) st.cancelGesture();
+        else st.setTool("select");
+        return;
+      }
+      if (e.key === "Enter") {
+        st.finishGesture();
+        return;
+      }
+      const k = e.key.toLowerCase();
+      const toolKey = TOOL_KEYS[k];
+      if (toolKey) {
+        st.setTool(toolKey);
+        return;
+      }
+      if (k === "x") {
+        st.setConstruction(!st.construction);
+        return;
+      }
+      if (k === "d") {
+        // Smart dimension: apply the first dimension kind that fits the selection.
+        const kind = DIMENSION_PRIORITY.find((d) => canDimension(d, st.model, st.selection));
+        if (kind) st.addDimension(kind);
+      }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [active, cancelGesture, finishGesture]);
+  }, [active]);
 
   if (!active) return null;
 
