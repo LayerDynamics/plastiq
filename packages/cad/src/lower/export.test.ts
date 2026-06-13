@@ -32,6 +32,23 @@ describe("massProperties", () => {
   });
 });
 
+describe("defaultLibrary density", () => {
+  it("returns the table density for known materials", () => {
+    const lib = defaultLibrary();
+    expect(lib.density("structural-steel")).toBe(7850);
+    expect(lib.density("aluminum")).toBe(2700);
+    expect(lib.density("abs")).toBe(1040);
+  });
+
+  it("throws for an unknown material instead of silently defaulting to water", () => {
+    const lib = defaultLibrary();
+    // A mis-typed / unknown material must NOT silently mass the body as water
+    // (1000 kg/m³) and present it as exact downstream.
+    expect(() => lib.density("Steel")).toThrow(/unknown material/);
+    expect(() => lib.density("unobtanium")).toThrow(/unknown material/);
+  });
+});
+
 describe("exportForSim", () => {
   it("lowers two posed instances of one part into two valid bodies", () => {
     const part = makeBox(oc, mm(20), mm(20), mm(20));

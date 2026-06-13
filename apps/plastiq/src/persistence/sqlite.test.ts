@@ -85,4 +85,24 @@ describe("SqliteProjectStore — CRUD over real sql.js (SPEC-5 M5.1)", () => {
     const reloaded = (await store.load(meta.id))!.doc;
     expect(JSON.stringify(reloaded)).toBe(JSON.stringify(original));
   });
+
+  it("save to a non-existent id rejects instead of silently losing the document", async () => {
+    const { store } = await freshStore();
+    // No row matches → the UPDATE writes nothing. The old code resolved 'saved'
+    // anyway; now it must reject so the caller never reports a phantom save.
+    await expect(store.save("does-not-exist", doc(0.09))).rejects.toThrow(/no project with id/);
+  });
+
+  it("save still succeeds (and persists) for an existing id", async () => {
+    const blob = new MemoryBlobStore();
+    const { store } = await freshStore(blob);
+    const meta = await store.create("P", doc(0.06));
+    await expect(store.save(meta.id, doc(0.09))).resolves.toBeUndefined();
+    const reopened = await createSqliteProjectStore({ SQL, blob });
+    expect((await reopened.load(meta.id))?.doc.features[0]!.params).toEqual({
+      dx: 0.09,
+      dy: 0.04,
+      dz: 0.03,
+    });
+  });
 });

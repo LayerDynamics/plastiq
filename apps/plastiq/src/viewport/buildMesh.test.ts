@@ -9,8 +9,8 @@ function sampleMesh(): TransferMesh {
     vertices: new Float32Array([0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0]),
     indices: new Uint32Array([0, 1, 2, 0, 2, 3]),
     faceGroups: [
-      { faceId: 1, start: 0, count: 3, normal: [0, 0, 1] },
-      { faceId: 2, start: 3, count: 3, normal: [0, 0, 1] },
+      { faceId: 1, start: 0, count: 3, normal: [0, 0, 1], centroid: [0.667, 0.333, 0] },
+      { faceId: 2, start: 3, count: 3, normal: [0, 0, 1], centroid: [0.333, 0.667, 0] },
     ],
     edges: [
       {
@@ -20,6 +20,7 @@ function sampleMesh(): TransferMesh {
           [0, 0, 1],
           [0, -1, 0],
         ],
+        midpoint: [0.5, 0, 0],
       },
       {
         edgeId: 2,
@@ -28,6 +29,7 @@ function sampleMesh(): TransferMesh {
           [0, 0, 1],
           [1, 0, 0],
         ],
+        midpoint: [1, 1, 0],
       },
     ],
     vertexIds: [10, 20, 30],

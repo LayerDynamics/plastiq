@@ -82,6 +82,27 @@ describe("circularPattern", () => {
     for (const c of copies) c.delete();
     box.delete();
   });
+
+  it("over a PARTIAL angle the last copy sits AT the full angle (endpoint-inclusive)", () => {
+    const box = makeBox(oc, mm(60), mm(40), mm(30)); // occupies [0,60]×[0,40]×[0,30]
+    // 4 copies over a half-turn (π). With the endpoint-inclusive convention the
+    // copies sit at 0, π/3, 2π/3, π — the LAST one at exactly π. The old
+    // angle/count behavior would have left it at 3π/4 (under-filling the arc).
+    const copies = circularPattern(oc, box, [0, 0, 0], [0, 0, 1], 4, Math.PI);
+    expect(copies).toHaveLength(4);
+    // i=0 is the un-rotated base.
+    expect(copies[0]!.boundingBox().min[0]).toBeCloseTo(0, 6);
+    expect(copies[0]!.boundingBox().max[0]).toBeCloseTo(mm(60), 6);
+    // i=3 is rotated π about +Z through the origin: (x,y) → (−x,−y), so the box
+    // maps to [−60,0]×[−40,0]. A copy at 3π/4 would NOT produce this bbox.
+    const last = copies[3]!.boundingBox();
+    expect(last.min[0]).toBeCloseTo(-mm(60), 6);
+    expect(last.max[0]).toBeCloseTo(0, 6);
+    expect(last.min[1]).toBeCloseTo(-mm(40), 6);
+    expect(last.max[1]).toBeCloseTo(0, 6);
+    for (const c of copies) c.delete();
+    box.delete();
+  });
 });
 
 describe("extrudeToFace", () => {
@@ -100,6 +121,27 @@ describe("extrudeToFace", () => {
     // 20×20 pad from z=0 up to the top face at z=30mm.
     expect(pad.volume()).toBeCloseTo(mm(20) * mm(20) * mm(30), 9);
     expect(pad.boundingBox().max[2]).toBeCloseTo(mm(30), 6);
+    base.delete();
+    pad.delete();
+  });
+
+  it("characterizes the centroid-projection limit on a non-perpendicular target (T3)", () => {
+    // Target a SIDE face (+X), whose normal is perpendicular to the +Z extrude
+    // direction. The pad height is the side face's centroid projected onto +Z =
+    // mid-height (15mm), NOT the face itself (which spans z∈[0,30]). This documents
+    // the exact-only-for-perpendicular-planar limitation called out in the doc.
+    const base = makeBox(oc, mm(60), mm(40), mm(30));
+    const mesh = tessellateTagged(oc, base);
+    const side = mesh.faceGroups.find((g) => Math.round(g.normal[0]) === 1)!;
+    const sideRef: FaceRef = { normal: side.normal, centroid: side.centroid };
+    const sk = new Sketch(planeXY());
+    sk.lineTo(0, 0);
+    sk.lineTo(mm(20), 0);
+    sk.lineTo(mm(20), mm(20));
+    sk.lineTo(0, mm(20));
+    const pad = extrudeToFace(oc, sk, base, sideRef);
+    // Pad reaches the centroid projection (z ≈ 15mm), demonstrably NOT the face.
+    expect(pad.boundingBox().max[2]).toBeCloseTo(mm(15), 6);
     base.delete();
     pad.delete();
   });

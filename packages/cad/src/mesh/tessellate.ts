@@ -12,6 +12,8 @@ import type { Solid } from "../solid/solid.js";
 import {
   MESH_PURPOSE,
   adjacentFaceNormals,
+  edgeMidpoint,
+  faceCentroid,
   nodeWorld,
   normalFromTriangulation,
   shapeEnums,
@@ -73,6 +75,7 @@ export function tessellateTagged(
   const vertices: number[] = [];
   const indices: number[] = [];
   const faceGroups: FaceGroup[] = [];
+  let droppedFaces = 0;
 
   // --- Faces: per-face render groups + outward-normal signature.
   const S = shapeEnums(oc);
@@ -84,9 +87,11 @@ export function tessellateTagged(
     const handle = oc.BRep_Tool.Triangulation(face, loc, MESH_PURPOSE);
     if (handle.IsNull()) {
       // A face with no triangulation is omitted from the mesh. Valid solids
-      // triangulate at this deflection, so this is rare — surface it rather than
-      // dropping geometry silently.
+      // triangulate at this deflection, so this is rare — count it on the returned
+      // mesh (droppedFaces) so callers can surface the partial result instead of
+      // treating the shorter mesh as complete. The console.warn is a dev aid only.
       console.warn(`tessellateTagged: face ${faceId} has no triangulation (deflection ${deflection}) — omitted from the mesh`);
+      droppedFaces++;
       handle.delete();
       loc.delete();
       face.delete();
@@ -118,7 +123,14 @@ export function tessellateTagged(
     }
     const count = indices.length - start;
     const normal = normalFromTriangulation(tri, identity, trsf, reversed);
-    faceGroups.push({ start, count, faceId, normal: [normal[0], normal[1], normal[2]] });
+    const centroid = faceCentroid(oc, face);
+    faceGroups.push({
+      start,
+      count,
+      faceId,
+      normal: [normal[0], normal[1], normal[2]],
+      centroid: [centroid[0], centroid[1], centroid[2]],
+    });
     faceId++;
 
     trsf.delete();
@@ -135,17 +147,28 @@ export function tessellateTagged(
   const edgeCount = edgeFaceMap.Extent();
   for (let i = 1; i <= edgeCount; i++) {
     const edge = oc.TopoDS.Edge_1(edgeFaceMap.FindKey(i));
-    const positions = discretizeEdge(oc, edge, deflection);
     const faceList = edgeFaceMap.FindFromIndex(i);
-    const [na, nb] = adjacentFaceNormals(oc, faceList);
-    edges.push({
-      edgeId: i - 1,
-      positions,
-      faceNormals: [
-        [na[0], na[1], na[2]],
-        [nb[0], nb[1], nb[2]],
-      ],
-    });
+    try {
+      // adjacentFaceNormals reads the adjacent faces' triangulations; if one of
+      // them was dropped above (no triangulation), faceNormal throws. Skip such an
+      // edge — without both adjacent normals it has no persistent signature, and
+      // it borders the already-counted missing face. Fabricating a normal here is
+      // exactly the silent-corruption this avoids.
+      const [na, nb] = adjacentFaceNormals(oc, faceList);
+      const positions = discretizeEdge(oc, edge, deflection);
+      const mid = edgeMidpoint(oc, edge);
+      edges.push({
+        edgeId: i - 1,
+        positions,
+        faceNormals: [
+          [na[0], na[1], na[2]],
+          [nb[0], nb[1], nb[2]],
+        ],
+        midpoint: [mid[0], mid[1], mid[2]],
+      });
+    } catch {
+      // edge omitted (adjacent face has no triangulation) — see droppedFaces.
+    }
     edge.delete();
   }
   edgeFaceMap.delete();
@@ -164,5 +187,5 @@ export function tessellateTagged(
   }
   vertMap.delete();
 
-  return { vertices, indices, faceGroups, edges, vertexPoints };
+  return { vertices, indices, faceGroups, edges, vertexPoints, droppedFaces };
 }

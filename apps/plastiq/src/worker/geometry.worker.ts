@@ -4,20 +4,9 @@
 // back as transferable typed arrays so the UI thread never blocks on OCCT.
 
 import wasmUrl from "@plastiq/cad/vendor/occt/plastiq-occt.wasm?url";
-import {
-  exportGltf,
-  exportIges,
-  exportStep,
-  faceDatumPlane,
-  initDecomposer,
-  initOcct,
-  resolveFaceRef,
-  type Occt,
-  type TaggedMesh,
-} from "@plastiq/cad";
-import { rebuildDocument, rebuildTaggedWithProps } from "./rebuild.js";
-import { lowerAssembly } from "./lower.js";
-import type { TransferMesh, WorkerRequest, WorkerResponse } from "./protocol.js";
+import { initOcct, type Occt } from "@plastiq/cad";
+import { handleRequest } from "./geometry.worker.core.js";
+import type { WorkerRequest, WorkerResponse } from "./protocol.js";
 
 // Loose worker-scope typing (avoids pulling the WebWorker lib alongside DOM).
 const ctx = self as unknown as {
@@ -28,131 +17,16 @@ const ctx = self as unknown as {
 let ocPromise: Promise<Occt> | null = null;
 const getOc = (): Promise<Occt> => (ocPromise ??= initOcct({ wasmUrl }));
 
-function toTransfer(
-  t: TaggedMesh,
-  volume: number,
-  com: [number, number, number],
-): TransferMesh {
-  return {
-    vertices: Float32Array.from(t.vertices),
-    indices: Uint32Array.from(t.indices),
-    faceGroups: t.faceGroups,
-    edges: t.edges.map((e) => ({
-      edgeId: e.edgeId,
-      positions: Float32Array.from(e.positions),
-      faceNormals: e.faceNormals,
-    })),
-    vertexIds: t.vertexPoints.map((v) => v.vertexId),
-    vertexPositions: Float32Array.from(t.vertexPoints.flatMap((v) => [...v.position])),
-    volume,
-    com,
-  };
-}
-
+// Thin RPC shim: init OCCT once, delegate the request to the pure core (which is
+// unit-tested in geometry.worker.core.test.ts), then post its response back. A
+// failure to init OCCT itself surfaces as a typed error response.
 ctx.onmessage = (ev: MessageEvent<WorkerRequest>): void => {
   const req = ev.data;
   void (async (): Promise<void> => {
     try {
       const oc = await getOc();
-      if (req.op === "lower") {
-        // Assembly → SimManifest (M4.5/M6.1): rebuild the part, lower its
-        // instances. A bare part (no instances) lowers as one identity body so
-        // Simulate works on the modelled part directly.
-        const solid = rebuildDocument(oc, req.doc);
-        if (!solid) throw new Error("lower: the document has no geometry to instance");
-        // A concave part is decomposed into convex pieces during lowering; make
-        // sure the V-HACD decomposer's wasm is ready before exportForSim runs.
-        await initDecomposer();
-        try {
-          const assembly = req.doc.assembly ?? { instances: [], mates: [], joints: [] };
-          const effective =
-            assembly.instances.length > 0
-              ? assembly
-              : {
-                  instances: [
-                    {
-                      id: "body0",
-                      name: "Part",
-                      pose: {
-                        position: [0, 0, 0] as [number, number, number],
-                        orientation: [0, 0, 0, 1] as [number, number, number, number],
-                      },
-                    },
-                  ],
-                  mates: [],
-                  joints: [],
-                };
-          const { manifest, skippedJoints, localCom } = lowerAssembly(
-            oc,
-            solid,
-            effective,
-            "plastiq:assembly",
-          );
-          ctx.postMessage({ id: req.id, ok: true, op: "lower", manifest, skippedJoints, localCom });
-        } finally {
-          solid.delete();
-        }
-        return;
-      }
-      if (req.op === "export") {
-        // Interchange export (M6.2/M6.3): rebuild the part, serialize via io.
-        const solid = rebuildDocument(oc, req.doc);
-        if (!solid) throw new Error("export: the document has no geometry");
-        try {
-          const content =
-            req.format === "step"
-              ? exportStep(oc, solid)
-              : req.format === "iges"
-                ? exportIges(oc, solid)
-                : exportGltf(oc, solid, { linearDeflection: 0.0005 });
-          ctx.postMessage({ id: req.id, ok: true, op: "export", format: req.format, content });
-        } finally {
-          solid.delete();
-        }
-        return;
-      }
-      if (req.op === "facePlane") {
-        // Resolve a picked face → sketch datum frame, for the "normal to" camera
-        // (the main thread can't run OCCT). Null if there's no body or no match.
-        const solid = rebuildDocument(oc, req.doc);
-        if (!solid) {
-          ctx.postMessage({ id: req.id, ok: true, op: "facePlane", plane: null });
-          return;
-        }
-        try {
-          const face = resolveFaceRef(oc, solid, req.face);
-          if (!face) {
-            ctx.postMessage({ id: req.id, ok: true, op: "facePlane", plane: null });
-            return;
-          }
-          const p = faceDatumPlane(oc, face);
-          face.delete();
-          ctx.postMessage({
-            id: req.id,
-            ok: true,
-            op: "facePlane",
-            plane: {
-              origin: [p.origin[0], p.origin[1], p.origin[2]],
-              normal: [p.normal[0], p.normal[1], p.normal[2]],
-              xAxis: [p.xAxis[0], p.xAxis[1], p.xAxis[2]],
-            },
-          });
-        } finally {
-          solid.delete();
-        }
-        return;
-      }
-      const built = rebuildTaggedWithProps(oc, req.doc, { linearDeflection: req.deflection });
-      const mesh = built ? toTransfer(built.mesh, built.volume, built.com) : null;
-      const transfer: Transferable[] = mesh
-        ? [
-            mesh.vertices.buffer,
-            mesh.indices.buffer,
-            mesh.vertexPositions.buffer,
-            ...mesh.edges.map((e) => e.positions.buffer),
-          ]
-        : [];
-      ctx.postMessage({ id: req.id, ok: true, op: "build", mesh }, transfer);
+      const { response, transfer } = await handleRequest(oc, req);
+      ctx.postMessage(response, transfer);
     } catch (err) {
       ctx.postMessage({
         id: req.id,

@@ -8,7 +8,35 @@ import { makeBox } from "../solid/primitives.js";
 import { tessellateTagged } from "./tessellate.js";
 import { resolveFaceRef } from "./resolve.js";
 import { faceDatumPlane } from "./faceFrame.js";
+import { shapeEnums } from "./normals.js";
 import type { FaceRef } from "./tagged.js";
+import type { TopoDS_Face } from "opencascade.js";
+
+/** Grab the +X face of a box WITHOUT tessellating the solid first (the real
+ * freshly-picked, un-meshed face path). Identified by its centroid (x ≈ dx),
+ * which OCCT computes from the B-rep — no triangulation required. */
+function unmeshedPlusXFace(box: ReturnType<typeof makeBox>, dx: number): TopoDS_Face {
+  const S = shapeEnums(oc);
+  const exp = new oc.TopExp_Explorer_2(box.shape, S.TopAbs_FACE, S.TopAbs_SHAPE);
+  let target: TopoDS_Face | null = null;
+  for (; exp.More(); exp.Next()) {
+    const f = oc.TopoDS.Face_1(exp.Current());
+    const props = new oc.GProp_GProps_1();
+    oc.BRepGProp.SurfaceProperties_1(f, props, false, false);
+    const c = props.CentreOfMass();
+    const x = c.X();
+    c.delete();
+    props.delete();
+    if (Math.abs(x - dx) < 1e-9) {
+      target = f;
+      break;
+    }
+    f.delete();
+  }
+  exp.delete();
+  if (!target) throw new Error("test setup: +X face not found");
+  return target;
+}
 
 let oc: Occt;
 
@@ -54,6 +82,21 @@ describe("faceDatumPlane — sketch frame from a model face", () => {
     // The chosen in-plane axis avoids the normal direction (no X component).
     expect(plane.xAxis[0]).toBeCloseTo(0, 6);
     expect(dot3(plane.xAxis, plane.normal)).toBeCloseTo(0, 6);
+    face.delete();
+    box.delete();
+  });
+
+  it("meshes a freshly-picked (un-tessellated) face internally — no fabricated +Z normal", () => {
+    const box = makeBox(oc, mm(60), mm(40), mm(30));
+    // The face is taken straight from the un-meshed solid. Before the fix,
+    // faceNormal hit the null-triangulation branch and returned a fabricated
+    // [0,0,1]; now faceDatumPlane meshes the face first and returns its real
+    // outward normal (+X here, NOT +Z).
+    const face = unmeshedPlusXFace(box, mm(60));
+    const plane = faceDatumPlane(oc, face);
+    expect(Math.abs(plane.normal[0])).toBeCloseTo(1, 6);
+    expect(plane.normal[2]).toBeCloseTo(0, 6);
+    expect(plane.origin[0]).toBeCloseTo(mm(60), 6);
     face.delete();
     box.delete();
   });

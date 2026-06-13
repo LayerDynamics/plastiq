@@ -9,14 +9,20 @@ import type { Occt } from "../oc/init.js";
 import type { TopoDS_Shape } from "opencascade.js";
 
 export class Solid {
+  /** True once {@link delete} has freed the shape — guards against a double-free. */
+  private disposed = false;
+
   constructor(
     readonly oc: Occt,
     /** The owned OCCT B-rep shape. */
     readonly shape: TopoDS_Shape,
   ) {}
 
-  /** Free the underlying OCCT shape. Idempotent-safe: only the shape is freed. */
+  /** Free the underlying OCCT shape. Idempotent: a second call is a no-op (a bare
+   * `this.shape.delete()` would double-free the wasm object and throw). */
   delete(): void {
+    if (this.disposed) return;
+    this.disposed = true;
     this.shape.delete();
   }
 

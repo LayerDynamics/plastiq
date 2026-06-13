@@ -64,6 +64,9 @@ export function extrude(
   prism.delete();
   v.delete();
   baseFace.delete();
+  // Guard the result for parity with loft/sweep/dress-up: reject a null shape
+  // rather than wrapping an empty Solid and returning it as a success.
+  if (shape.IsNull()) throw new Error("extrude: produced an empty shape");
   return new Solid(oc, shape);
 }
 
@@ -73,9 +76,16 @@ export interface ExtrudeToFaceOptions {
 }
 
 /**
- * Extrude a sketch profile from its plane up to the picked face of `base`. The
- * pad height is the distance from the sketch plane to the target face's centroid
- * projected onto the extrude direction. Returns the PAD; the caller fuses it.
+ * Extrude a sketch profile from its plane "up to" the picked face of `base`.
+ *
+ * The pad height is the distance from the sketch plane to the target face's area
+ * CENTROID, projected onto the extrude direction. This is EXACT only when the
+ * target is a planar face perpendicular to the extrude direction (the pad's flat
+ * top then lies on the face). For an angled or curved target the flat-topped pad
+ * reaches the centroid's projected depth and so over/undershoots the face away
+ * from its centroid — it does not truly terminate on the face. (A true up-to-face
+ * trim against arbitrary geometry is a heavier follow-up.) Returns the PAD; the
+ * caller fuses it.
  */
 export function extrudeToFace(
   oc: Occt,

@@ -151,7 +151,7 @@ function MatesSection(): React.JSX.Element {
       )}
       {result && (
         <div data-testid="assembly-verdict" className="mb-1 text-[10px] text-[#789]">
-          {result.verdict.replace("-", " ")} · DOF {result.freedom}
+          {result.verdict.replaceAll("-", " ")} · DOF {result.freedom}
         </div>
       )}
       {mates.length > 0 && (

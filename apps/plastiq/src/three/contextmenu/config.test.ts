@@ -1,4 +1,4 @@
-import { beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { initSketchSolver, type FaceRef, type EdgeRef } from "@plastiq/cad";
 import { useCadStore } from "../../store/store.js";
 import { useSketchStore } from "../../sketch/sketchStore.js";
@@ -197,4 +197,40 @@ describe("config — run() invokes the real store/dressup action", () => {
     expect(useSketchStore.getState().model.constraints.length).toBe(before + 1);
     useSketchStore.getState().exitSketch();
   });
+});
+
+describe("config — mate prompt Cancel aborts (F6)", () => {
+  const realPrompt = globalThis.prompt;
+  afterEach(() => {
+    globalThis.prompt = realPrompt;
+    vi.restoreAllMocks();
+  });
+
+  const cases = [
+    { id: "mate-distance", kind: "distance" as const, entry: "25", value: 0.025 },
+    { id: "mate-angle", kind: "angle" as const, entry: "90", value: (90 * Math.PI) / 180 },
+  ];
+
+  for (const { id, kind, entry, value } of cases) {
+    it(`${id}: Cancel (prompt → null) applies NO mate`, () => {
+      const spy = vi.spyOn(useCadStore.getState(), "applyMate").mockImplementation(() => {});
+      globalThis.prompt = () => null;
+      byId(id).run(makeTarget({ mateMode: true, matePickCount: 2 }));
+      expect(spy).not.toHaveBeenCalled();
+    });
+
+    it(`${id}: a blank entry applies NO mate`, () => {
+      const spy = vi.spyOn(useCadStore.getState(), "applyMate").mockImplementation(() => {});
+      globalThis.prompt = () => "";
+      byId(id).run(makeTarget({ mateMode: true, matePickCount: 2 }));
+      expect(spy).not.toHaveBeenCalled();
+    });
+
+    it(`${id}: a real value DOES apply the mate`, () => {
+      const spy = vi.spyOn(useCadStore.getState(), "applyMate").mockImplementation(() => {});
+      globalThis.prompt = () => entry;
+      byId(id).run(makeTarget({ mateMode: true, matePickCount: 2 }));
+      expect(spy).toHaveBeenCalledWith(kind, value);
+    });
+  }
 });

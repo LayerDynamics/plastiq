@@ -352,6 +352,50 @@ describe("CAD Studio rebuild (SPEC-5 M0.4)", () => {
     expect(m!.faceGroups.length).toBeGreaterThan(6);
   });
 
+  it("a draft feature tapers a picked face (FR-30, T4)", () => {
+    // Capture a real +X side-face signature to draft about a neutral plane.
+    const probe: CadDocument = {
+      features: [{ id: "f1", type: "box", params: { dx: mm(40), dy: mm(30), dz: mm(20) } }],
+      params: {},
+    };
+    const side = rebuildTagged(oc, probe, { linearDeflection: mm(0.5) })!.faceGroups.find(
+      (g) => Math.round(g.normal[0]) === 1,
+    )!;
+    const doc: CadDocument = {
+      features: [
+        { id: "f1", type: "box", params: { dx: mm(40), dy: mm(30), dz: mm(20) } },
+        {
+          id: "f2",
+          type: "draft",
+          deps: ["f1"],
+          params: { angle: (5 * Math.PI) / 180 },
+          data: {
+            face: { normal: side.normal, centroid: side.centroid },
+            pull: [0, 0, 1],
+            neutralOrigin: [0, 0, 0],
+            neutralNormal: [0, 0, 1],
+          },
+        },
+      ],
+      params: {},
+    };
+    const solid = rebuildDocument(oc, doc);
+    expect(solid).not.toBeNull();
+    try {
+      expect(solid!.isValid()).toBe(true);
+      // Draft TILTS the face (removing material above the neutral plane): volume
+      // drops but stays close — a botched op would change it drastically.
+      const v = solidVolume(oc, solid!);
+      const full = mm(40) * mm(30) * mm(20);
+      expect(v).toBeLessThan(full);
+      expect(v).toBeGreaterThan(full * 0.9);
+    } finally {
+      solid!.delete();
+    }
+    // Draft neither adds nor drops faces — still a 6-faced box-like solid.
+    expect(rebuildTagged(oc, doc, { linearDeflection: mm(0.5) })!.faceGroups).toHaveLength(6);
+  });
+
   it("fillet with no edges selected throws a typed error", () => {
     const doc: CadDocument = {
       features: [

@@ -93,6 +93,14 @@ function toBase64(bytes: Uint8Array): string {
  */
 export function exportGltf(oc: Occt, solid: Solid, opts?: TessellateOptions): string {
   const mesh = tessellateTagged(oc, solid, opts);
+  // A face that failed to triangulate is omitted from the mesh; exporting the
+  // shorter mesh would ship a glTF with a hole as if it were the full part. Refuse
+  // rather than deliver a silently-incomplete artifact (the caller surfaces this).
+  if (mesh.droppedFaces > 0) {
+    throw new Error(
+      `exportGltf: ${mesh.droppedFaces} face(s) failed to triangulate — the glTF would be incomplete (a hole in the surface)`,
+    );
+  }
   const positions = Float32Array.from(mesh.vertices);
   const indices = Uint32Array.from(mesh.indices);
 

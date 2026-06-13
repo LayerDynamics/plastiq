@@ -114,6 +114,12 @@ export async function createSqliteProjectStore(opts: SqliteStoreOptions): Promis
           id,
         ]);
       }
+      // An UPDATE that matches no row writes nothing; persisting + resolving here
+      // would report the save as succeeded while the document is silently lost
+      // (e.g. the project was deleted in another tab). Reject so the caller knows.
+      if (db.getRowsModified() === 0) {
+        throw new Error(`save: no project with id '${id}' — nothing was written`);
+      }
       await persist();
     },
 

@@ -11,8 +11,8 @@ function quad(): TransferMesh {
     vertices: new Float32Array([0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0]),
     indices: new Uint32Array([0, 1, 2, 0, 2, 3]),
     faceGroups: [
-      { faceId: 7, start: 0, count: 3, normal: [0, 0, 1] },
-      { faceId: 9, start: 3, count: 3, normal: [0, 0, 1] },
+      { faceId: 7, start: 0, count: 3, normal: [0, 0, 1], centroid: [0.667, 0.333, 0] },
+      { faceId: 9, start: 3, count: 3, normal: [0, 0, 1], centroid: [0.333, 0.667, 0] },
     ],
     edges: [
       {
@@ -22,6 +22,7 @@ function quad(): TransferMesh {
           [0, 0, 1],
           [0, -1, 0],
         ],
+        midpoint: [0.5, 0, 0],
       },
     ],
     vertexIds: [11, 12, 13, 14],

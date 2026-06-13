@@ -162,10 +162,26 @@ export function collidersFor(
     for (let i = 0; i < piece.indices.length; i += 3) {
       faces.push([piece.indices[i]!, piece.indices[i + 1]!, piece.indices[i + 2]!]);
     }
-    // A usable convex piece needs ≥ 4 vertices and ≥ 4 faces.
+    // A usable convex piece needs ≥ 4 vertices and ≥ 4 faces. A V-HACD piece that
+    // fails this is sub-tetrahedral (<4 vertices) or flat (coplanar → <4 faces) —
+    // a degenerate hull with ZERO enclosed volume, so dropping it removes no
+    // collision volume. Every piece carrying real volume is a valid hull and is
+    // kept; the volume-conservation assertion in decompose.test.ts proves the
+    // kept set still tracks the solid (i.e. nothing meaningful is silently lost).
     if (points.length >= 12 && faces.length >= 4) colliders.push({ points, faces });
   }
-  // V-HACD produced nothing usable (degenerate input) → fall back to one hull,
-  // so a body is never left with zero colliders.
-  return colliders.length > 0 ? colliders : [wholeHull];
+  // The part reached here only because it FAILED the convexity gate above — it is
+  // genuinely concave, so its single convex hull (`wholeHull`) would collide as if
+  // the concavity were solid. If V-HACD produced no usable pieces, silently
+  // substituting that hull would ship wrong physics with no signal. Fail loudly
+  // instead so the caller (the sim export) surfaces it. (The convex/near-convex
+  // case returned `[wholeHull]` correctly at the gate above; this is only the
+  // concave-but-undecomposable path.)
+  if (colliders.length === 0) {
+    throw new Error(
+      "collidersFor: convex decomposition produced no usable pieces for a concave part — " +
+        "it may be too thin or degenerate to decompose into convex colliders",
+    );
+  }
+  return colliders;
 }

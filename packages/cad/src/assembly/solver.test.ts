@@ -95,4 +95,35 @@ describe("solveMates", () => {
     const r = solveMates(comps, mates);
     expect(r.verdict).toBe("over-constrained");
   });
+
+  it("reports converged=true for a satisfiable solve, false for a conflict (H4)", () => {
+    // Satisfiable: a single coincident mate is solvable → the residual reaches 0.
+    const ok = solveMates(
+      [comp([0, 0, 0], true), comp([0.1, 0.05, 0.02], false)],
+      [{ kind: "coincident", a: { component: 0, point: [0, 0, 0] }, b: { component: 1, point: [0, 0, 0] } }],
+    );
+    expect(ok.converged).toBe(true);
+    expect(ok.residualNorm).toBeLessThan(1e-5);
+
+    // Conflicting distances cannot both hold → NOT converged, and the residual is
+    // at a least-squares minimum (gradient ≈ 0), so it's classified a genuine
+    // conflict (over-constrained) — not mislabeled, and not silently 'satisfied'.
+    const conflict = solveMates(
+      [comp([0, 0, 0], true), comp([0.05, 0, 0], false)],
+      [
+        { kind: "distance", a: { component: 0, point: [0, 0, 0] }, b: { component: 1, point: [0, 0, 0] }, value: 0.1 },
+        { kind: "distance", a: { component: 0, point: [0, 0, 0] }, b: { component: 1, point: [0, 0, 0] }, value: 0.2 },
+      ],
+    );
+    expect(conflict.converged).toBe(false);
+    expect(conflict.verdict).toBe("over-constrained");
+    expect(conflict.residualNorm).toBeGreaterThan(1e-5);
+  });
+
+  it("a satisfiable empty/locked assembly is reported converged", () => {
+    expect(solveMates([comp([0, 0, 0], true)], []).converged).toBe(true);
+    expect(
+      solveMates([comp([0, 0, 0], true), comp([0.1, 0, 0], false)], []).converged,
+    ).toBe(true);
+  });
 });

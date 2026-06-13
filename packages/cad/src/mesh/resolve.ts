@@ -9,9 +9,16 @@
 import type { TopoDS_Edge, TopoDS_Face } from "opencascade.js";
 
 import type { Occt } from "../oc/init.js";
-import { dot, normalize, sub } from "../math/index.js";
+import { dot, normalize, sub, type Vec3 } from "../math/index.js";
 import type { Solid } from "../solid/solid.js";
-import { adjacentFaceNormals, ensureMeshed, faceNormal, shapeEnums } from "./normals.js";
+import {
+  adjacentFaceNormals,
+  edgeMidpoint,
+  ensureMeshed,
+  faceCentroid,
+  faceNormal,
+  shapeEnums,
+} from "./normals.js";
 import type { EdgeRef, FaceRef } from "./tagged.js";
 
 // A face matches if its normal aligns to within ~2.6° (dot ≥ 0.999).
@@ -19,18 +26,41 @@ const FACE_DOT_TOL = 0.999;
 // An edge matches if both adjacent normals align (summed dot ≥ 2·tol).
 const EDGE_SCORE_TOL = 2 * FACE_DOT_TOL;
 
-/** The current solid's face best matching `ref`, or null (caller deletes). */
+/** Squared distance between two points (cheaper than distance for comparison). */
+function sqDist(a: Vec3, b: Vec3): number {
+  const d = sub(a, b);
+  return d[0] * d[0] + d[1] * d[1] + d[2] * d[2];
+}
+
+/**
+ * The current solid's face matching `ref`, or null (caller deletes).
+ *
+ * The normal is the primary filter (only faces aligned within tolerance are
+ * candidates). When `ref.centroid` is present it disambiguates among those
+ * candidates by closest area-centroid — so two faces sharing a normal (coplanar
+ * faces, a step, parallel walls) resolve to the RIGHT one rather than whichever
+ * OCCT enumerated first. Without a centroid (refs persisted before it existed) it
+ * falls back to the best normal alignment.
+ */
 export function resolveFaceRef(oc: Occt, solid: Solid, ref: FaceRef): TopoDS_Face | null {
   ensureMeshed(oc, solid.shape);
   const S = shapeEnums(oc);
   const exp = new oc.TopExp_Explorer_2(solid.shape, S.TopAbs_FACE, S.TopAbs_SHAPE);
   let best: TopoDS_Face | null = null;
-  let bestDot = -Infinity;
+  let bestScore = -Infinity;
   for (; exp.More(); exp.Next()) {
     const face = oc.TopoDS.Face_1(exp.Current());
-    const d = dot(faceNormal(oc, face), ref.normal);
-    if (d > bestDot) {
-      bestDot = d;
+    const aligned = dot(faceNormal(oc, face), ref.normal);
+    if (aligned < FACE_DOT_TOL) {
+      // Not a normal match — never a candidate (preserves the normal contract).
+      face.delete();
+      continue;
+    }
+    // Among normal-matches: closer centroid wins; without a ref centroid, the
+    // better normal alignment wins (the legacy behavior).
+    const score = ref.centroid ? -sqDist(faceCentroid(oc, face), ref.centroid) : aligned;
+    if (score > bestScore) {
+      bestScore = score;
       if (best) best.delete();
       best = face;
     } else {
@@ -38,12 +68,16 @@ export function resolveFaceRef(oc: Occt, solid: Solid, ref: FaceRef): TopoDS_Fac
     }
   }
   exp.delete();
-  if (best && bestDot >= FACE_DOT_TOL) return best;
-  if (best) best.delete();
-  return null;
+  return best;
 }
 
-/** The current solid's edge best matching `ref`, or null (caller deletes). */
+/**
+ * The current solid's edge matching `ref`, or null (caller deletes).
+ *
+ * The adjacent-normal pair is the primary filter; when `ref.midpoint` is present
+ * it disambiguates parallel edges sharing that pair by closest mid-point. Without
+ * a midpoint it falls back to the best normal-pair score.
+ */
 export function resolveEdgeRef(oc: Occt, solid: Solid, ref: EdgeRef): TopoDS_Edge | null {
   ensureMeshed(oc, solid.shape);
   const S = shapeEnums(oc);
@@ -57,8 +91,14 @@ export function resolveEdgeRef(oc: Occt, solid: Solid, ref: EdgeRef): TopoDS_Edg
     // Order-independent: the ref's two normals may be stored in either order.
     const s1 = dot(a, ref.faceNormals[0]) + dot(b, ref.faceNormals[1]);
     const s2 = dot(a, ref.faceNormals[1]) + dot(b, ref.faceNormals[0]);
-    const score = Math.max(s1, s2);
+    const normalScore = Math.max(s1, s2);
     const edge = oc.TopoDS.Edge_1(map.FindKey(i));
+    if (normalScore < EDGE_SCORE_TOL) {
+      // Not a normal-pair match — never a candidate.
+      edge.delete();
+      continue;
+    }
+    const score = ref.midpoint ? -sqDist(edgeMidpoint(oc, edge), ref.midpoint) : normalScore;
     if (score > bestScore) {
       bestScore = score;
       if (best) best.delete();
@@ -68,9 +108,7 @@ export function resolveEdgeRef(oc: Occt, solid: Solid, ref: EdgeRef): TopoDS_Edg
     }
   }
   map.delete();
-  if (best && bestScore >= EDGE_SCORE_TOL) return best;
-  if (best) best.delete();
-  return null;
+  return best;
 }
 
 /** The unit tangent direction of the edge matching `ref` (start→end). */

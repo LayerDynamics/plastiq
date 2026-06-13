@@ -376,7 +376,13 @@ const MATE: ContextAction[] = [
     visible: (ctx) => ctx.mateMode && !ctx.simulating,
     enabled: (ctx) => ctx.matePickCount === 2,
     run: () => {
-      const mm = Number(globalThis.prompt?.("Distance (mm)", "10"));
+      // Capture the raw prompt result: pressing Cancel returns null and an empty
+      // field returns "", both of which Number() coerces to 0 — so guarding on
+      // Number.isFinite alone would silently apply a 0 mm mate on Cancel. Treat
+      // null / blank as an explicit abort before coercing.
+      const raw = globalThis.prompt?.("Distance (mm)", "10");
+      if (raw == null || raw.trim() === "") return;
+      const mm = Number(raw);
       if (Number.isFinite(mm)) cad().applyMate("distance", mm / 1000);
     },
   },
@@ -387,7 +393,10 @@ const MATE: ContextAction[] = [
     visible: (ctx) => ctx.mateMode && !ctx.simulating,
     enabled: (ctx) => ctx.matePickCount === 2,
     run: () => {
-      const deg = Number(globalThis.prompt?.("Angle (deg)", "90"));
+      // See mate-distance: Cancel (null) / blank ("") would coerce to a 0° mate.
+      const raw = globalThis.prompt?.("Angle (deg)", "90");
+      if (raw == null || raw.trim() === "") return;
+      const deg = Number(raw);
       if (Number.isFinite(deg)) cad().applyMate("angle", (deg * Math.PI) / 180);
     },
   },
