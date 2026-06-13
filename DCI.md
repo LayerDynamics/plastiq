@@ -126,6 +126,10 @@ IndexedDB SQLite.
 
 ## Honest remainder (none of it stubbed/faked code)
 
+<!-- markdownlint-disable MD029 -->
+<!-- Items are numbered CONTINUOUSLY across §A–§D (1–12) so the prose can reference
+     them as §B6–§B9, §C10–§C11, (#2), (#6), §C10 — not restarted per section. -->
+
 ### A. Deliberate scope boundaries (design, not gaps)
 
 1. ~~**Concave physics.**~~ **CLOSED 2026-06-05.** Colliders are now a **compound
@@ -168,15 +172,15 @@ IndexedDB SQLite.
    constraint that references an absent body, instead of skipping silently
    (rapier/cannon/ammo.ts). Tested per backend in `prediction.test.ts`. (The kernel
    `lowerJoints` never drops by ref, so only the backends needed it.)
-2. ~~**Lenient manifest parse.**~~ **CLOSED 2026-06-06.** `parseManifest` (sim) now
+7. ~~**Lenient manifest parse.**~~ **CLOSED 2026-06-06.** `parseManifest` (sim) now
    validates gravity, each body's id/mass/com/orientation/colliders, and each
    constraint's kind/refs/origin/axis — structural checks; body-existence stays a
    spawn-time warn-drop (#6) so a dangling ref degrades gracefully. New
    `sim/manifest.test.ts`.
-3. ~~**Degenerate-face skip.**~~ **CLOSED 2026-06-06.** `tessellate.ts` now
+8. ~~**Degenerate-face skip.**~~ **CLOSED 2026-06-06.** `tessellate.ts` now
    `console.warn`s (with the face id + deflection) when a face has no triangulation,
    rather than omitting it silently.
-4. ~~**planegcs not awaited.**~~ **CLOSED 2026-06-06.** The sketch store tracks a
+9. ~~**planegcs not awaited.**~~ **CLOSED 2026-06-06.** The sketch store tracks a
    `solverReady` flag set when `initSketchSolver` resolves (`sketchSolverReady()`
    added to the kernel); the **Sketch toolbar button is disabled until then** and
    `enterSketch` refuses to open before the solver is loaded, so a synchronous
@@ -194,7 +198,7 @@ IndexedDB SQLite.
     the ground across all three backends. *(Helix/curved spines aren't a kernel
     feature — only polyline spines exist; the cornered-polyline case became the new
     §D defect.)*
-2. ~~ammo per-body destruction.~~ **CLOSED 2026-06-06.** `AmmoEngine.dispose` now
+11. ~~ammo per-body destruction.~~ **CLOSED 2026-06-06.** `AmmoEngine.dispose` now
     removes + destroys each `btRigidBody` (and the cached transform) explicitly
     before destroying the world; a per-backend dispose→re-spawn test proves cleanup
     is sound.

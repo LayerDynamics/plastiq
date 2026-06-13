@@ -98,8 +98,14 @@ export class GeometryClient {
   }
 
   dispose(): void {
-    for (const [, p] of this.pending) clearTimeout(p.timer);
-    this.worker.terminate();
+    // Reject any in-flight requests so an awaiting caller doesn't hang forever once
+    // the worker is terminated (mirrors `onerror`'s reject-all). Then stop the
+    // worker and clear the map.
+    for (const [, p] of this.pending) {
+      clearTimeout(p.timer);
+      p.reject(new Error("geometry worker disposed"));
+    }
     this.pending.clear();
+    this.worker.terminate();
   }
 }

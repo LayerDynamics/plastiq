@@ -14,6 +14,7 @@ import { GeometryClient } from "../worker/bridge.js";
 import { useProjectsStore } from "../persistence/projectsStore.js";
 import { Viewport3D } from "./Viewport3D.js";
 import { resolveDatumPlane } from "../worker/sketchPlane.js";
+import { createCoalescer } from "./coalesce.js";
 import { useSketchStore } from "../sketch/sketchStore.js";
 import { explodeInstances } from "../viewport/explode.js";
 import { findClashes, type InstanceBox } from "../viewport/interference.js";
@@ -150,16 +151,14 @@ export function Viewport(): React.JSX.Element {
     void projects.init();
 
     let cancelled = false;
-    let building = false;
-    let pending = false;
     let lastSig: string | null = null;
 
-    const rebuild = async (): Promise<void> => {
-      if (building) {
-        pending = true;
-        return;
-      }
-      building = true;
+    // Collapse a burst of store changes (e.g. a gizmo drag emitting a tick per
+    // frame) into one in-flight rebuild plus a single trailing rebuild on the
+    // latest state. The building/pending machine lives in createCoalescer, which
+    // is unit-tested in coalesce.test.ts (the trailing re-run is suppressed once
+    // `cancelled` flips on unmount).
+    const coalescer = createCoalescer(async (): Promise<void> => {
       setStatus("building");
       const state = useCadStore.getState();
       const full = state.toDocument();
@@ -207,16 +206,10 @@ export function Viewport(): React.JSX.Element {
           const m = /feature '([^']+)'/.exec(message);
           useCadStore.getState().setErrorFeature(m ? m[1]! : null);
         }
-      } finally {
-        building = false;
-        if (pending && !cancelled) {
-          pending = false;
-          void rebuild();
-        }
       }
-    };
+    }, () => cancelled);
 
-    void rebuild(); // initial build of whatever is already in the store
+    coalescer.schedule(); // initial build of whatever is already in the store
     const unsub = useCadStore.subscribe((state, prev) => {
       if (
         state.features === prev.features &&
@@ -226,7 +219,7 @@ export function Viewport(): React.JSX.Element {
         return;
       }
       if (geometrySignature(state) === lastSig) return; // pure placement change
-      void rebuild();
+      coalescer.schedule();
     });
 
     // Resolve the active sketch's "normal to" plane for the ortho camera (S2/S3):

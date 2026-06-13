@@ -127,21 +127,26 @@ export async function handleRequest(
         if (!face) {
           return { response: { id: req.id, ok: true, op: "facePlane", plane: null }, transfer: [] };
         }
-        const p = faceDatumPlane(oc, face);
-        face.delete();
-        return {
-          response: {
-            id: req.id,
-            ok: true,
-            op: "facePlane",
-            plane: {
-              origin: [p.origin[0], p.origin[1], p.origin[2]],
-              normal: [p.normal[0], p.normal[1], p.normal[2]],
-              xAxis: [p.xAxis[0], p.xAxis[1], p.xAxis[2]],
+        // Free `face` on every exit — including a throw from faceDatumPlane — so the
+        // resolved face isn't leaked on the error path.
+        try {
+          const p = faceDatumPlane(oc, face);
+          return {
+            response: {
+              id: req.id,
+              ok: true,
+              op: "facePlane",
+              plane: {
+                origin: [p.origin[0], p.origin[1], p.origin[2]],
+                normal: [p.normal[0], p.normal[1], p.normal[2]],
+                xAxis: [p.xAxis[0], p.xAxis[1], p.xAxis[2]],
+              },
             },
-          },
-          transfer: [],
-        };
+            transfer: [],
+          };
+        } finally {
+          face.delete();
+        }
       } finally {
         solid.delete();
       }

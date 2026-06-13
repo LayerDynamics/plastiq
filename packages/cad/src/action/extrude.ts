@@ -101,13 +101,20 @@ export function extrudeToFace(
   const face = resolveFaceRef(oc, base, toFace);
   if (!face) throw new Error("extrudeToFace: the target face did not resolve on the body");
 
+  // `face` and the GProp props are WASM-heap allocations — free them on EVERY exit
+  // (incl. a throw from SurfaceProperties/CentreOfMass) via try/finally, so an
+  // error path doesn't leak the resolved face.
   const props = new oc.GProp_GProps_1();
-  oc.BRepGProp.SurfaceProperties_1(face, props, false, false);
-  const com = props.CentreOfMass();
-  const centroid: Vec3 = [com.X(), com.Y(), com.Z()];
-  com.delete();
-  props.delete();
-  face.delete();
+  let centroid: Vec3;
+  try {
+    oc.BRepGProp.SurfaceProperties_1(face, props, false, false);
+    const com = props.CentreOfMass();
+    centroid = [com.X(), com.Y(), com.Z()];
+    com.delete();
+  } finally {
+    props.delete();
+    face.delete();
+  }
 
   const signed = dot(sub(centroid, sketch.plane.origin), dir);
   if (Math.abs(signed) < 1e-9) {

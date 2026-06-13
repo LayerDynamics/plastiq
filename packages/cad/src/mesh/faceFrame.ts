@@ -20,11 +20,15 @@ export function faceDatumPlane(oc: Occt, face: TopoDS_Face): DatumPlane {
   // Area centroid — a point on the face, centred (the same call extrude-to-face
   // uses). GProp surface properties → centre of mass.
   const props = new oc.GProp_GProps_1();
-  oc.BRepGProp.SurfaceProperties_1(face, props, false, false);
-  const c = props.CentreOfMass();
-  const origin: Vec3 = [c.X(), c.Y(), c.Z()];
-  c.delete();
-  props.delete();
+  let origin: Vec3;
+  try {
+    oc.BRepGProp.SurfaceProperties_1(face, props, false, false);
+    const c = props.CentreOfMass();
+    origin = [c.X(), c.Y(), c.Z()];
+    c.delete();
+  } finally {
+    props.delete(); // free the GProp allocation even if SurfaceProperties throws
+  }
   // A stable in-plane X axis: take the world axis least parallel to the normal and
   // project the normal component out, then normalise. (Avoids a degenerate axis
   // when the normal is itself ±X.)
