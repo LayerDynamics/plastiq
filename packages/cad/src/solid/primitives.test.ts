@@ -69,3 +69,13 @@ describe("Solid.copy", () => {
     dup.delete();
   });
 });
+
+describe("Solid.delete", () => {
+  it("is idempotent: a second delete() is a no-op, not a double-free throw", () => {
+    const box = makeBox(oc, mm(10), mm(10), mm(10));
+    box.delete();
+    // A bare this.shape.delete() on the second call would throw an emscripten
+    // 'already deleted' BindingError; the disposed guard makes it a safe no-op.
+    expect(() => box.delete()).not.toThrow();
+  });
+});

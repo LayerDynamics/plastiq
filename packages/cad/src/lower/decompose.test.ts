@@ -3,7 +3,7 @@
 
 import { beforeAll, describe, expect, it } from "vitest";
 
-import { collidersFor, initDecomposer, meshVolume } from "./decompose.js";
+import { collidersFor, decomposerReady, initDecomposer, meshVolume } from "./decompose.js";
 import { convexHull } from "./hull.js";
 
 type P3 = [number, number, number];
@@ -129,6 +129,14 @@ function lPrismMesh(): Mesh {
   return { positions, indices, volume: 3 };
 }
 
+describe("decomposerReady", () => {
+  it("reports true once initDecomposer has completed (the worker's readiness gate)", () => {
+    // beforeAll awaited initDecomposer, so the V-HACD wasm is loaded. The worker
+    // uses this synchronous check to skip a redundant re-init before lowering.
+    expect(decomposerReady()).toBe(true);
+  });
+});
+
 describe("collidersFor — convex decomposition", () => {
   it("keeps a convex part as a SINGLE hull (concavity gate, no decomposition)", () => {
     const m = cubeMesh(0.5);
@@ -180,6 +188,23 @@ describe("collidersFor — convex decomposition", () => {
     for (const c of colliders) {
       expect(insideConvex(c.points, c.faces, inNotch)).toBe(false);
     }
+  });
+
+  it("drops only degenerate pieces — kept colliders conserve the solid's volume (F10)", () => {
+    const m = lPrismMesh();
+    const colliders = collidersFor(m.positions, m.indices, m.volume);
+    // Every kept piece is a real, non-degenerate convex hull (the filter rejects
+    // sub-tetrahedral / coplanar pieces, which carry zero volume).
+    for (const c of colliders) {
+      expect(c.points.length / 3).toBeGreaterThanOrEqual(4);
+      expect(c.faces.length).toBeGreaterThanOrEqual(4);
+      expect(meshVolume(c.points, c.faces)).toBeGreaterThan(0);
+    }
+    // The kept set still accounts for essentially all of the solid's volume (3):
+    // if a piece with real volume had been silently dropped, this lower bound
+    // (≈90%) would fail.
+    const total = colliders.reduce((s, c) => s + meshVolume(c.points, c.faces), 0);
+    expect(total).toBeGreaterThan(m.volume * 0.9);
   });
 
   it("respects a tighter concavity tolerance only triggering on real concavity", () => {

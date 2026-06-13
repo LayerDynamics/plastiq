@@ -85,6 +85,39 @@ describe("shell", () => {
   });
 });
 
+describe("partial-resolution safety (no silent partial dress-up)", () => {
+  // A signature pointing along the cube diagonal matches no axis-aligned box
+  // face/edge (dot ≈ 0.577 < the 0.999 face tolerance), so it never resolves.
+  const bogusEdge: EdgeRef = {
+    faceNormals: [
+      [0.577, 0.577, 0.577],
+      [0.577, 0.577, 0.577],
+    ],
+  };
+  const bogusFace: FaceRef = { normal: [0.577, 0.577, 0.577] };
+
+  it("fillet throws when ANY selected edge fails to resolve", () => {
+    const { edge } = refs(mm(60), mm(40), mm(30));
+    const box = makeBox(oc, mm(60), mm(40), mm(30));
+    expect(() => fillet(oc, box, [edge, bogusEdge], mm(3))).toThrow(/did not resolve/);
+    box.delete();
+  });
+
+  it("chamfer throws when ANY selected edge fails to resolve", () => {
+    const { edge } = refs(mm(60), mm(40), mm(30));
+    const box = makeBox(oc, mm(60), mm(40), mm(30));
+    expect(() => chamfer(oc, box, [edge, bogusEdge], mm(3))).toThrow(/did not resolve/);
+    box.delete();
+  });
+
+  it("shell throws when ANY selected open-face fails to resolve", () => {
+    const { top } = refs(mm(60), mm(40), mm(30));
+    const box = makeBox(oc, mm(60), mm(40), mm(30));
+    expect(() => shell(oc, box, [top, bogusFace], mm(3))).toThrow(/did not resolve/);
+    box.delete();
+  });
+});
+
 describe("draft", () => {
   it("tapers a vertical side face, reducing the volume while preserving the face count", () => {
     const { side } = refs(mm(60), mm(40), mm(30));

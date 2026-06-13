@@ -4,6 +4,7 @@
 // for REVERSED faces so it points out of the solid.
 
 import type {
+  TopoDS_Edge,
   TopoDS_Face,
   TopoDS_Shape,
   Poly_Triangulation,
@@ -101,7 +102,14 @@ export function faceNormal(oc: Occt, face: TopoDS_Face): Vec3 {
   if (handle.IsNull()) {
     handle.delete();
     loc.delete();
-    return [0, 0, 1];
+    // No triangulation → a real normal cannot be computed. Returning a fabricated
+    // default (e.g. +Z) would silently corrupt the face's persistent signature or
+    // a sketch datum frame. Every caller meshes first (resolve* via ensureMeshed
+    // on the solid, faceDatumPlane on the face, tessellate on the shape), so this
+    // is a violated-invariant guard — fail loudly rather than fabricate.
+    throw new Error(
+      "faceNormal: face has no triangulation — call ensureMeshed on the shape before reading its normal",
+    );
   }
   const tri = handle.get();
   const identity = loc.IsIdentity();
@@ -129,4 +137,34 @@ export function adjacentFaceNormals(
     return [n1, n2];
   }
   return [n1, n1];
+}
+
+/**
+ * A face's area centroid — the FaceRef positional disambiguator. Computed from
+ * the B-rep surface (no triangulation needed), so it is consistent between
+ * signature generation (tessellation) and matching (resolution).
+ */
+export function faceCentroid(oc: Occt, face: TopoDS_Face): Vec3 {
+  const props = new oc.GProp_GProps_1();
+  oc.BRepGProp.SurfaceProperties_1(face, props, false, false);
+  const c = props.CentreOfMass();
+  const out: Vec3 = [c.X(), c.Y(), c.Z()];
+  c.delete();
+  props.delete();
+  return out;
+}
+
+/**
+ * An edge's mid-parameter point — the EdgeRef positional disambiguator. Evaluated
+ * on the B-rep curve (deflection-independent), so it matches between tessellation
+ * and resolution.
+ */
+export function edgeMidpoint(oc: Occt, edge: TopoDS_Edge): Vec3 {
+  const curve = new oc.BRepAdaptor_Curve_2(edge);
+  const mid = 0.5 * (curve.FirstParameter() + curve.LastParameter());
+  const p = curve.Value(mid);
+  const out: Vec3 = [p.X(), p.Y(), p.Z()];
+  p.delete();
+  curve.delete();
+  return out;
 }

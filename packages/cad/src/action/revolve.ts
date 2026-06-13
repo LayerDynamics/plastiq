@@ -31,5 +31,5 @@ export function revolve(
   d.delete();
   o.delete();
   face.delete();
-  return new Solid(oc, shape);
+  // Guard the result for parity with loft/sweep/dress-up: should OCCT hand back a\n  // null shape for a degenerate-but-nonzero profile (rather than throwing), reject\n  // it rather than wrapping an empty Solid and returning it as a success.\n  if (shape.IsNull()) {\n    shape.delete();\n    throw new Error(\"revolve: produced an empty shape\");\n  }\n  return new Solid(oc, shape);
 }

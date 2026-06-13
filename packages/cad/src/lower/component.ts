@@ -38,7 +38,10 @@ export class Component {
 }
 
 export interface MaterialLibrary {
-  /** Density in kg/m³ for a material name (falls back to ~water for unknowns). */
+  /** Density in kg/m³ for a material name. Implementations MUST signal an unknown
+   * material (throw) rather than silently substituting a default — body mass is
+   * `volume × density` and is consumed downstream as exact, so a mis-typed
+   * material must not be silently massed as water. */
   density(material: string): number;
 }
 
@@ -54,5 +57,15 @@ const DENSITIES: Record<string, number> = {
 };
 
 export function defaultLibrary(): MaterialLibrary {
-  return { density: (material) => DENSITIES[material] ?? 1000 };
+  return {
+    density: (material) => {
+      const d = DENSITIES[material];
+      if (d === undefined) {
+        throw new Error(
+          `defaultLibrary: unknown material '${material}' — known materials: ${Object.keys(DENSITIES).join(", ")}`,
+        );
+      }
+      return d;
+    },
+  };
 }

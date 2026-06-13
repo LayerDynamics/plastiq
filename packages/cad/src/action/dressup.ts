@@ -28,9 +28,17 @@ export function fillet(oc: Occt, base: Solid, edges: readonly EdgeRef[], radius:
       added++;
     }
   }
-  if (added === 0) {
+  // Every requested edge must resolve. Filleting only the subset that resolved
+  // would silently return partial geometry (the missing edges un-rounded) as a
+  // success — exactly the case an upstream rebuild can perturb. Fail loudly so
+  // the feature is marked errored instead.
+  if (edges.length === 0 || added < edges.length) {
     maker.delete();
-    throw new Error("fillet: none of the selected edges resolved on the current body");
+    throw new Error(
+      edges.length === 0
+        ? "fillet: no edges selected"
+        : `fillet: ${edges.length - added} of ${edges.length} selected edge(s) did not resolve on the current body`,
+    );
   }
   const shape = maker.Shape();
   maker.delete();
@@ -55,9 +63,15 @@ export function chamfer(
       added++;
     }
   }
-  if (added === 0) {
+  // Every requested edge must resolve — see the note in `fillet`. Chamfering only
+  // the subset that resolved would silently return partial geometry as success.
+  if (edges.length === 0 || added < edges.length) {
     maker.delete();
-    throw new Error("chamfer: none of the selected edges resolved on the current body");
+    throw new Error(
+      edges.length === 0
+        ? "chamfer: no edges selected"
+        : `chamfer: ${edges.length - added} of ${edges.length} selected edge(s) did not resolve on the current body`,
+    );
   }
   // BRepFilletAPI_MakeChamfer.IsDone() may stay false until Shape() builds; guard
   // on a non-null result instead.
@@ -78,9 +92,17 @@ export function shell(oc: Occt, base: Solid, faces: readonly FaceRef[], thicknes
       resolved.push(f);
     }
   }
-  if (resolved.length === 0) {
+  // Every requested open-face must resolve. Shelling with fewer openings than
+  // asked changes the result's topology (e.g. an enclosed cavity instead of an
+  // open-top shell) — fail loudly rather than returning the wrong solid as success.
+  if (faces.length === 0 || resolved.length < faces.length) {
+    for (const f of resolved) f.delete();
     list.delete();
-    throw new Error("shell: none of the selected faces resolved on the current body");
+    throw new Error(
+      faces.length === 0
+        ? "shell: no faces selected"
+        : `shell: ${faces.length - resolved.length} of ${faces.length} selected face(s) did not resolve on the current body`,
+    );
   }
   const maker = new oc.BRepOffsetAPI_MakeThickSolid();
   const progress = new oc.Message_ProgressRange_1();

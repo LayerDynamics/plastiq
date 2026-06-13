@@ -9,9 +9,13 @@ import type { TopoDS_Face } from "opencascade.js";
 import type { Occt } from "../oc/init.js";
 import type { DatumPlane } from "../env/plane.js";
 import { dot, normalize, scale, sub, type Vec3 } from "../math/index.js";
-import { faceNormal } from "./normals.js";
+import { ensureMeshed, faceNormal } from "./normals.js";
 
 export function faceDatumPlane(oc: Occt, face: TopoDS_Face): DatumPlane {
+  // The normal is read from the face's triangulation; mesh it first so a freshly
+  // picked (un-tessellated) face yields its real outward normal rather than a
+  // fabricated default. Idempotent — OCCT caches the triangulation on the face.
+  ensureMeshed(oc, face);
   const normal = faceNormal(oc, face);
   // Area centroid — a point on the face, centred (the same call extrude-to-face
   // uses). GProp surface properties → centre of mass.

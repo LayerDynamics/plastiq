@@ -49,7 +49,11 @@ export type JointKind =
   | "ball"
   | "planar";
 
-export type AssemblyVerdict = "under-constrained" | "well-constrained" | "over-constrained";
+export type AssemblyVerdict =
+  | "under-constrained"
+  | "well-constrained"
+  | "over-constrained"
+  | "did-not-converge";
 
 export interface MateSolveResult {
   poses: ComponentPose[];
@@ -57,7 +61,23 @@ export interface MateSolveResult {
   freedom: number;
   /** L2 norm of the final mate residuals (≈0 when fully satisfied). */
   residualNorm: number;
+  /**
+   * True iff the iteration drove the residual to the solve tolerance — a pose
+   * satisfying all mates was found. When false the mates were NOT satisfied, and
+   * `verdict` distinguishes WHY: `"over-constrained"` (the residual is at a
+   * least-squares minimum > 0 → genuinely conflicting mates) vs
+   * `"did-not-converge"` (the residual was still descending when the iteration
+   * budget ran out → numerics, not a conflict). The old code reported both as
+   * "over-constrained", conflating a hard solve with a contradictory one.
+   */
+  converged: boolean;
 }
+
+/** Residual L2 norm at/below which the mates are considered satisfied. */
+const RESIDUAL_TOL = 1e-5;
+/** Least-squares gradient norm below which an unsatisfied residual is treated as
+ * a true minimum (conflicting mates) rather than an unfinished descent. */
+const GRADIENT_TOL = 1e-7;
 
 const DEFAULT_POINT: Vec3 = [0, 0, 0];
 const DEFAULT_DIR: Vec3 = [0, 0, 1];
@@ -231,6 +251,7 @@ export function solveMates(components: ComponentPose[], mates: Mate[]): MateSolv
       verdict: n === 0 ? "well-constrained" : "under-constrained",
       freedom: n,
       residualNorm: 0,
+      converged: true,
     };
   }
 
@@ -267,11 +288,26 @@ export function solveMates(components: ComponentPose[], mates: Mate[]): MateSolv
 
   const finalRes = residuals(poses, mates);
   const residNorm = Math.sqrt(sumSq(finalRes));
-  const rank = matrixRank(jacobian(poses, free, mates, finalRes), 1e-6);
+  const J = jacobian(poses, free, mates, finalRes);
+  const rank = matrixRank(J, 1e-6);
   const freedom = Math.max(0, n - rank);
+  const converged = residNorm <= RESIDUAL_TOL;
 
-  const verdict: AssemblyVerdict =
-    residNorm > 1e-5 ? "over-constrained" : freedom > 0 ? "under-constrained" : "well-constrained";
+  let verdict: AssemblyVerdict;
+  if (converged) {
+    verdict = freedom > 0 ? "under-constrained" : "well-constrained";
+  } else {
+    // Residual couldn't be satisfied. Gradient g = Jᵀr of the least-squares cost:
+    // g ≈ 0 means we sit at a residual MINIMUM (no pose does better → conflicting
+    // mates); a sizeable g means the descent was cut short by the iteration budget.
+    let gradSq = 0;
+    for (let a = 0; a < n; a++) {
+      let ga = 0;
+      for (let i = 0; i < finalRes.length; i++) ga += J[i]![a]! * finalRes[i]!;
+      gradSq += ga * ga;
+    }
+    verdict = Math.sqrt(gradSq) <= GRADIENT_TOL ? "over-constrained" : "did-not-converge";
+  }
 
-  return { poses, verdict, freedom, residualNorm: residNorm };
+  return { poses, verdict, freedom, residualNorm: residNorm, converged };
 }

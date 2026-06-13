@@ -174,13 +174,22 @@ export function Viewport(): React.JSX.Element {
           const store = useCadStore.getState();
           store.setErrorFeature(null);
           if (built) {
-            const faces: Record<number, { normal: [number, number, number] }> = {};
-            for (const g of built.faceGroups) faces[g.faceId] = { normal: g.normal };
+            // Capture the positional disambiguators (face centroid / edge midpoint)
+            // alongside the normal signatures so a selection re-resolves to the
+            // RIGHT same-normal face/edge after a parametric rebuild (FR-16).
+            const faces: Record<
+              number,
+              { normal: [number, number, number]; centroid: [number, number, number] }
+            > = {};
+            for (const g of built.faceGroups) faces[g.faceId] = { normal: g.normal, centroid: g.centroid };
             const edges: Record<
               number,
-              { faceNormals: (typeof built.edges)[number]["faceNormals"] }
+              {
+                faceNormals: (typeof built.edges)[number]["faceNormals"];
+                midpoint: [number, number, number];
+              }
             > = {};
-            for (const e of built.edges) edges[e.edgeId] = { faceNormals: e.faceNormals };
+            for (const e of built.edges) edges[e.edgeId] = { faceNormals: e.faceNormals, midpoint: e.midpoint };
             store.setSelectionRefs({ faces, edges });
           } else {
             store.setSelectionRefs({ faces: {}, edges: {} });

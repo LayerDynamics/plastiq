@@ -13,10 +13,17 @@ export type EdgePolylineNormals = readonly [Vec3, Vec3];
 export interface TransferMesh {
   vertices: Float32Array;
   indices: Uint32Array;
-  /** Per-face groups carry the FaceRef `normal` signature (SPEC-4 FR-16). */
+  /** Per-face groups carry the FaceRef `normal` signature + `centroid` positional
+   * disambiguator (SPEC-4 FR-16). */
   faceGroups: FaceGroup[];
-  /** Edges carry the EdgeRef `faceNormals` signature for persistent selection. */
-  edges: { edgeId: number; positions: Float32Array; faceNormals: EdgePolylineNormals }[];
+  /** Edges carry the EdgeRef `faceNormals` signature + `midpoint` positional
+   * disambiguator for persistent selection. */
+  edges: {
+    edgeId: number;
+    positions: Float32Array;
+    faceNormals: EdgePolylineNormals;
+    midpoint: Vec3;
+  }[];
   /** B-rep corner ids, parallel to `vertexPositions` (groups of 3). */
   vertexIds: number[];
   /** Flat SI corner coordinates `[x0,y0,z0, …]`, one per `vertexIds` entry. */

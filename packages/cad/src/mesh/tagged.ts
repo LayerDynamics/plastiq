@@ -11,14 +11,27 @@
 // worker/protocol contract (which transfers them as plain arrays).
 type V3 = [number, number, number];
 
-/** A persistent reference to a face: its outward unit normal signature. */
+/**
+ * A persistent reference to a face. The outward unit normal is the primary
+ * signature; `centroid` (the face's area centroid) is an OPTIONAL positional
+ * disambiguator that distinguishes two faces sharing the same normal (coplanar
+ * faces, a step, parallel walls). Optional so refs persisted before it existed
+ * still resolve (by normal alone). New captures include it.
+ */
 export interface FaceRef {
   readonly normal: V3;
+  readonly centroid?: V3;
 }
 
-/** A persistent reference to an edge: the two adjacent faces' normals. */
+/**
+ * A persistent reference to an edge: the two adjacent faces' normals (primary
+ * signature) plus an OPTIONAL `midpoint` positional disambiguator that separates
+ * parallel edges sharing the same adjacent-normal pair. Optional for the same
+ * back-compat reason as {@link FaceRef.centroid}.
+ */
 export interface EdgeRef {
   readonly faceNormals: readonly [V3, V3];
+  readonly midpoint?: V3;
 }
 
 /** One face's triangles as a contiguous range of the shared index buffer. */
@@ -31,6 +44,9 @@ export interface FaceGroup {
   readonly faceId: number;
   /** The face's outward unit normal — its persistent FaceRef signature. */
   readonly normal: V3;
+  /** The face's area centroid — the FaceRef positional disambiguator (separates
+   * two faces sharing `normal`). SI metres. */
+  readonly centroid: V3;
 }
 
 /** One B-rep edge as a world-space polyline plus its persistent signature. */
@@ -40,6 +56,9 @@ export interface TaggedEdge {
   readonly positions: number[];
   /** The two adjacent faces' normals — the persistent EdgeRef signature. */
   readonly faceNormals: readonly [V3, V3];
+  /** The edge's mid-parameter point — the EdgeRef positional disambiguator
+   * (separates parallel edges sharing `faceNormals`). SI metres. */
+  readonly midpoint: V3;
 }
 
 /** One B-rep corner vertex. */
@@ -57,6 +76,14 @@ export interface TaggedMesh {
   readonly faceGroups: FaceGroup[];
   readonly edges: TaggedEdge[];
   readonly vertexPoints: VertexPoint[];
+  /**
+   * Number of B-rep faces that carried no triangulation and were therefore
+   * OMITTED from `faceGroups`/`vertices`/`indices`. `0` for a complete mesh; a
+   * non-zero value means the mesh is partial (a hole where those faces were) —
+   * consumers (e.g. glTF export, the rebuild status) must surface it rather than
+   * treat the shorter mesh as the full geometry.
+   */
+  readonly droppedFaces: number;
 }
 
 /** Tessellation quality knobs. */
