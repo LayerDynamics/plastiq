@@ -64,7 +64,13 @@ export function extrude(
   prism.delete();
   v.delete();
   baseFace.delete();
-  // Guard the result for parity with loft/sweep/dress-up: reject a null shape\n  // rather than wrapping an empty Solid and returning it as a success.\n  if (shape.IsNull()) {\n    shape.delete();\n    throw new Error(\"extrude: produced an empty shape\");\n  }\n  return new Solid(oc, shape);
+  // Guard the result for parity with loft/sweep/dress-up: reject a null shape
+  // rather than wrapping an empty Solid and returning it as a success.
+  if (shape.IsNull()) {
+    shape.delete();
+    throw new Error("extrude: produced an empty shape");
+  }
+  return new Solid(oc, shape);
 }
 
 export interface ExtrudeToFaceOptions {
