@@ -127,6 +127,7 @@ IndexedDB SQLite.
 ## Honest remainder (none of it stubbed/faked code)
 
 ### A. Deliberate scope boundaries (design, not gaps)
+
 1. ~~**Concave physics.**~~ **CLOSED 2026-06-05.** Colliders are now a **compound
    of convex pieces**: convex parts stay one hull (a concavity gate skips
    decomposition); concave parts are split by V-HACD into several convex pieces
@@ -161,26 +162,28 @@ IndexedDB SQLite.
    *Accepted boundary — three independent engines, not made bit-identical.*
 
 ### B. Minor robustness hardening (defensive code, not bugs)
+
 6. ~~**Silent constraint skip.**~~ **CLOSED 2026-06-06.** All three backends now
    `console.warn` (with the kind + which body is missing) before dropping a
    constraint that references an absent body, instead of skipping silently
    (rapier/cannon/ammo.ts). Tested per backend in `prediction.test.ts`. (The kernel
    `lowerJoints` never drops by ref, so only the backends needed it.)
-7. ~~**Lenient manifest parse.**~~ **CLOSED 2026-06-06.** `parseManifest` (sim) now
+2. ~~**Lenient manifest parse.**~~ **CLOSED 2026-06-06.** `parseManifest` (sim) now
    validates gravity, each body's id/mass/com/orientation/colliders, and each
    constraint's kind/refs/origin/axis — structural checks; body-existence stays a
    spawn-time warn-drop (#6) so a dangling ref degrades gracefully. New
    `sim/manifest.test.ts`.
-8. ~~**Degenerate-face skip.**~~ **CLOSED 2026-06-06.** `tessellate.ts` now
+3. ~~**Degenerate-face skip.**~~ **CLOSED 2026-06-06.** `tessellate.ts` now
    `console.warn`s (with the face id + deflection) when a face has no triangulation,
    rather than omitting it silently.
-9. ~~**planegcs not awaited.**~~ **CLOSED 2026-06-06.** The sketch store tracks a
+4. ~~**planegcs not awaited.**~~ **CLOSED 2026-06-06.** The sketch store tracks a
    `solverReady` flag set when `initSketchSolver` resolves (`sketchSolverReady()`
    added to the kernel); the **Sketch toolbar button is disabled until then** and
    `enterSketch` refuses to open before the solver is loaded, so a synchronous
    `solveSketch` can never race the wasm.
 
 ### C. Test-coverage gaps (untested real behavior; not missing code)
+
 10. ~~Pathological / boundary inputs + multi-body pile + ref survival.~~ **CLOSED
     2026-06-06.** New `action/edgecases.test.ts`: zero-height extrude and zero-angle
     revolve now **throw** (guards added to extrude/revolve, which previously wrapped
@@ -191,12 +194,13 @@ IndexedDB SQLite.
     the ground across all three backends. *(Helix/curved spines aren't a kernel
     feature — only polyline spines exist; the cornered-polyline case became the new
     §D defect.)*
-11. ~~ammo per-body destruction.~~ **CLOSED 2026-06-06.** `AmmoEngine.dispose` now
+2. ~~ammo per-body destruction.~~ **CLOSED 2026-06-06.** `AmmoEngine.dispose` now
     removes + destroys each `btRigidBody` (and the cached transform) explicitly
     before destroying the world; a per-backend dispose→re-spawn test proves cleanup
     is sound.
 
 ### D. Defect found while doing §C10 — now FIXED
+
 12. ~~**Cornered sweep geometry is wrong.**~~ **CLOSED 2026-06-06.** The `sweep`
     feature (FR-32) used OCCT `BRepOffsetAPI_MakePipe`, which only swept the **first
     edge** of a multi-edge (cornered) spine — a 90° two-equal-segment probe produced
