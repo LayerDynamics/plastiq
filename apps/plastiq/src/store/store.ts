@@ -223,6 +223,10 @@ export interface HistorySnapshot {
   params: Record<string, number>;
   assembly: AssemblyModel;
   nextSeq: number;
+  /** The derived mate-solve verdict/DOF/poses, captured so undo/redo restore it in
+   * lock-step with `assembly` (it is NOT re-solved on undo, so without this the
+   * MATES readout would show a stale verdict after undoing an assembly edit). */
+  assemblyResult: MateSolveResult | null;
 }
 
 function snapshot(s: {
@@ -230,12 +234,14 @@ function snapshot(s: {
   params: Record<string, number>;
   assembly: AssemblyModel;
   nextSeq: number;
+  assemblyResult: MateSolveResult | null;
 }): HistorySnapshot {
   return structuredClone({
     features: s.features,
     params: s.params,
     assembly: s.assembly,
     nextSeq: s.nextSeq,
+    assemblyResult: s.assemblyResult,
   });
 }
 
@@ -523,7 +529,6 @@ export const useCadStore = create<CadStore>((set, get) => ({
     const a = { instance: p0!.instanceId, point: p0!.point, dir: p0!.dir };
     const b = { instance: p1!.instanceId, point: p1!.point, dir: p1!.dir };
     const id = `m${get().nextSeq}`;
-    set((st) => ({ nextSeq: st.nextSeq + 1, matePicks: [] }));
     // distance/angle carry a scalar (SI: metres / radians); the others don't.
     const mate: AssemblyMate =
       kind === "distance"
@@ -531,7 +536,17 @@ export const useCadStore = create<CadStore>((set, get) => ({
         : kind === "angle"
           ? { id, kind, a, b, value }
           : { id, kind, a, b };
-    get().addMate(mate);
+    // Push history, bump nextSeq, and add the mate in ONE set (like applyJoint) so
+    // the snapshot captures the PRE-increment seq. The previous split — a separate
+    // nextSeq++ set, then addMate's own history push — captured the post-increment
+    // seq, so undo + re-apply skipped the `m<n>` id. Then re-solve, as addMate does.
+    set((st) => ({
+      ...pushHistory(st),
+      nextSeq: st.nextSeq + 1,
+      matePicks: [],
+      assembly: { ...st.assembly, mates: [...st.assembly.mates, mate] },
+    }));
+    get().solveAssembly();
   },
 
   setMateValue: (id, value) => {
@@ -618,11 +633,20 @@ export const useCadStore = create<CadStore>((set, get) => ({
     set((s) => {
       const prev = s.past[s.past.length - 1];
       if (!prev) return {};
+      const features = structuredClone(prev.features);
+      // The rollback bar's index isn't part of history (it's view state); keep it
+      // anchored to its feature id across the restore, exactly as remove/reorder
+      // do — otherwise undo leaves rollbackIndex pointing at the wrong feature and
+      // the build path slices the wrong subtree (wrong geometry).
+      const rollbackIndex = reconcileRollback(features, s.rollbackBeforeId);
       return {
-        features: structuredClone(prev.features),
+        features,
         params: structuredClone(prev.params),
         assembly: structuredClone(prev.assembly ?? emptyAssembly()),
         nextSeq: prev.nextSeq,
+        assemblyResult: structuredClone(prev.assemblyResult ?? null),
+        rollbackIndex,
+        rollbackBeforeId: rollbackIndex === null ? null : s.rollbackBeforeId,
         past: s.past.slice(0, -1),
         future: [snapshot(s), ...s.future].slice(0, HISTORY_LIMIT),
       };
@@ -632,11 +656,16 @@ export const useCadStore = create<CadStore>((set, get) => ({
     set((s) => {
       const next = s.future[0];
       if (!next) return {};
+      const features = structuredClone(next.features);
+      const rollbackIndex = reconcileRollback(features, s.rollbackBeforeId);
       return {
-        features: structuredClone(next.features),
+        features,
         params: structuredClone(next.params),
         assembly: structuredClone(next.assembly ?? emptyAssembly()),
         nextSeq: next.nextSeq,
+        assemblyResult: structuredClone(next.assemblyResult ?? null),
+        rollbackIndex,
+        rollbackBeforeId: rollbackIndex === null ? null : s.rollbackBeforeId,
         past: [...s.past, snapshot(s)].slice(-HISTORY_LIMIT),
         future: s.future.slice(1),
       };

@@ -7,6 +7,7 @@ import Ammo from "ammojs-typed";
 
 import type { PhysicsBackend, PhysicsEngine, PhysicsPose, PhysicsSnapshot } from "../engine.js";
 import type { SimManifest } from "../manifest.js";
+import { conjugate, localAnchor, localAxis } from "../frame.js";
 
 type AmmoModule = Awaited<ReturnType<typeof Ammo>>;
 
@@ -40,6 +41,7 @@ class AmmoEngine implements PhysicsEngine {
     this.world = world;
 
     const byId = new Map<string, Ammo.btRigidBody>();
+    const orientById = new Map<string, [number, number, number, number]>();
     const childTransform = this.childTransform;
     for (const b of manifest.bodies) {
       // A compound of one convex-hull child per piece (all at identity offset —
@@ -73,6 +75,7 @@ class AmmoEngine implements PhysicsEngine {
       world.addRigidBody(body);
       this.bodies.push(body);
       byId.set(b.id, body);
+      orientById.set(b.id, b.orientation);
     }
 
     for (const c of manifest.constraints) {
@@ -84,21 +87,37 @@ class AmmoEngine implements PhysicsEngine {
         );
         continue;
       }
+      // Anchors/axes/frames are body-LOCAL: inverse-rotate the world origin/axis by
+      // each body's orientation (identity-safe — reduces to `origin − translation`
+      // and the raw axis when orientation is identity).
+      const qa = orientById.get(c.bodyA)!;
+      const qb = orientById.get(c.bodyB)!;
       const ta = a.getWorldTransform().getOrigin();
       const tb = b.getWorldTransform().getOrigin();
-      const pivotA = new m.btVector3(c.origin[0] - ta.x(), c.origin[1] - ta.y(), c.origin[2] - ta.z());
-      const pivotB = new m.btVector3(c.origin[0] - tb.x(), c.origin[1] - tb.y(), c.origin[2] - tb.z());
+      const la = localAnchor(c.origin, [ta.x(), ta.y(), ta.z()], qa);
+      const lb = localAnchor(c.origin, [tb.x(), tb.y(), tb.z()], qb);
+      const pivotA = new m.btVector3(la[0], la[1], la[2]);
+      const pivotB = new m.btVector3(lb[0], lb[1], lb[2]);
       if (c.kind === "hinge") {
-        const axisA = new m.btVector3(c.axis[0], c.axis[1], c.axis[2]);
-        const axisB = new m.btVector3(c.axis[0], c.axis[1], c.axis[2]);
+        const axA = localAxis(c.axis, qa);
+        const axB = localAxis(c.axis, qb);
+        const axisA = new m.btVector3(axA[0], axA[1], axA[2]);
+        const axisB = new m.btVector3(axB[0], axB[1], axB[2]);
         world.addConstraint(new m.btHingeConstraint(a, b, pivotA, pivotB, axisA, axisB, false), true);
       } else {
+        // Fixed: each body's reference-frame basis is its inverse orientation, so the
+        // frames coincide in world space at spawn → locks the CURRENT relative pose
+        // (an identity basis would instead drive the body back toward identity).
+        const fa = conjugate(qa);
+        const fb = conjugate(qb);
         const frameA = new m.btTransform();
         frameA.setIdentity();
         frameA.setOrigin(pivotA);
+        frameA.setRotation(new m.btQuaternion(fa[0], fa[1], fa[2], fa[3]));
         const frameB = new m.btTransform();
         frameB.setIdentity();
         frameB.setOrigin(pivotB);
+        frameB.setRotation(new m.btQuaternion(fb[0], fb[1], fb[2], fb[3]));
         world.addConstraint(new m.btFixedConstraint(a, b, frameA, frameB), true);
       }
     }

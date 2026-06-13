@@ -6,6 +6,7 @@ import * as CANNON from "cannon-es";
 
 import type { PhysicsBackend, PhysicsEngine, PhysicsPose, PhysicsSnapshot } from "../engine.js";
 import type { SimManifest } from "../manifest.js";
+import { localAnchor, localAxis } from "../frame.js";
 
 class CannonEngine implements PhysicsEngine {
   private world: CANNON.World | null = null;
@@ -19,6 +20,7 @@ class CannonEngine implements PhysicsEngine {
     this.world = world;
 
     const byId = new Map<string, CANNON.Body>();
+    const orientById = new Map<string, [number, number, number, number]>();
     const origin = new CANNON.Vec3(0, 0, 0);
     for (const b of manifest.bodies) {
       const body = new CANNON.Body({
@@ -45,6 +47,7 @@ class CannonEngine implements PhysicsEngine {
       world.addBody(body);
       this.bodies.push(body);
       byId.set(b.id, body);
+      orientById.set(b.id, b.orientation);
     }
 
     for (const c of manifest.constraints) {
@@ -56,20 +59,25 @@ class CannonEngine implements PhysicsEngine {
         );
         continue;
       }
-      const pivotA = new CANNON.Vec3(
-        c.origin[0] - a.position.x,
-        c.origin[1] - a.position.y,
-        c.origin[2] - a.position.z,
-      );
-      const pivotB = new CANNON.Vec3(
-        c.origin[0] - b.position.x,
-        c.origin[1] - b.position.y,
-        c.origin[2] - b.position.z,
-      );
+      // Hinge pivots/axes are body-LOCAL: inverse-rotate the world origin/axis by
+      // each body's orientation (identity-safe). LockConstraint derives its frame
+      // from the bodies' current poses, so it already locks a rotated body correctly.
+      const qa = orientById.get(c.bodyA)!;
+      const qb = orientById.get(c.bodyB)!;
+      const la = localAnchor(c.origin, [a.position.x, a.position.y, a.position.z], qa);
+      const lb = localAnchor(c.origin, [b.position.x, b.position.y, b.position.z], qb);
+      const pivotA = new CANNON.Vec3(la[0], la[1], la[2]);
+      const pivotB = new CANNON.Vec3(lb[0], lb[1], lb[2]);
       if (c.kind === "hinge") {
-        const axis = new CANNON.Vec3(c.axis[0], c.axis[1], c.axis[2]);
+        const axA = localAxis(c.axis, qa);
+        const axB = localAxis(c.axis, qb);
         world.addConstraint(
-          new CANNON.HingeConstraint(a, b, { pivotA, pivotB, axisA: axis, axisB: axis }),
+          new CANNON.HingeConstraint(a, b, {
+            pivotA,
+            pivotB,
+            axisA: new CANNON.Vec3(axA[0], axA[1], axA[2]),
+            axisB: new CANNON.Vec3(axB[0], axB[1], axB[2]),
+          }),
         );
       } else {
         world.addConstraint(new CANNON.LockConstraint(a, b));

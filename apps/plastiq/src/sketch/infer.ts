@@ -144,7 +144,14 @@ export function segmentHint(
     const b = model.points.find((p) => p.id === e.b);
     if (!a || !b) continue;
     const theirs = orientDeg(b.u - a.u, b.v - a.v);
-    const diff = Math.abs(((mine - theirs + 90) % 180) - 90); // 0 = parallel, 90 = perp
+    // Canonical non-negative modulo (JS `%` keeps the dividend's sign), matching
+    // orientDeg's `((x%180)+180)%180`. A bare `% 180` would mis-compute `diff` as
+    // ~176-179° instead of the acute angle when `theirs - mine > 90`. That case is
+    // currently unreachable here — it requires `mine` within `angleTolDeg` of 0/180°
+    // (horizontal), which the `lineHint` H/V check above intercepts first — but the
+    // formula is kept correct in its own right so it can't silently break if that
+    // H/V short-circuit ever changes.
+    const diff = Math.abs(((((mine - theirs + 90) % 180) + 180) % 180) - 90); // 0 = parallel, 90 = perp
     if (diff <= angleTolDeg && (!bestParallel || diff < bestParallel.diff)) {
       bestParallel = { line: e, diff };
     }

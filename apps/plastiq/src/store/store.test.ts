@@ -416,3 +416,54 @@ describe("CAD Studio store — sim playback (FR-41)", () => {
     expect(s().simTicks).toBe(48);
   });
 });
+
+describe("CAD Studio store — undo/redo & mate-id correctness (S1–S3)", () => {
+  it("S1: undo re-anchors the rollback bar to its feature, not a stale index", () => {
+    s().addFeature({ type: "sketch" }); // f1
+    s().addFeature({ type: "extrude", params: { height: 0.02 } }); // f2
+    s().addFeature({ type: "fillet", params: { radius: 0.002 } }); // f3
+    s().setRollback(2); // roll back before f3 (index 2)
+    expect(s().rollbackIndex).toBe(2);
+    s().removeFeature("f1"); // f3 slides to index 1; rollback follows its anchor
+    expect(s().rollbackIndex).toBe(1);
+    s().undo(); // f1 restored → f3 is back at index 2, so the bar must follow
+    expect(s().features.map((f) => f.id)).toEqual(["f1", "f2", "f3"]);
+    expect(s().rollbackBeforeId).toBe("f3");
+    expect(s().rollbackIndex).toBe(2); // before the fix this stayed 1 → wrong build slice
+  });
+
+  it("S2: undo reverts the assembly verdict in lock-step with the assembly", () => {
+    s().addInstance(); // i1 (ground)
+    s().addInstance(); // i2 (free)
+    const before = s().assemblyResult; // null — addInstance doesn't solve
+    s().addMate({
+      id: "m1",
+      kind: "coincident",
+      a: { instance: "i1", point: [0, 0, 0] },
+      b: { instance: "i2", point: [0, 0, 0] },
+    });
+    expect(s().assemblyResult).not.toBeNull(); // solved with the mate present
+    s().undo(); // mate removed
+    expect(s().assembly.mates).toHaveLength(0);
+    expect(s().assemblyResult).toEqual(before); // reverted; before the fix it stayed stale
+  });
+
+  it("S3: applyMate reuses the same mate id after an undo (no skipped id)", () => {
+    const i0 = s().addInstance();
+    const i1 = s().addInstance();
+    s().setSelectionRefs({ faces: { 1: { normal: [0, 0, 1] } }, edges: {} });
+    const stage = (): void => {
+      s().setMateMode(true);
+      s().addMatePick({ instanceId: i0, faceId: 1, worldPoint: [0, 0, 0] });
+      s().addMatePick({ instanceId: i1, faceId: 1, worldPoint: [0, 0, 0] });
+    };
+    stage();
+    s().applyMate("coincident");
+    const firstId = s().assembly.mates.at(-1)!.id;
+    s().undo(); // removes the mate AND must roll nextSeq back
+    expect(s().assembly.mates).toHaveLength(0);
+    stage();
+    s().applyMate("coincident");
+    expect(s().assembly.mates.at(-1)!.id).toBe(firstId); // before the fix: a skipped id
+  });
+});
