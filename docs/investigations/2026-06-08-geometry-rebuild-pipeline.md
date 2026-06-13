@@ -6,11 +6,21 @@
 
 ---
 
+> **UPDATE — 2026-06-13 (commit 184ea2e): every risk area below is now RESOLVED or
+> dispositioned.** R1/R2 (OCCT-heap leaks on error paths) now free their handles in
+> `try/finally`; R3 (the coalescing state machine) was extracted to a unit-tested
+> `three/coalesce.ts`; R4 (`dispose()`) now rejects in-flight requests; R5 (the
+> bridge `{ok:false}` error path) is now tested. R6 (whole-doc clone per RPC) and
+> R7 (late response after `terminate()`) are by-design / benign and left as-is.
+> Per-item status is annotated inline in §7. *File:line references below reflect
+> the 2026-06-08 layout — the worker `facePlane` handler has since moved to
+> `worker/geometry.worker.core.ts`.*
+
 ## 1. Executive Summary
 
 Plastiq is a parametric CAD app: a document is an ordered **feature history**, and the "truth" of the model is recomputed from scratch (OCCT B-rep kernel, in WebAssembly) every time the history changes. This pipeline is that recompute. It runs entirely off the main thread in a Web Worker, returns a **tagged tessellation** (faces/edges/vertices carry normal-based signatures so selections survive rebuilds — FR-16), and the main thread turns that into a three.js group.
 
-**The architecture is sound and the kernel layer is heavily unit-tested.** The most important findings are not bugs in the happy path but **robustness gaps on the seams**: (1) the main-thread rebuild **coalescing state machine** (`building`/`pending`/`cancelled`/`lastSig`) — the thing that keeps rapid gizmo drags from saturating the worker — has **zero test coverage**; (2) two **narrow WASM-heap leaks** on OCCT error paths (`extrudeToFace`, `facePlane`); (3) `GeometryClient.dispose()` doesn't settle in-flight promises; (4) the worker **error path** (the `{ok:false}` branch) is essentially untested at the bridge layer.
+**The architecture is sound and the kernel layer is heavily unit-tested.** The most important findings are not bugs in the happy path but **robustness gaps on the seams**: (1) the main-thread rebuild **coalescing state machine** (`building`/`pending`/`cancelled`/`lastSig`) — the thing that keeps rapid gizmo drags from saturating the worker — has **zero test coverage**; (2) two **narrow WASM-heap leaks** on OCCT error paths (`extrudeToFace`, `facePlane`); (3) `GeometryClient.dispose()` doesn't settle in-flight promises; (4) the worker **error path** (the `{ok:false}` branch) is essentially untested at the bridge layer. *(All four were RESOLVED on 2026-06-13 — see the UPDATE banner above and the per-item status in §7.)*
 
 ---
 
@@ -76,7 +86,7 @@ BuiltPart {group, mesh(per-face groups), edges[LineSegments], vertexPoints}   bu
 | 1 | Store → Viewport | `zustand.subscribe` | n/a (sync) | none (pure read) | n/a | `{features, params, rollbackIndex}` `Viewport.tsx:211` [read] |
 | 2 | Main → Worker | `postMessage` (structured clone; **no** transferables outbound) | `++seq` id, `pending` Map | `onerror` rejects **all** pending (`bridge.ts:48-54`); per-req 120 s timeout (`:61-65`) | 120 s | `WorkerRequest` union `protocol.ts:73` [read] |
 | 3 | Worker → Main | `postMessage` + transfer list | echoes `req.id` (`geometry.worker.ts:155,91,108,119,…`) | single try/catch → `{ok:false,error:string}` (`:156-162`) | n/a (main side) | `WorkerResponse` union `protocol.ts:75-87` [read] |
-| 4 | JS → OCCT (WASM) | `opencascade.js` calls | sync | throws `Error` (message preserved); some leaks on throw | n/a | `Occt` typed surface [read/agent] |
+| 4 | JS → OCCT (WASM) | `opencascade.js` calls | sync | throws `Error` (message preserved); error-path leaks fixed 2026-06-13 (R1/R2) | n/a | `Occt` typed surface [read/agent] |
 
 **Contract checks:**
 - Sender/receiver shapes match: `bridge.build()` narrows on `res.ok && res.op==="build"` (`bridge.ts:74`); other ops throw "unexpected worker response" on mismatch (`:80,87,95`). **[read]**
@@ -98,24 +108,31 @@ BuiltPart {group, mesh(per-face groups), edges[LineSegments], vertexPoints}   bu
 
 **R1 — WASM-heap leak in `extrudeToFace` on error path. [read, confirmed]**
 `packages/cad/src/action/extrude.ts:91-97`: `resolveFaceRef` → `face`, then `SurfaceProperties_1`/`CentreOfMass` with no `try/finally`. If any throws, `face` (and `props`/`com` before their `.delete()`) leak. Narrow (only when surface-props fails on a resolved face), single face per failure, not in a loop.
+**✅ RESOLVED 2026-06-13 (184ea2e):** `extrudeToFace` now frees `face` + the GProp props in a `try/finally` on every exit. (The throw branch isn't deterministically reproducible without mocking OCCT; the fix is structural and the happy path is tested.)
 
 **R2 — Same pattern in the worker's `facePlane`. [read, confirmed]**
 `apps/plastiq/src/worker/geometry.worker.ts:123-142`: `face = resolveFaceRef(…)`, `faceDatumPlane(oc, face)` (line 128), `face.delete()` (line 129); the `finally` (140-142) frees only `solid`. If `faceDatumPlane` throws, `face` leaks.
+**✅ RESOLVED 2026-06-13 (184ea2e):** the `facePlane` handler (now in `worker/geometry.worker.core.ts`) frees `face` in a `finally`; `faceDatumPlane` (`mesh/faceFrame.ts`) also frees its own GProp props on throw.
 
 **R3 — Rebuild coalescing state machine is untested. [read + agent]**
 `Viewport.tsx:152-221`. The `building`/`pending`/`cancelled`/`lastSig` logic is the core of the architecture (it collapses a burst of gizmo ticks into the latest single rebuild) and has **no** unit or integration test. Logic review found no concrete defect, but its untested status is the single highest-value gap given how much now drives it (every gizmo drag).
+**✅ RESOLVED 2026-06-13 (184ea2e):** the `building`/`pending`/`cancelled` machine was extracted to `three/coalesce.ts` (`createCoalescer`) and unit-tested in `coalesce.test.ts` (idle run; a burst collapses to exactly ONE trailing run; cancelled suppresses the trailing run; non-overlapping calls each run). `Viewport` now uses it; behavior preserved (65 E2E pass).
 
 **R4 — `GeometryClient.dispose()` doesn't settle in-flight promises. [read, confirmed]**
 `bridge.ts:100-104` clears timers + the `pending` map and terminates the worker, but never `reject`s outstanding promises. An `await client.build()` in flight at unmount **hangs forever**; harmless to the user (`cancelled` guards the `.then`), but the suspended async closure is retained. (Contrast `onerror`, which *does* reject all pending — `:48-54`.)
+**✅ RESOLVED 2026-06-13 (184ea2e):** `dispose()` now rejects each in-flight request (`new Error("geometry worker disposed")`) before terminating; tested in `bridge.test.ts`.
 
 **R5 — Worker error path undertested at the bridge. [agent, spot-verified]**
 `bridge.test.ts` covers only the timeout path; the `{ok:false, error}` reject branch (`bridge.ts:46`) and the worker's catch-all (`geometry.worker.ts:156-162`) have no direct test. The *kernel* error messages are well tested in `rebuild.test.ts`, and one E2E (`extrude-guard.spec.ts`) *prevents* errors rather than exercising the handler — so the user-visible `setStatus('rebuild failed…')` + `setErrorFeature()` path (`Viewport.tsx:194-200`) is not asserted anywhere.
+**✅ RESOLVED 2026-06-13 (184ea2e):** `bridge.test.ts` now asserts the `{ok:false}` reply rejects `build()` with the worker's error message (and that `dispose()` rejects pending requests). The worker's catch-all is also exercised via `geometry.worker.core.test.ts` (e.g. lower/export with no geometry → error response).
 
 **R6 — Whole `CadDocument` is structured-cloned on every RPC. [read]**
 `protocol.ts:34` / `geometry.worker.ts`: no delta or buffer reuse outbound. Fine today; a perf/GC concern for very large feature trees under rapid edits.
+**Disposition — by design, not changed:** sending the document to the worker is intrinsic to the RPC; there is no defect. A future delta/transfer optimisation remains possible but is not warranted now.
 
 **R7 — Worker termination/unmount race. [agent]**
 A worker response arriving between `terminate()` and thread teardown is dropped; combined with R4 this is benign but means late results vanish silently rather than being cancelled explicitly.
+**Disposition — benign, now moot:** with R4's fix `dispose()` rejects all pending entries, so there are no in-flight requests left for a late response to race against. Left as-is.
 
 ---
 
