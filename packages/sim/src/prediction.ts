@@ -6,13 +6,14 @@ import type { BackendName, PhysicsBackend, PhysicsEngine, PhysicsSnapshot } from
 import { parseManifest } from "./manifest.js";
 
 // Each backend is loaded with a dynamic import so the bundler code-splits the
-// three physics engines (Rapier/ammo/cannon, each with its own wasm/runtime) into
+// physics engines (Rapier/ammo/cannon/MuJoCo, each with its own wasm/runtime) into
 // separate chunks — only the one the user actually simulates with is fetched,
-// instead of all three bundling eagerly into the app's main chunk.
+// instead of all of them bundling eagerly into the app's main chunk.
 const REGISTRY: Record<BackendName, () => Promise<PhysicsBackend>> = {
   rapier: async () => new (await import("./backends/rapier.js")).RapierBackend(),
   ammo: async () => new (await import("./backends/ammo.js")).AmmoBackend(),
   cannon: async () => new (await import("./backends/cannon.js")).CannonBackend(),
+  mujoco: async () => new (await import("./backends/mujoco.js")).MujocoBackend(),
 };
 
 let active: PhysicsBackend | null = null;

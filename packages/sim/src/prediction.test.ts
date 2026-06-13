@@ -162,7 +162,7 @@ function badConstraintManifest(): SimManifest {
   };
 }
 
-const BACKENDS: BackendName[] = ["rapier", "cannon", "ammo"];
+const BACKENDS: BackendName[] = ["rapier", "cannon", "ammo", "mujoco"];
 
 afterEach(() => {
   vi.restoreAllMocks();

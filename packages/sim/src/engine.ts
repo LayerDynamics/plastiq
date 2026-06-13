@@ -41,7 +41,7 @@ export interface PhysicsEngine {
   dispose(): void;
 }
 
-export type BackendName = "rapier" | "ammo" | "cannon";
+export type BackendName = "rapier" | "ammo" | "cannon" | "mujoco";
 
 export interface PhysicsBackend {
   readonly name: BackendName;

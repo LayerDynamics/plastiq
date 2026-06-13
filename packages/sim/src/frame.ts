@@ -30,6 +30,20 @@ export function conjugate(q: SimQuat): SimQuat {
   return [-q[0], -q[1], -q[2], q[3]];
 }
 
+/** Hamilton product `a · b` of two (x, y, z, w) quaternions (compose rotations,
+ * `a` applied after `b`). Used to express a child body's orientation relative to
+ * its parent in a kinematic tree: `qChildLocal = conjugate(qParent) · qChild`. */
+export function quatMul(a: SimQuat, b: SimQuat): SimQuat {
+  const [ax, ay, az, aw] = a;
+  const [bx, by, bz, bw] = b;
+  return [
+    aw * bx + ax * bw + ay * bz - az * by,
+    aw * by - ax * bz + ay * bw + az * bx,
+    aw * bz + ax * by - ay * bx + az * bw,
+    aw * bw - ax * bx - ay * by - az * bz,
+  ];
+}
+
 /** A world point expressed in a body's local frame: `q⁻¹ · (world − translation)`. */
 export function localAnchor(world: SimVec3, translation: SimVec3, orientation: SimQuat): SimVec3 {
   return rotate(conjugate(orientation), [

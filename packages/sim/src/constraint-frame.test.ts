@@ -63,12 +63,36 @@ function rotatedHingeManifest(): SimManifest {
   };
 }
 
-const BACKENDS: BackendName[] = ["rapier", "cannon", "ammo"];
+// A double pendulum with BOTH links massive: a fixed anchor → arm A (hinge) → arm B
+// (hinge off A). B is a non-root dynamic body whose tree's centre of mass is offset
+// from its own COM — the case where MuJoCo's `cvel` linear part (referenced to the
+// tree-root subtree-COM) differs from the body's own-COM velocity. Used to verify
+// the snapshot's per-body linear-velocity reporting in a multi-link chain.
+function dynamicChainManifest(): SimManifest {
+  return {
+    version: 1,
+    source: "test:dynamic-chain",
+    gravity: [0, 0, -9.81],
+    bodies: [
+      { id: "anchor", mass: 0, com: [0, 0, 0], orientation: [0, 0, 0, 1], colliders: [boxHull(0.02)], fixed: true },
+      { id: "A", mass: 1, com: [0.2, 0, 0], orientation: [0, 0, 0, 1], colliders: [boxHull(0.05)] },
+      { id: "B", mass: 1, com: [0.4, 0, 0], orientation: [0, 0, 0, 1], colliders: [boxHull(0.05)] },
+    ],
+    constraints: [
+      { kind: "hinge", bodyA: "anchor", bodyB: "A", origin: [0, 0, 0], axis: [0, 1, 0] },
+      { kind: "hinge", bodyA: "A", bodyB: "B", origin: [0.3, 0, 0], axis: [0, 1, 0] },
+    ],
+  };
+}
+
+const BACKENDS: BackendName[] = ["rapier", "cannon", "ammo", "mujoco"];
 // rapier-compat's single-axis `JointData.revolute` can't express a world-axis hinge
 // between differently-oriented bodies (see the LIMITATION note in rapier.ts), so the
-// rotated-hinge correctness check covers only the per-body-axis backends. rapier's
-// hinge for identity-oriented bodies is covered by prediction.test.ts.
-const HINGE_BACKENDS: BackendName[] = ["cannon", "ammo"];
+// rotated-hinge correctness check covers only the backends that get the world-axis
+// hinge right: the per-body-axis maximal backends (cannon/ammo) and MuJoCo, whose
+// native tree joint expresses it directly. rapier's hinge for identity-oriented
+// bodies is covered by prediction.test.ts.
+const HINGE_BACKENDS: BackendName[] = ["cannon", "ammo", "mujoco"];
 
 describe.each(BACKENDS)("constraint body-local frame (fixed): %s", (backend) => {
   it("a fixed joint HOLDS a rotated body's orientation (doesn't un-rotate it)", async () => {
@@ -90,14 +114,53 @@ describe.each(HINGE_BACKENDS)("constraint body-local frame (hinge): %s", (backen
     await initSim({ backend });
     const sim = new PredictionSim(120, 1n);
     expect(sim.spawnManifest(JSON.stringify(rotatedHingeManifest()))).toBe(2);
-    const p0 = sim.bodyPosition(1);
-    for (let i = 0; i < 60; i++) sim.stepDynamics();
-    const p1 = sim.bodyPosition(1);
-    // +X hinge through the origin → the arm rotates in the YZ plane, so its X stays
-    // ≈ 0. A mis-rotated axis swings it out of plane (x drifts). It must also have
-    // fallen (z dropped below the hinge).
-    expect(Math.abs(p1[0])).toBeLessThan(0.02);
-    expect(p1[2]).toBeLessThan(p0[2] - 0.01);
+    const startZ = sim.bodyPosition(1)[2];
+    // Track the WHOLE swing rather than just the endpoint. +X hinge through the
+    // origin → the arm rotates in the YZ plane, so its X stays ≈ 0 at every step (a
+    // mis-rotated axis would drift it out of plane). It must also genuinely swing
+    // down below the hinge. We assert the minimum Z reached, not the final Z,
+    // because an undamped engine (MuJoCo) completes a half-swing within these 60
+    // steps and is back near the start height at the end — a final-position check
+    // would be phase-dependent, while min-Z and max-|X| are invariant.
+    let maxAbsX = 0;
+    let minZ = Infinity;
+    for (let i = 0; i < 60; i++) {
+      sim.stepDynamics();
+      const p = sim.bodyPosition(1);
+      maxAbsX = Math.max(maxAbsX, Math.abs(p[0]));
+      minZ = Math.min(minZ, p[2]);
+    }
+    expect(maxAbsX).toBeLessThan(0.02); // never leaves the hinge (YZ) plane
+    expect(minZ).toBeLessThan(startZ - 0.05); // swung well down below the hinge
+    sim.dispose();
+  });
+});
+
+// MuJoCo-specific: a snapshot must report each body's OWN-COM world linear velocity,
+// even in a multi-link dynamic chain. MuJoCo's `cvel` linear part is referenced to the
+// tree-root subtree-COM, so for a non-root dynamic body (the leaf of a double pendulum)
+// the raw value is offset by ω × (x_com − subtree_com[root]); the backend corrects it.
+// This guards that correction — drop it and the reported velocity stops matching a
+// finite-difference of the body's own position. (Maximal backends report per-body COM
+// velocity natively and need no such correction, so this check is MuJoCo-only.)
+describe("mujoco multi-link snapshot velocity (subtree-COM correction)", () => {
+  it("reports the leaf body's own-COM linear velocity in a dynamic chain", async () => {
+    await initSim({ backend: "mujoco" });
+    const RATE = 240;
+    const sim = new PredictionSim(RATE, 1n);
+    expect(sim.spawnManifest(JSON.stringify(dynamicChainManifest()))).toBe(3);
+    for (let i = 0; i < 120; i++) sim.stepDynamics(); // set both links swinging
+    const snap = sim.snapshot();
+    const v = snap.bodies[2]!.linearVelocity; // leaf body B
+    expect(Math.hypot(v[0], v[1], v[2])).toBeGreaterThan(0.1); // genuinely moving
+    // Finite-difference B's own COM and compare to the reported velocity.
+    const before = sim.bodyPosition(2);
+    sim.stepDynamics();
+    const after = sim.bodyPosition(2);
+    const dt = 1 / RATE;
+    expect(v[0]).toBeCloseTo((after[0] - before[0]) / dt, 1); // within 0.05
+    expect(v[1]).toBeCloseTo((after[1] - before[1]) / dt, 1);
+    expect(v[2]).toBeCloseTo((after[2] - before[2]) / dt, 1);
     sim.dispose();
   });
 });

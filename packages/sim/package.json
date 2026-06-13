@@ -5,7 +5,7 @@
   "type": "module",
   "main": "src/index.ts",
   "types": "src/index.ts",
-  "description": "Pluggable in-browser physics for Plastiq: one PhysicsEngine interface over Rapier, ammo.js, and cannon-es backends.",
+  "description": "Pluggable in-browser physics for Plastiq: one PhysicsEngine interface over Rapier, ammo.js, cannon-es, and a vendored MuJoCo backend.",
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
