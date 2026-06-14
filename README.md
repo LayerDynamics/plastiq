@@ -27,8 +27,10 @@ e2e/plastiq    no-mock Playwright end-to-end tests
   (FreeCAD PlaneGCS, wasm), a first-party 3D assembly-mate solver, and
   assembly→sim lowering. Runs in the browser (in a Web Worker) and headless under
   Node.
-- **`@plastiq/sim`** — one `PhysicsEngine` interface with three interchangeable
+- **`@plastiq/sim`** — one `PhysicsEngine` interface with four interchangeable
   backends, selectable at runtime:
+  [MuJoCo](https://mujoco.org/) (DeepMind, the default — vendored WASM, expresses
+  world-axis hinges between arbitrarily-oriented bodies natively),
   [Rapier](https://rapier.rs/), [ammo.js](https://github.com/kripken/ammo.js)
   (Bullet), and [cannon-es](https://pmndrs.github.io/cannon-es/). It spawns the
   kernel's `SimManifest` and steps it under gravity. Each body is a **compound of

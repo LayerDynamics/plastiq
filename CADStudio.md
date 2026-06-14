@@ -4,7 +4,7 @@
 > the *extracted-but-still-mechx-dependent* copy. It has since been acted on: the
 > app was rebuilt as **Plastiq** — `@mechx/cad`/`@mechx/sim` were **replaced** (not
 > vendored) by `@plastiq/cad` (opencascade.js + planegcs + a first-party mate
-> solver) and `@plastiq/sim` (a pluggable Rapier/ammo.js/cannon-es layer), and
+> solver) and `@plastiq/sim` (a pluggable MuJoCo/Rapier/ammo.js/cannon-es layer), and
 > **all seven §5 correctness defects were fixed with regression tests** (see R8).
 > The implementation plan and its milestone log are in
 > [`docs/plans/2026-06-05-plastiq-independent-app.md`](docs/plans/2026-06-05-plastiq-independent-app.md);

@@ -1,10 +1,12 @@
 // SPEC-5 M6.1 — strict E2E (no mocks): in-editor Simulate (FR-41). The seeded
 // part is lowered to a SimManifest and dropped/run in the REAL in-browser
-// @plastiq/sim; the live body pose drives the render. We start the sim, step a
-// fixed number of ticks, assert the body fell under gravity, then Stop and
-// assert the render returns cleanly to the edit pose (simulate is transient
-// view-state — it never mutates the document). Browser OCCT lowering →
-// @plastiq/sim spawn/step → render-back, end to end.
+// @plastiq/sim; the live body pose drives the render. start() takes no backend,
+// so this exercises the DEFAULT backend (MuJoCo) end-to-end in the browser;
+// simulate-backends.spec proves the other three. We start the sim, step a fixed
+// number of ticks, assert the body fell under gravity, then Stop and assert the
+// render returns cleanly to the edit pose (simulate is transient view-state — it
+// never mutates the document). Browser OCCT lowering → @plastiq/sim spawn/step →
+// render-back, end to end.
 
 import { expect, test } from "@playwright/test";
 import type { Vec3, Quat } from "../../apps/plastiq/src/assembly/model.js";

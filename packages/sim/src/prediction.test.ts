@@ -39,7 +39,7 @@ function lCompound(): HullCollider[] {
   // Upright: half (0.025,0.025,0.025) at centre (-0.025,0,0.025) → vol 1.25e-4.
   // Volume-weighted COM = (-1/120, 0, -1/120) ≈ (-0.008333,0,-0.008333). Re-centre
   // both pieces on it so the body origin = COM (the manifest invariant: pieces are
-  // COM-local), making readback identical across all three backends.
+  // COM-local), making readback identical across all backends.
   const sx = 1 / 120;
   const sz = 1 / 120;
   const foot = shiftHull(boxHullXYZ(0.05, 0.025, 0.025), 0 + sx, 0, -0.025 + sz);

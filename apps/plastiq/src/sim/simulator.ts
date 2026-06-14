@@ -56,8 +56,8 @@ export class Simulator {
   ) {}
 
   /**
-   * Load the sim backend (default Rapier; pass `backend` to use ammo or cannon)
-   * + spawn the manifest. Returns the body count.
+   * Load the sim backend (default MuJoCo; pass `backend` to use rapier, ammo or
+   * cannon) + spawn the manifest. Returns the body count.
    */
   async start(backend?: BackendName): Promise<number> {
     await initSim(backend ? { backend } : undefined);

@@ -1,5 +1,6 @@
 // The pluggable physics contract. One PhysicsEngine interface, implemented by
-// interchangeable backends (Rapier, ammo.js, cannon-es), selected at init time.
+// interchangeable backends (MuJoCo — the default — plus Rapier, ammo.js, cannon-es),
+// selected at init time.
 
 import type { SimManifest } from "./manifest.js";
 

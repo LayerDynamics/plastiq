@@ -2,7 +2,8 @@
 // into the exact convex collision shape used by the physics layer, instead of a
 // generic bounding box. Output is a deduped vertex list + triangular faces
 // (indices into those vertices), which every backend's convex-hull collider
-// accepts (Rapier convexHull, ammo btConvexHullShape, cannon ConvexPolyhedron).
+// accepts (Rapier convexHull, ammo btConvexHullShape, cannon ConvexPolyhedron,
+// MuJoCo mesh asset).
 
 import type { Vec3 } from "../math/index.js";
 import { cross, dot, sub } from "../math/index.js";

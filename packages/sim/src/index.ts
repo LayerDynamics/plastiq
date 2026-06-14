@@ -1,9 +1,10 @@
 // @plastiq/sim — pluggable in-browser physics for Plastiq.
 //
-// One PhysicsEngine interface with three interchangeable backends — Rapier
-// (@dimforge/rapier3d-compat), ammo.js (Bullet, via ammojs-typed), and cannon-es
-// — selectable at runtime. initSim() loads a backend; PredictionSim spawns a
-// SimManifest and steps it under gravity, reporting each body's world COM pose.
+// One PhysicsEngine interface with four interchangeable backends — MuJoCo (the
+// default, vendored DeepMind WASM), Rapier (@dimforge/rapier3d-compat), ammo.js
+// (Bullet, via ammojs-typed), and cannon-es — selectable at runtime. initSim()
+// loads a backend; PredictionSim spawns a SimManifest and steps it under gravity,
+// reporting each body's world COM pose.
 
 /** Sim layer version, surfaced for tooling/diagnostics. */
 export const SIM_VERSION = "0.1.0" as const;

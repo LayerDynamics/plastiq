@@ -1,14 +1,14 @@
-// SPEC-5 M6.1 — strict E2E (no mocks): the pluggable physics layer has THREE
-// interchangeable backends (Rapier, ammo.js/Bullet, cannon-es). simulate.spec
-// already proves the default (Rapier) end-to-end in the browser; this proves the
-// OTHER two actually run in-browser: switch the backend, lower the seeded part to
+// SPEC-5 M6.1 — strict E2E (no mocks): the pluggable physics layer has FOUR
+// interchangeable backends (MuJoCo, Rapier, ammo.js/Bullet, cannon-es). simulate.spec
+// already proves the DEFAULT (MuJoCo) end-to-end in the browser; this proves the
+// OTHER three actually run in-browser: switch the backend, lower the seeded part to
 // a SimManifest via the real OCCT worker, spawn/step it in the REAL @plastiq/sim
-// (ammo's wasm / cannon's pure JS), and assert the body falls under gravity.
+// (rapier's wasm / ammo's wasm / cannon's pure JS), and assert the body falls under gravity.
 
 import { expect, test } from "@playwright/test";
 import type { Vec3, Quat } from "../../apps/plastiq/src/assembly/model.js";
 
-type BackendName = "rapier" | "ammo" | "cannon";
+type BackendName = "mujoco" | "rapier" | "ammo" | "cannon";
 
 interface SimApi {
   start: () => Promise<number>;
@@ -19,7 +19,7 @@ interface SimApi {
   backend: () => BackendName | null;
 }
 
-for (const backend of ["ammo", "cannon"] as const) {
+for (const backend of ["rapier", "ammo", "cannon"] as const) {
   test(`simulate on the ${backend} backend: the part drops under gravity in-browser`, async ({
     page,
   }) => {

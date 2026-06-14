@@ -1,5 +1,5 @@
 // initSim + PredictionSim — the app-facing API. initSim loads a physics backend
-// (default Rapier) once; PredictionSim spawns a manifest into it and steps under
+// (default MuJoCo) once; PredictionSim spawns a manifest into it and steps under
 // gravity, reporting each body's world COM pose.
 
 import type { BackendName, PhysicsBackend, PhysicsEngine, PhysicsSnapshot } from "./engine.js";
@@ -18,9 +18,12 @@ const REGISTRY: Record<BackendName, () => Promise<PhysicsBackend>> = {
 
 let active: PhysicsBackend | null = null;
 
-/** Load a physics backend (default Rapier). Await before constructing a PredictionSim. */
+/** Load a physics backend (default MuJoCo — its native tree joints express
+ * world-axis hinges between differently-oriented bodies, the case rapier-compat
+ * cannot; rapier/ammo/cannon remain selectable). Await before constructing a
+ * PredictionSim. */
 export async function initSim(opts?: { backend?: BackendName }): Promise<void> {
-  const name = opts?.backend ?? "rapier";
+  const name = opts?.backend ?? "mujoco";
   const backend = await REGISTRY[name]();
   await backend.init();
   active = backend;
