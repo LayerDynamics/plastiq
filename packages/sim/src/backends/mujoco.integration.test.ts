@@ -15,7 +15,7 @@ import {
   freeBodyManifest,
   hingeManifest,
   restManifest,
-} from "./mujoco.fixtures.js";
+} from "./fixtures.js";
 import type { SimManifest } from "../manifest.js";
 
 let backend: MujocoBackend;

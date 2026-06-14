@@ -6,7 +6,7 @@
 import { describe, expect, it } from "vitest";
 
 import { MujocoBackend, buildMjcf } from "./mujoco.js";
-import { freeBodyManifest } from "./mujoco.fixtures.js";
+import { freeBodyManifest } from "./fixtures.js";
 
 const isFiniteVec = (v: readonly number[], n: number): boolean =>
   v.length === n && v.every((x) => Number.isFinite(x));

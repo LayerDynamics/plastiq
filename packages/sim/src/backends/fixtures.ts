@@ -1,7 +1,8 @@
-// Shared manifest fixtures for the MuJoCo backend's smoke / unit / integration
-// suites. Not a *.test.ts file, so the vitest glob never runs it as a test — it only
-// exports builders the three tiers compose. Kept here (not in each test) so the box
-// geometry + manifest shapes stay in lock-step across the three files.
+// Shared manifest fixtures for the physics backends' smoke / unit / integration
+// suites (the per-backend mujoco.* files and the parameterized backends.* files).
+// Not a *.test.ts file, so the vitest glob never runs it as a test — it only exports
+// builders the tiers compose. Kept here (not in each test) so the box geometry +
+// manifest shapes stay in lock-step across every backend tier.
 
 import type { HullCollider, SimManifest } from "../manifest.js";
 

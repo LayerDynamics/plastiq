@@ -19,6 +19,9 @@ class AmmoEngine implements PhysicsEngine {
   private readonly tmp: Ammo.btTransform;
   // Reused identity transform for compound child shapes (freed in dispose()).
   private readonly childTransform: Ammo.btTransform;
+  // Bullet objects are manual wasm allocations; dispose() frees tmp/childTransform
+  // unconditionally, so a second call would double-free. Guard for idempotency.
+  private disposed = false;
 
   constructor(
     private readonly mod: AmmoModule,
@@ -204,6 +207,8 @@ class AmmoEngine implements PhysicsEngine {
   }
 
   dispose(): void {
+    if (this.disposed) return; // idempotent — never double-free the wasm objects
+    this.disposed = true;
     const m = this.mod;
     const world = this.world;
     if (world) {

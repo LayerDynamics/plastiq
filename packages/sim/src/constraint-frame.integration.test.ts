@@ -91,7 +91,7 @@ const BACKENDS: BackendName[] = ["rapier", "cannon", "ammo", "mujoco"];
 // rotated-hinge correctness check covers only the backends that get the world-axis
 // hinge right: the per-body-axis maximal backends (cannon/ammo) and MuJoCo, whose
 // native tree joint expresses it directly. rapier's hinge for identity-oriented
-// bodies is covered by prediction.test.ts.
+// bodies is covered by prediction.integration.test.ts.
 const HINGE_BACKENDS: BackendName[] = ["cannon", "ammo", "mujoco"];
 
 describe.each(BACKENDS)("constraint body-local frame (fixed): %s", (backend) => {

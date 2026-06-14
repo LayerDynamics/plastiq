@@ -4,7 +4,7 @@
 // leaves identity-oriented manifests — every existing test/E2E — unchanged).
 
 import { describe, expect, it } from "vitest";
-import { conjugate, localAnchor, localAxis, type SimQuat } from "./frame.js";
+import { conjugate, localAnchor, localAxis, quatMul, type SimQuat } from "./frame.js";
 
 const IDENT: SimQuat = [0, 0, 0, 1];
 const S = Math.SQRT1_2; // sin/cos of 45° → a 90° rotation about Z is [0,0,S,S]
@@ -44,5 +44,25 @@ describe("frame — body-local constraint transform", () => {
     expect(back[0]).toBeCloseTo(0.3, 12);
     expect(back[1]).toBeCloseTo(0.7, 12);
     expect(back[2]).toBeCloseTo(-0.2, 12);
+  });
+});
+
+describe("frame — quatMul (quaternion composition)", () => {
+  const near = (q: SimQuat, e: readonly number[]): void => {
+    for (let i = 0; i < 4; i++) expect(q[i]).toBeCloseTo(e[i]!, 12);
+  };
+
+  it("identity is the left and right unit", () => {
+    const q: SimQuat = [0.1, 0.2, 0.3, 0.4];
+    near(quatMul(IDENT, q), q);
+    near(quatMul(q, IDENT), q);
+  });
+
+  it("composes two 90°-Z rotations into a 180°-Z rotation", () => {
+    near(quatMul(ROT_Z90, ROT_Z90), [0, 0, 1, 0]);
+  });
+
+  it("conjugate(q)·q == identity (the parent-relative child-orientation use)", () => {
+    near(quatMul(conjugate(ROT_Z90), ROT_Z90), IDENT);
   });
 });

@@ -21,7 +21,7 @@ import {
   missingBodyManifest,
   restManifest,
   rotatedFreeManifest,
-} from "./mujoco.fixtures.js";
+} from "./fixtures.js";
 
 afterEach(() => vi.restoreAllMocks());
 
