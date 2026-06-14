@@ -328,6 +328,7 @@ export function Viewport(): React.JSX.Element {
         __plastiqSimulate?: {
           start: () => Promise<number>;
           step: (n: number) => void;
+          rewind: () => void;
           poseOf: (id: string) => { position: Vec3; orientation: Quat } | null;
           stop: () => void;
           setBackend: (name: BackendName) => void;
@@ -339,6 +340,13 @@ export function Viewport(): React.JSX.Element {
       step: (n) => {
         if (!simulator) return;
         simulator.step(n);
+        updatePoses();
+      },
+      // Snapshot+restore round-trip: rewind to the spawned state (restores pose AND
+      // velocity from the snapshot captured at start), then republish the poses.
+      rewind: () => {
+        if (!simulator) return;
+        simulator.rewind();
         updatePoses();
       },
       poseOf: (id) => simulator?.poses().find((p) => p.id === id) ?? null,
