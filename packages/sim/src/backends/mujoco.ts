@@ -62,8 +62,10 @@ interface TreeEdge {
   axis: SimVec3;
 }
 
-/** Build the MJCF (MuJoCo XML) for a manifest at a fixed integration timestep. */
-function buildMjcf(manifest: SimManifest, timestep: number): string {
+/** Build the MJCF (MuJoCo XML) for a manifest at a fixed integration timestep.
+ * Exported for unit testing — the constraint-graph → kinematic-tree mapping is the
+ * backend's most intricate piece, worth asserting in isolation from the wasm. */
+export function buildMjcf(manifest: SimManifest, timestep: number): string {
   const bodies = manifest.bodies;
   const idToIndex = new Map<string, number>();
   bodies.forEach((b, i) => idToIndex.set(b.id, i));

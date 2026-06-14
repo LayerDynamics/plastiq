@@ -15,6 +15,9 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
+    "test:smoke": "vitest run smoke.test",
+    "test:unit": "vitest run unit.test",
+    "test:integration": "vitest run integration.test",
     "e2e": "playwright test",
     "lint": "eslint apps packages --max-warnings 0",
     "format": "prettier --write ."
