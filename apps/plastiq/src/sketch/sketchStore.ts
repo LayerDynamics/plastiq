@@ -636,16 +636,29 @@ export const useSketchStore = create<SketchStore>((set, get) => ({
     const input = toSolverInput(model);
     const result = solveSketch(input.points, input.circles, input.constraints);
     // Write the solved positions back so the canvas reflects the satisfied model.
-    set((s) => ({
-      result,
-      model: {
-        ...s.model,
-        points: s.model.points.map((p, i) => {
-          const sp = result.points[i];
-          return sp ? { ...p, u: sp.x, v: sp.y } : p;
-        }),
-      },
-    }));
+    // `result.radii` is parallel to the circle entities in `entities.filter(kind === "circle")`
+    // order — the same order `toSolverInput` emits them — so consume it with a running circle
+    // index as we walk the heterogeneous entity list. Without this, an edited radius/diameter
+    // dimension (or a tangent/concentric resize) is solved but never applied to the entity,
+    // and the stale radius leaks into the rendered circle, the extracted profile, and hit-testing.
+    set((s) => {
+      let circleIdx = 0;
+      return {
+        result,
+        model: {
+          ...s.model,
+          points: s.model.points.map((p, i) => {
+            const sp = result.points[i];
+            return sp ? { ...p, u: sp.x, v: sp.y } : p;
+          }),
+          entities: s.model.entities.map((e) => {
+            if (e.kind !== "circle") return e;
+            const r = result.radii[circleIdx++];
+            return r != null ? { ...e, radius: r } : e;
+          }),
+        },
+      };
+    });
     return result;
   },
 

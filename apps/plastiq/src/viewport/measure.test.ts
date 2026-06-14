@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 import * as THREE from "three";
-import { formatMeasurement, formatMm, measurePoints } from "./measure.js";
+import {
+  formatMeasurement,
+  formatMm,
+  measurePoints,
+  nextMeasure,
+  SECOND_POINT_PROMPT,
+} from "./measure.js";
 
 describe("measure — point-to-point distance + readout (FR-13)", () => {
   it("computes distance and per-axis deltas in SI metres", () => {
@@ -23,5 +29,22 @@ describe("measure — point-to-point distance + readout (FR-13)", () => {
   it("the readout shows total + axis breakdown in mm", () => {
     const m = measurePoints(new THREE.Vector3(0, 0, 0), new THREE.Vector3(0.03, 0.04, 0));
     expect(formatMeasurement(m)).toBe("50.00 mm  (Δ 30.00 mm · 40.00 mm · 0.00 mm)");
+  });
+});
+
+describe("nextMeasure — two-click measure state machine (FR-13)", () => {
+  it("the first click banks the point and prompts for the second", () => {
+    const a = new THREE.Vector3(0, 0, 0);
+    const step = nextMeasure(null, a);
+    expect(step.first).toBe(a); // retained for the next click
+    expect(step.result).toBe(SECOND_POINT_PROMPT);
+  });
+
+  it("the second click resolves the measurement and resets", () => {
+    const a = new THREE.Vector3(0, 0, 0);
+    const b = new THREE.Vector3(0.03, 0.04, 0);
+    const step = nextMeasure(a, b);
+    expect(step.first).toBeNull(); // a fresh measurement starts on the next click
+    expect(step.result).toBe("50.00 mm  (Δ 30.00 mm · 40.00 mm · 0.00 mm)");
   });
 });

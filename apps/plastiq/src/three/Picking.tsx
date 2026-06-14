@@ -9,6 +9,7 @@ import { useThree } from "@react-three/fiber";
 import { useCadStore } from "../store/store.js";
 import { Picker, boxSelect, ndcRect } from "../viewport/pick.js";
 import { applyHighlight } from "../viewport/highlight.js";
+import { nextMeasure } from "../viewport/measure.js";
 import { GpuPicker } from "./gpuPick.js";
 import type { BuiltPart } from "../viewport/buildMesh.js";
 import type { Pick, SelectionMode } from "../store/types.js";
@@ -86,6 +87,8 @@ export function Picking({ part }: { part: BuiltPart | null }): null {
   const partRef = useRef<BuiltPart | null>(part);
   partRef.current = part;
   const hoverRef = useRef<Pick | null>(null);
+  // The first world point banked by the measure tool, awaiting its second click.
+  const measureFirstRef = useRef<THREE.Vector3 | null>(null);
   const picker = useRef(new Picker());
   const gpu = useRef(new GpuPicker());
 
@@ -117,9 +120,12 @@ export function Picking({ part }: { part: BuiltPart | null }): null {
 
   // Re-highlight when the part swaps or the store picks change.
   useEffect(() => {
+    measureFirstRef.current = null; // a rebuilt part invalidates any banked point
     refreshHighlight();
     return useCadStore.subscribe((s, prev) => {
       if (s.picks !== prev.picks) refreshHighlight();
+      // Turning the tool off drops a half-finished measurement (FR-13).
+      if (s.measuring !== prev.measuring && !s.measuring) measureFirstRef.current = null;
     });
   }, [part]);
 
@@ -219,30 +225,46 @@ export function Picking({ part }: { part: BuiltPart | null }): null {
         if (controls) controls.enabled = true;
         const start = boxStart;
         boxStart = null;
-        downAt = null;
-        if (moved && p) {
-          const a = ndcFrom(start.x, start.y);
-          const b = ndcFrom(e.clientX, e.clientY);
-          const ids = boxSelect(
-            ndcRect({ x: a.x, y: a.y }, { x: b.x, y: b.y }),
-            selectionCandidates(p, store.selMode, camera),
-          );
-          const picks: Pick[] =
-            store.selMode === "body"
-              ? ids.length > 0
-                ? [{ kind: "body", id: 0 }]
-                : []
-              : ids.map((id) => ({ kind: store.selMode, id }));
-          store.setPicks(picks, additive);
+        if (moved) {
+          downAt = null;
+          if (p) {
+            const a = ndcFrom(start.x, start.y);
+            const b = ndcFrom(e.clientX, e.clientY);
+            const ids = boxSelect(
+              ndcRect({ x: a.x, y: a.y }, { x: b.x, y: b.y }),
+              selectionCandidates(p, store.selMode, camera),
+            );
+            const picks: Pick[] =
+              store.selMode === "body"
+                ? ids.length > 0
+                  ? [{ kind: "body", id: 0 }]
+                  : []
+                : ids.map((id) => ({ kind: store.selMode, id }));
+            store.setPicks(picks, additive);
+          }
           return;
         }
+        // A Shift+click with no drag is an additive pick, not a box-select:
+        // fall through to the click path below (downAt is still set) so it
+        // reaches store.pick(hit, additive).
       }
       if (!downAt) return;
       const dist = Math.hypot(e.clientX - downAt.x, e.clientY - downAt.y);
       downAt = null;
       if (dist > CLICK_TOL_PX || !p) return; // a drag = orbit, not a click
-      const mode = store.selMode;
       const ndc = ndcFrom(e.clientX, e.clientY);
+      // Measure tool (FR-13): a click banks the world point under the cursor; the
+      // second click resolves the distance + axis deltas. This suppresses normal
+      // selection while measuring is active.
+      if (store.measuring) {
+        const wp = picker.current.pickPoint(p, new THREE.Vector2(ndc.x, ndc.y), camera);
+        if (!wp) return; // clicked empty space — keep waiting for a point on the part
+        const step = nextMeasure(measureFirstRef.current, wp);
+        measureFirstRef.current = step.first;
+        store.setMeasureResult(step.result);
+        return;
+      }
+      const mode = store.selMode;
       let hit = picker.current.pick(p, new THREE.Vector2(ndc.x, ndc.y), camera, mode);
       // GPU-id fallback for face/body when the triangle raycast misses (NFR-4).
       if (!hit && (mode === "face" || mode === "body") && gpu.current.rayHitsPart(p, camera, ndc)) {

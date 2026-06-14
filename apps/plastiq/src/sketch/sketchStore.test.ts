@@ -239,6 +239,29 @@ describe("solver feedback (M3.6)", () => {
     expect(s().result!.verdict).not.toBe("over-constrained");
   });
 
+  it("writes solved radii back so an edited radius dimension resizes the circle (regression)", () => {
+    // Draw a 20 mm circle.
+    s().setTool("circle");
+    s().clickAt(0, 0); // centre
+    s().clickAt(0.02, 0); // radius 20 mm
+    const circle = s().model.entities.find((e): e is CircleEntity => e.kind === "circle")!;
+    expect(circle.radius).toBeCloseTo(0.02, 9);
+
+    // Dimension the radius, then edit it to 50 mm.
+    s().setSelection([circle.id]);
+    s().addDimension("radius");
+    const dim = s().model.constraints.find((c) => c.kind === "radius")!;
+    expect("driven" in dim && dim.driven).toBeFalsy(); // a free circle's radius dim is driving
+    s().setConstraintValue(dim.id, 0.05);
+
+    // The solver honoured the 50 mm radius — the entity must reflect it, not the stale
+    // 20 mm. Previously result.radii was computed then discarded, so the circle, the
+    // extracted profile, and hit-testing all kept reading the original radius.
+    const resized = s().model.entities.find((e): e is CircleEntity => e.kind === "circle")!;
+    expect(resized.radius).toBeCloseTo(0.05, 9);
+    expect(s().result!.radii[0]).toBeCloseTo(0.05, 9); // and the solve result agrees
+  });
+
   it("applies an inferred constraint via clickAt and re-solves", () => {
     s().setTool("line");
     s().clickAt(0, 0);

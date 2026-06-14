@@ -30,3 +30,22 @@ export function formatMeasurement(m: Measurement): string {
   const [dx, dy, dz] = m.delta;
   return `${formatMm(m.distance)}  (Δ ${formatMm(dx)} · ${formatMm(dy)} · ${formatMm(dz)})`;
 }
+
+/** Prompt shown after the first point is banked, while awaiting the second click. */
+export const SECOND_POINT_PROMPT = "Click second point";
+
+/**
+ * Advance the two-click measure interaction (FR-13). `first` is the world point
+ * banked by the previous click (null to start a fresh measurement); `point` is
+ * the world point just clicked. Returns the point to retain for the next click
+ * and the readout to display: the first click banks the point and prompts for the
+ * second; the second resolves the measurement and resets `first` so the following
+ * click starts a new measurement.
+ */
+export function nextMeasure(
+  first: THREE.Vector3 | null,
+  point: THREE.Vector3,
+): { first: THREE.Vector3 | null; result: string } {
+  if (!first) return { first: point, result: SECOND_POINT_PROMPT };
+  return { first: null, result: formatMeasurement(measurePoints(first, point)) };
+}
