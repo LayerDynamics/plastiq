@@ -11,6 +11,7 @@
 import { z } from "zod";
 import { mm, deg, toMm, toDeg } from "@plastiq/cad";
 import type { CadDocument, EditorFeature } from "../../store/types.js";
+import { LENGTH_PARAMS, ANGLE_PARAMS } from "../../store/featureUnits.js";
 
 // ── Authoring types (structurally identical to the editor's EditorFeature; the
 //    only difference from a CadDocument is that numbers are in mm/deg) ───────────
@@ -134,29 +135,9 @@ export const cadDocumentSchema = documentSchema;
 
 // ── mm ↔ SI conversion (the single choke-point — spec R-7) ──────────────────────
 
-/** Param keys that are LENGTHS (mm↔m), per feature type — mirrors rebuild.ts. */
-const LENGTH_PARAMS: Record<string, readonly string[]> = {
-  box: ["dx", "dy", "dz"],
-  extrude: ["height", "back"],
-  cut: ["depth"],
-  fillet: ["radius"],
-  chamfer: ["distance"],
-  shell: ["thickness"],
-  transform: ["tx", "ty", "tz"],
-  mirror: ["ox", "oy", "oz"],
-  linearPattern: ["spacing"],
-  circularPattern: ["ox", "oy", "oz"],
-  boolean: ["dx", "dy", "dz", "tx", "ty", "tz"],
-  placement: ["tx", "ty", "tz"],
-};
-/** Param keys that are ANGLES (deg↔rad), per feature type — mirrors rebuild.ts. */
-const ANGLE_PARAMS: Record<string, readonly string[]> = {
-  revolve: ["angle"],
-  draft: ["angle"],
-  transform: ["angle"],
-  circularPattern: ["angle"],
-  placement: ["rx", "ry", "rz"],
-};
+// LENGTH_PARAMS / ANGLE_PARAMS are the shared feature unit semantics
+// (store/featureUnits.ts) — one source of truth for this converter and the
+// PropertiesPanel mm/deg display.
 
 type Scale = { len: (n: number) => number; ang: (n: number) => number };
 

@@ -7,6 +7,7 @@ import { useEffect, useState } from "react";
 import { useCadStore } from "../store/store.js";
 import { PLACEMENT_TYPE } from "../store/types.js";
 import { findPlacement, placementFromFeature } from "../viewport/placement.js";
+import { toDisplayValue, fromDisplayValue, unitSuffix } from "../store/featureUnits.js";
 
 const M_PER_MM = 0.001;
 const DEG_PER_RAD = 180 / Math.PI;
@@ -101,15 +102,18 @@ function FeatureEditor(): React.JSX.Element | null {
         <p className="text-[11px] opacity-60">No editable parameters.</p>
       ) : (
         <div className="space-y-1">
-          {entries.map(([key, val]) => (
-            <NumberField
-              key={key}
-              label={key}
-              value={val}
-              onCommit={(v) => updateParams(feature.id, { [key]: v })}
-            />
-          ))}
-          <p className="pt-1 text-[10px] text-[#567]">values in SI (metres / radians)</p>
+          {entries.map(([key, val]) => {
+            const suffix = unitSuffix(feature.type, key);
+            return (
+              <NumberField
+                key={key}
+                label={suffix ? `${key} (${suffix})` : key}
+                value={toDisplayValue(feature.type, key, val)}
+                onCommit={(v) => updateParams(feature.id, { [key]: fromDisplayValue(feature.type, key, v) })}
+              />
+            );
+          })}
+          <p className="pt-1 text-[10px] text-[#567]">lengths in mm, angles in °</p>
         </div>
       )}
     </section>
