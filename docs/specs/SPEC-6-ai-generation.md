@@ -356,9 +356,14 @@ apps/plastiq/src/ai/
   GenerationPanel.tsx    # side-panel UI
   CommandPalette.tsx     # quick-prompt + action search (reuses actions/registry)
   settings.ts            # provider/key storage (IndexedDB), proxy-ready indirection
-  mesh/
-    meshBody.ts          # MeshBody type + helpers (in the APP — three is an app dep)
-    importGltf.ts        # GLB/glTF → MeshBody via three.js GLTFLoader (main-thread)
+  visionRoute.ts         # attachment routing: parametric (vision) vs creative (FR-10a/b)
+
+apps/plastiq/src/mesh/   # top-level, NOT under ai/ (used by viewport + persistence too)
+  meshBody.ts            # MeshBody type + helpers (in the APP — three is an app dep)
+  importGltf.ts          # GLB/glTF → MeshBody via three.js GLTFLoader (main-thread)
+
+apps/plastiq/src/viewport/
+  buildMesh.ts           # buildMeshBody: MeshBody → THREE.Mesh (main-thread render)
 
 packages/cad/src/
   select/predicates.ts   # selector-predicate resolution (topFace, edgesParallelTo, …)
