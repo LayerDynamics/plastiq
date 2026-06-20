@@ -10,14 +10,16 @@ roadmap below) is not feasible in the browser's OCCT-WASM build. It reverses two
 decisions on purpose (see `docs/specs/SPEC-6-ai-generation.md` §13 and the no-server
 identity); the parametric path stays fully client-side and unchanged.
 
-## What it does today (R6.1)
+## What it does today (R6.1 + R6.2)
 
-A complete, working **faceted** reconstruction: every mesh triangle becomes a planar OCCT
-face, sewn (`BRepBuilderAPI_Sewing`) into a shell and — when the mesh is watertight — a
-solid, then written to STEP (`STEPControl_Writer`). It always yields a valid B-rep STEP
-from any triangle soup. It is **not yet** a clean parametric reconstruction: a faceted
-solid has one B-rep face per triangle (dense, large STEP, not nicely editable). Collapsing
-fitted regions into single analytic surfaces is the next milestones (see Roadmap).
+A complete, working **faceted** reconstruction with mesh cleanup: the mesh is first welded
+and repaired (R6.2 — coincident vertices merged, degenerate/duplicate faces dropped,
+winding/normals fixed, small holes filled), then every triangle becomes a planar OCCT
+face, sewn (`BRepBuilderAPI_Sewing`) into a shell and — when watertight — a solid, then
+written to STEP (`STEPControl_Writer`). It always yields a valid B-rep STEP from any
+triangle soup. It is **not yet** a clean parametric reconstruction: a faceted solid has
+one B-rep face per triangle (dense, large STEP, not nicely editable). Collapsing fitted
+regions into single analytic surfaces is the next milestones (see Roadmap).
 
 Coordinates are passed through unscaled (SI metres), matching `@plastiq/cad`'s STEP I/O
 (`packages/cad/src/io/index.ts`), so the output imports back with consistent units.
@@ -31,7 +33,8 @@ Coordinates are passed through unscaled (SI metres), matching `@plastiq/cad`'s S
 | `GET`  | `/jobs/{id}/status` | `{ id, state, error? }` — `queued`/`running`/`completed`/`failed` |
 | `GET`  | `/jobs/{id}/result` | `{ step, report }` when completed (409 while running, 500 if failed) |
 
-`report` = `{ triangles_in, faces_built, is_solid, is_valid, method }`.
+`report` = `{ triangles_in, triangles_used, faces_built, is_solid, is_valid, method }`
+(`triangles_in` = raw, `triangles_used` = after cleanup).
 
 ## Run locally
 
@@ -72,8 +75,8 @@ automatic reconstruction, not an implementation gap.
 
 ## Roadmap (milestone R6)
 
-- **R6.1 (done)** — service skeleton + faceted mesh→STEP (this).
-- **R6.2** — mesh ingest/cleanup (Open3D: repair, normals, decimation).
+- **R6.1 (done)** — service skeleton + faceted mesh→STEP.
+- **R6.2 (done)** — mesh cleanup (weld/repair/winding/normals/fill-holes via trimesh).
 - **R6.3** — RANSAC primitive segmentation (planes / cylinders / cones / spheres).
 - **R6.4** — replace fitted regions with single analytic trimmed faces (the clean,
   editable reconstruction; collapses thousands of triangles per region).
