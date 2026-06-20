@@ -9,9 +9,12 @@
 // still recoverable. projectsStore previously had zero colocated tests (the only
 // substantial app module without one) — this is its first.
 
+import "fake-indexeddb/auto";
+import { IDBFactory } from "fake-indexeddb";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useProjectsStore } from "./projectsStore.js";
 import { useCadStore } from "../store/store.js";
+import { useAiStore } from "../ai/aiStore.js";
 import { clearRecovery, readRecovery, writeRecovery } from "./recovery.js";
 import type { CadDocument, MeshDoc } from "../store/types.js";
 import type { ProjectMeta, ProjectStore } from "./types.js";
@@ -195,5 +198,72 @@ describe("projectsStore — open() routes mesh vs parametric documents (SPEC-6 R
     useProjectsStore.setState({ store: fakeStore({ load: async () => null }) });
     await useProjectsStore.getState().open("ghost");
     expect(useProjectsStore.getState().status).toBe("project not found");
+  });
+});
+
+describe("projectsStore — AI conversation lifecycle wiring (SPEC-6 R5.1)", () => {
+  // The project lifecycle (open/new/delete/recover) drives the per-project AI
+  // conversation slice: opening a project surfaces its saved chat history; a new or
+  // deleted project leaves no stale conversation on screen. The wiring fires the
+  // aiStore calls as `void` (fire-and-forget), so assertions poll with vi.waitFor
+  // for the async IndexedDB load/delete to settle.
+  const paramDoc: CadDocument = { features: [], params: {} };
+
+  afterEach(() => {
+    // Independent IDB per case + reset the aiStore singleton (shared across tests).
+    globalThis.indexedDB = new IDBFactory();
+    useAiStore.setState({ conversation: { messages: [], trace: [] }, conversationProjectId: null });
+  });
+
+  it("open() loads the opened project's saved conversation", async () => {
+    // Seed a saved conversation for project "p-conv" via the real aiStore + IDB.
+    await useAiStore.getState().openConversation("p-conv");
+    await useAiStore.getState().appendMessage({ role: "user", content: "make a 10mm cube" });
+    // Drop the in-memory copy so only a real reload can bring it back.
+    useAiStore.setState({ conversation: { messages: [], trace: [] }, conversationProjectId: null });
+
+    useProjectsStore.setState({
+      store: fakeStore({ load: async () => ({ meta: meta("p-conv", "Cube"), doc: paramDoc }) }),
+    });
+    const loadSpy = vi.spyOn(useCadStore.getState(), "loadDocument").mockImplementation(() => {});
+    await useProjectsStore.getState().open("p-conv");
+    loadSpy.mockRestore();
+
+    await vi.waitFor(() => {
+      const conv = useAiStore.getState().conversation;
+      expect(useAiStore.getState().conversationProjectId).toBe("p-conv");
+      expect(conv.messages).toEqual([{ role: "user", content: "make a 10mm cube" }]);
+    });
+  });
+
+  it("newProject() resets the conversation to an empty untitled one", async () => {
+    // Start with a non-empty, project-scoped conversation in memory.
+    await useAiStore.getState().openConversation("stale");
+    await useAiStore.getState().appendMessage({ role: "user", content: "old chat" });
+
+    const loadSpy = vi.spyOn(useCadStore.getState(), "loadDocument").mockImplementation(() => {});
+    useProjectsStore.getState().newProject();
+    loadSpy.mockRestore();
+
+    await vi.waitFor(() => {
+      expect(useAiStore.getState().conversation).toEqual({ messages: [], trace: [] });
+      expect(useAiStore.getState().conversationProjectId).toBeNull();
+    });
+  });
+
+  it("remove() deletes the project's conversation and clears it if active", async () => {
+    await useAiStore.getState().openConversation("doomed");
+    await useAiStore.getState().appendMessage({ role: "user", content: "to be deleted" });
+
+    useProjectsStore.setState({ store: fakeStore(), currentId: "doomed" });
+    await useProjectsStore.getState().remove("doomed");
+
+    await vi.waitFor(() => {
+      expect(useAiStore.getState().conversation).toEqual({ messages: [], trace: [] });
+      expect(useAiStore.getState().conversationProjectId).toBeNull();
+    });
+    // And nothing persisted survives the delete.
+    await useAiStore.getState().openConversation("doomed");
+    expect(useAiStore.getState().conversation.messages).toHaveLength(0);
   });
 });

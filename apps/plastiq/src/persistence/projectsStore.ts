@@ -6,6 +6,7 @@
 
 import { create } from "zustand";
 import { useCadStore } from "../store/store.js";
+import { useAiStore } from "../ai/aiStore.js";
 import { defaultDocument } from "../store/seed.js";
 import { projectStore } from "./index.js";
 import { clearRecovery, readRecovery, writeRecovery, type RecoverySnapshot } from "./recovery.js";
@@ -133,6 +134,7 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
     set({ busy: true });
     useCadStore.getState().loadDocument(defaultDocument());
     set({ currentId: null, currentName: "Untitled", status: "new document", busy: false });
+    void useAiStore.getState().openConversation(null); // fresh untitled → empty conversation
   },
 
   open: async (id) => {
@@ -152,6 +154,9 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
       useCadStore.getState().loadDocument(project.doc);
       set({ activeMeshDoc: null, currentId: id, currentName: project.meta.name, status: "opened", busy: false });
     }
+    // Load the project's AI conversation (messages + generation trace) so the
+    // GenerationPanel shows this project's history (SPEC-6 FR-32). Empty if none.
+    void useAiStore.getState().openConversation(id);
   },
 
   save: async () => {
@@ -230,6 +235,8 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
     await get().refresh();
     if (get().currentId === id)
       set({ currentId: null, currentName: "Untitled", status: "deleted" });
+    // Drop the project's saved conversation too (resets memory if it was active).
+    void useAiStore.getState().deleteConversation(id);
   },
 
   recover: () => {
@@ -244,6 +251,8 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
       recoverable: null,
       busy: false,
     });
+    // Restore the recovered project's conversation (null id → untitled, empty).
+    void useAiStore.getState().openConversation(snap.currentId);
     clearRecovery();
   },
 
