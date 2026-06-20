@@ -96,8 +96,9 @@ automatic reconstruction, not an implementation gap.
   (`detect.try_single_primitive`, default `method="auto"`, box-safe shape gates), and
   **surface-of-revolution** mixed parts (`revolution.py` — stepped shafts / chamfered /
   capped cylinders → one analytic revolved solid, volume-validated).
-- **R6.4b-iii** — general non-coaxial mixed parts (box-with-hole) via surface-intersection
-  shared edges (deferred frontier; faceted fallback keeps them valid).
+- **R6.4b-iii (done, bounded)** — non-coaxial mixed parts via **CSG booleans** (`csg.py` —
+  InverseCSG paradigm): axis-aligned box − cylindrical through-holes via `BRepAlgoAPI_Cut`
+  (OCCT computes the shared edges), volume-validated. General arbitrary CSG trees remain future.
 - **R6.5** — BSpline freeform fallback for non-primitive regions.
 - **R6.6 (done)** — client `reconstructMesh` (submit/poll) + a "Convert mesh → CAD (STEP)"
   action in the GenerationPanel → `stepToImportDocument` → the kernel `importStep` feature

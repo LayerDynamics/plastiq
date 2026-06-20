@@ -13,6 +13,7 @@ from dataclasses import asdict, dataclass
 from typing import Optional
 
 from .cleanup import clean_mesh
+from .csg import reconstruct_csg
 from .detect import try_single_primitive
 from .faceted import faceted_shape
 from .fitted import fitted_shape
@@ -87,7 +88,21 @@ def reconstruct(
                 primitive="revolution",
             )
             return ReconstructionResult(step=shape_to_step(rev.shape), report=report)
-        method = "fitted"  # not a primitive / revolution → fall through
+        # 3) a box with cylindrical through-holes (CSG: box − cylinders)
+        csg = reconstruct_csg(vertices, faces)
+        if csg is not None:
+            report = ReconstructionReport(
+                triangles_in=raw_triangles,
+                triangles_used=used,
+                faces_built=csg.n_faces,
+                planar_faces=0,
+                is_solid=csg.is_solid,
+                is_valid=csg.is_valid,
+                method="csg",
+                primitive="csg",
+            )
+            return ReconstructionResult(step=shape_to_step(csg.shape), report=report)
+        method = "fitted"  # not a primitive / revolution / CSG → fall through
 
     if method == "faceted":
         result = faceted_shape(vertices, faces)
