@@ -4,17 +4,22 @@
 
 import initSqlJs from "sql.js";
 import sqlWasmUrl from "sql.js/dist/sql-wasm.wasm?url";
-import { IdbBlobStore } from "./idb.js";
+import { IdbBlobStore, IdbProjectRecordStore } from "./idb.js";
 import { createSqliteProjectStore } from "./sqlite.js";
 import type { ProjectStore } from "./types.js";
 
 let cached: Promise<ProjectStore> | null = null;
 
-/** The app's project store (memoized): SQLite-in-browser persisted to IndexedDB. */
+/** The app's project store (memoized): a SQLite-in-browser metadata index plus
+ * per-project document/thumbnail records, all persisted to IndexedDB. */
 export function projectStore(): Promise<ProjectStore> {
   cached ??= (async () => {
     const SQL = await initSqlJs({ locateFile: () => sqlWasmUrl });
-    return createSqliteProjectStore({ SQL, blob: new IdbBlobStore() });
+    return createSqliteProjectStore({
+      SQL,
+      blob: new IdbBlobStore(),
+      records: new IdbProjectRecordStore(),
+    });
   })();
   return cached;
 }

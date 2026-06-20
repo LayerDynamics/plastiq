@@ -15,7 +15,14 @@ function finish(oc: Occt, op: BRepAlgoAPI_BooleanOperation, name: string): Boole
       return { ok: false, error: `${name} produced no valid result` };
     }
     const shape = op.Shape();
-    if (shape.IsNull()) return { ok: false, error: `${name} produced an empty shape` };
+    // `Shape()` is an owned embind handle even when null — free it before the
+    // failure return, or it leaks in the long-lived worker (cf. extrude/revolve,
+    // which `shape.delete()` before throwing on `IsNull`). On success the returned
+    // Solid takes ownership instead, so the handle is freed exactly once either way.
+    if (shape.IsNull()) {
+      shape.delete();
+      return { ok: false, error: `${name} produced an empty shape` };
+    }
     return { ok: true, solid: new Solid(oc, shape) };
   } finally {
     op.delete();

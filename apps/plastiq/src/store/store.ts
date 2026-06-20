@@ -115,7 +115,15 @@ export interface CadStore {
 
   // --- document actions ---
   addFeature: (f: NewFeature) => FeatureId;
-  updateParams: (id: FeatureId, params: Record<string, number>) => void;
+  /** Merge `params` into feature `id`. By default pushes one undo snapshot. Pass
+   * `{ history: false }` for live writes (mid-drag gizmo ticks) that must fold into a
+   * single undo step instead of deep-cloning the doc per frame and flooding history —
+   * the feature-edit gizmo carries history only on the first write of a session. */
+  updateParams: (
+    id: FeatureId,
+    params: Record<string, number>,
+    opts?: { history?: boolean },
+  ) => void;
   setFeatureData: (id: FeatureId, data: Record<string, unknown>) => void;
   renameFeature: (id: FeatureId, name: string) => void;
   removeFeature: (id: FeatureId) => void;
@@ -312,9 +320,9 @@ export const useCadStore = create<CadStore>((set, get) => ({
     return id;
   },
 
-  updateParams: (id, params) =>
+  updateParams: (id, params, opts) =>
     set((s) => ({
-      ...pushHistory(s),
+      ...(opts?.history === false ? {} : pushHistory(s)),
       features: s.features.map((f) =>
         f.id === id ? { ...f, params: { ...f.params, ...params } } : f,
       ),

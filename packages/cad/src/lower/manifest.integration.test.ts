@@ -16,7 +16,17 @@ const valid = (): Record<string, unknown> => ({
       mass: 1,
       com: [0, 0, 0],
       orientation: [0, 0, 0, 1],
-      colliders: [{ points: [0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1], faces: [[0, 1, 2]] }],
+      colliders: [
+        {
+          points: [0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1],
+          faces: [
+            [0, 1, 2],
+            [0, 1, 3],
+            [0, 2, 3],
+            [1, 2, 3],
+          ],
+        },
+      ],
     },
   ],
   constraints: [],

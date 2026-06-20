@@ -14,24 +14,39 @@ import { GpuPicker } from "./gpuPick.js";
 import type { BuiltPart } from "../viewport/buildMesh.js";
 import type { Pick, SelectionMode } from "../store/types.js";
 
-/** Representative NDC point of every pickable entity for `mode` (box-select). */
-function selectionCandidates(
-  part: BuiltPart,
-  mode: SelectionMode,
-  camera: THREE.Camera,
-): { id: number; x: number; y: number }[] {
-  const project = (p: THREE.Vector3): { x: number; y: number } => {
-    const v = p.clone().project(camera);
-    return { x: v.x, y: v.y };
-  };
-  const out: { id: number; x: number; y: number }[] = [];
+/** A pickable entity's representative point in its object's LOCAL space, plus the
+ * object whose live `matrixWorld` carries it to world space. The local point and the
+ * source geometry never change for a `BuiltPart`'s lifetime (every edit produces a
+ * fresh part via `buildPart`), so these are computed once and cached; only the camera
+ * projection — which a hover/orbit invalidates — is redone per call. */
+interface CandidateLocal {
+  id: number;
+  local: THREE.Vector3;
+  obj: THREE.Object3D;
+}
+
+// Per-part, per-mode cache of LOCAL candidate points. Keyed by the `BuiltPart`, so a
+// rebuilt part (new geometry) gets a fresh entry and the old one is GC'd — no manual
+// invalidation. This lifts the heavy geometry traversals (`computeBoundingSphere`,
+// face-centroid sums, vertex reads) off the per-hover-move hot path: `screenNearest`
+// calls `selectionCandidates` on every pointer-move that misses the raycast.
+const candidateCache = new WeakMap<BuiltPart, Map<SelectionMode, CandidateLocal[]>>();
+// Scratch vector reused across the projection loop so hover moves allocate nothing.
+const _project = new THREE.Vector3();
+
+/** Build the LOCAL representative point of every pickable entity for `mode`. Runs the
+ * expensive geometry traversals exactly once per (part, mode); cached thereafter. */
+function buildCandidateLocals(part: BuiltPart, mode: SelectionMode): CandidateLocal[] {
+  const out: CandidateLocal[] = [];
   if (mode === "edge") {
     for (const line of part.edges) {
       const id = line.userData["edgeId"];
       if (typeof id !== "number") continue;
-      line.geometry.computeBoundingSphere();
+      // The sphere centre is geometry-local and immutable here; THREE caches it on
+      // the geometry, so compute it at most once per edge (not once per hover move).
+      if (!line.geometry.boundingSphere) line.geometry.computeBoundingSphere();
       const c = line.geometry.boundingSphere?.center;
-      if (c) out.push({ id, ...project(c.clone().applyMatrix4(line.matrixWorld)) });
+      if (c) out.push({ id, local: c.clone(), obj: line });
     }
     return out;
   }
@@ -41,29 +56,57 @@ function selectionCandidates(
     const pos = vp.geometry.getAttribute("position");
     if (ids) {
       for (let i = 0; i < ids.length; i++) {
-        const w = new THREE.Vector3().fromBufferAttribute(pos, i).applyMatrix4(vp.matrixWorld);
-        out.push({ id: ids[i]!, ...project(w) });
+        out.push({ id: ids[i]!, local: new THREE.Vector3().fromBufferAttribute(pos, i), obj: vp });
       }
     }
     return out;
   }
-  // face / body: the centroid of each per-face triangle group.
+  // face / body: the centroid of each per-face triangle group, in mesh-local space.
   const mesh = part.mesh;
   const faceIds = mesh.userData["faceIds"] as number[] | undefined;
   const geom = mesh.geometry;
   const pos = geom.getAttribute("position");
   const index = geom.getIndex();
   if (!faceIds || !index) return out;
-  mesh.updateWorldMatrix(true, false);
   geom.groups.forEach((g, gi) => {
     const id = faceIds[gi];
     if (id == null) return;
+    if (g.count === 0) return; // degenerate group: no triangles, so no meaningful centroid
     const c = new THREE.Vector3();
     const v = new THREE.Vector3();
     for (let k = g.start; k < g.start + g.count; k++) c.add(v.fromBufferAttribute(pos, index.getX(k)));
-    if (g.count > 0) c.multiplyScalar(1 / g.count).applyMatrix4(mesh.matrixWorld);
-    out.push({ id, ...project(c) });
+    c.multiplyScalar(1 / g.count);
+    out.push({ id, local: c, obj: mesh });
   });
+  return out;
+}
+
+/** Representative NDC point of every pickable entity for `mode` (box-select, the
+ * hover near-miss path, and the E2E candidate-px seam). The local points are cached
+ * per part; only the camera projection runs per call, reusing one scratch vector. */
+function selectionCandidates(
+  part: BuiltPart,
+  mode: SelectionMode,
+  camera: THREE.Camera,
+): { id: number; x: number; y: number }[] {
+  let byMode = candidateCache.get(part);
+  if (!byMode) {
+    byMode = new Map();
+    candidateCache.set(part, byMode);
+  }
+  let locals = byMode.get(mode);
+  if (!locals) {
+    locals = buildCandidateLocals(part, mode);
+    byMode.set(mode, locals);
+  }
+  // Keep the solid's world matrix current for face/body centroids (matches the
+  // pre-cache behaviour); edges/vertices ride r3f's per-frame matrix update.
+  if (mode === "face" || mode === "body") part.mesh.updateWorldMatrix(true, false);
+  const out: { id: number; x: number; y: number }[] = [];
+  for (const cand of locals) {
+    _project.copy(cand.local).applyMatrix4(cand.obj.matrixWorld).project(camera);
+    out.push({ id: cand.id, x: _project.x, y: _project.y });
+  }
   return out;
 }
 

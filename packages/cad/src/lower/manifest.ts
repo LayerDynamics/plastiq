@@ -48,24 +48,66 @@ export interface SimManifest {
   readonly constraints: ManifestConstraint[];
 }
 
-/** Structural validation of a parsed/untrusted manifest. */
+/** A finite-number vector of exactly `n` components. */
+function isVec(x: unknown, n: number): boolean {
+  return (
+    Array.isArray(x) &&
+    x.length === n &&
+    x.every((v) => typeof v === "number" && Number.isFinite(v))
+  );
+}
+
+/**
+ * Validate a parsed/untrusted manifest — structure AND numeric integrity. This is
+ * the kernel-side trust boundary: a manifest that passes here must also survive
+ * `@plastiq/sim`'s `parseManifest` (so non-finite vectors, malformed hulls, and
+ * out-of-range face indices can never reach a physics backend). The two checks are
+ * deliberately kept in lock-step — `@plastiq/sim` stays standalone (it never imports
+ * the kernel; the manifest types are hand-mirrored), so the validation is duplicated
+ * rather than shared, exactly like `hullVolume`/`meshVolume`. This guard is kept at
+ * least as strict as `parseManifest`; if either's acceptance rules change, update the
+ * other so the implication above still holds.
+ */
 export function isSimManifest(x: unknown): x is SimManifest {
   if (typeof x !== "object" || x === null) return false;
   const m = x as Record<string, unknown>;
   if (m["version"] !== 1) return false;
   if (typeof m["source"] !== "string") return false;
-  if (!Array.isArray(m["gravity"]) || m["gravity"].length !== 3) return false;
+  if (!isVec(m["gravity"], 3)) return false;
   if (!Array.isArray(m["bodies"]) || !Array.isArray(m["constraints"])) return false;
   for (const b of m["bodies"] as unknown[]) {
+    if (typeof b !== "object" || b === null) return false;
     const body = b as Record<string, unknown>;
-    if (typeof body["id"] !== "string" || typeof body["mass"] !== "number") return false;
-    if (!Array.isArray(body["com"]) || !Array.isArray(body["orientation"])) return false;
+    if (typeof body["id"] !== "string" || body["id"] === "") return false;
+    if (typeof body["mass"] !== "number" || !Number.isFinite(body["mass"]) || body["mass"] < 0)
+      return false;
+    if (!isVec(body["com"], 3) || !isVec(body["orientation"], 4)) return false;
     const colliders = body["colliders"];
     if (!Array.isArray(colliders) || colliders.length === 0) return false;
     for (const c of colliders) {
+      if (typeof c !== "object" || c === null) return false;
       const hull = c as Record<string, unknown>;
-      if (!hull || !Array.isArray(hull["points"]) || !Array.isArray(hull["faces"])) return false;
+      const points = hull["points"];
+      if (!Array.isArray(points) || points.length < 12 || points.length % 3 !== 0) return false;
+      const faces = hull["faces"];
+      if (!Array.isArray(faces) || faces.length < 4) return false;
+      // Every face must be a triangle of in-range vertex indices, or a backend
+      // dereferences out of bounds deep inside spawn().
+      const vertexCount = points.length / 3;
+      for (const f of faces) {
+        if (!Array.isArray(f) || f.length !== 3) return false;
+        for (const idx of f) {
+          if (!Number.isInteger(idx) || idx < 0 || idx >= vertexCount) return false;
+        }
+      }
     }
+  }
+  for (const c of m["constraints"] as unknown[]) {
+    if (typeof c !== "object" || c === null) return false;
+    const con = c as Record<string, unknown>;
+    if (con["kind"] !== "hinge" && con["kind"] !== "fixed") return false;
+    if (typeof con["bodyA"] !== "string" || typeof con["bodyB"] !== "string") return false;
+    if (!isVec(con["origin"], 3) || !isVec(con["axis"], 3)) return false;
   }
   return true;
 }

@@ -1,0 +1,342 @@
+// action/* failure-path cleanup — UNIT (fake kernel, NOT real OCCT, NOT e2e).
+//
+// When a feature op fails it must free every OCCT temporary it owns instead of
+// leaking it in the long-lived geometry worker. From the caller's side the op
+// behaves identically leaked-vs-not (it throws / returns {ok:false} either way),
+// so the only honest way to assert the fix is to spy on `.delete()`: each fake
+// maker / handle records its OWN distinct label when freed, and we assert the
+// shape handle's label specifically — proving the (formerly leaked) null
+// `Shape()` allocation is freed, not merely the maker.
+//
+// The load-bearing invariant (cf. extrude.ts:69-71 / revolve.ts:37-39): a
+// `maker.Shape()` is an OWNED embind handle EVEN WHEN NULL, so it must be
+// `.delete()`d before the failure throw/return; and the maker / wires / faces
+// must be freed even when Build / MakeThickSolidByJoin throws a Standard_Failure.
+// Matching real-OCCT success + throw coverage lives in dressup.test.ts,
+// loft.smoke.test.ts, boolean.smoke.test.ts, and edgecases.test.ts.
+
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+import type { Occt } from "../oc/init.js";
+import type { Solid } from "../solid/solid.js";
+import type { Sketch } from "../sketch/sketch.js";
+import type { SpinePath } from "../sketch/spine.js";
+import type { EdgeRef, FaceRef } from "../mesh/tagged.js";
+import { resolveEdgeRef, resolveFaceRef } from "../mesh/resolve.js";
+import { buildSpineWire } from "../sketch/spine.js";
+import { chamfer, draft, fillet, shell } from "./dressup.js";
+import { loft, sweep } from "./loft.js";
+import { union } from "./boolean.js";
+
+// The resolve / spine helpers reach into real geometry; stub them so each op can
+// be driven down its failure path with a fake kernel.
+vi.mock("../mesh/resolve.js", () => ({
+  resolveEdgeRef: vi.fn(),
+  resolveFaceRef: vi.fn(),
+}));
+vi.mock("../sketch/spine.js", () => ({
+  buildSpineWire: vi.fn(),
+}));
+
+let deleted: string[];
+/** A `.delete()` that records `label` against the current run's ledger. */
+const del = (label: string) => () => deleted.push(label);
+/** A fake `Shape()` handle that reports null and records its own free as "shape". */
+const nullShape = (): { IsNull: () => boolean; delete: () => void } => ({
+  IsNull: () => true,
+  delete: del("shape"),
+});
+const fakeSolid = (): Solid => ({ shape: {} }) as unknown as Solid;
+
+function stubEdge(label: string): void {
+  vi.mocked(resolveEdgeRef).mockReturnValue(
+    { delete: del(label) } as unknown as ReturnType<typeof resolveEdgeRef>,
+  );
+}
+function stubFace(label: string): void {
+  vi.mocked(resolveFaceRef).mockReturnValue(
+    { delete: del(label) } as unknown as ReturnType<typeof resolveFaceRef>,
+  );
+}
+function stubSpine(label: string): void {
+  vi.mocked(buildSpineWire).mockReturnValue(
+    { delete: del(label) } as unknown as ReturnType<typeof buildSpineWire>,
+  );
+}
+
+beforeEach(() => {
+  deleted = [];
+  vi.clearAllMocks();
+});
+
+describe("boolean finish() frees the null Shape() handle on the failure return", () => {
+  it("union returns {ok:false} and deletes the null shape, the op, and the progress range", () => {
+    const op = {
+      HasErrors: () => false,
+      IsDone: () => true,
+      Shape: () => nullShape(),
+      delete: del("op"),
+    };
+    const oc = {
+      Message_ProgressRange_1: function () {
+        return { delete: del("range") };
+      },
+      BRepAlgoAPI_Fuse_3: function () {
+        return op;
+      },
+    } as unknown as Occt;
+
+    const r = union(oc, fakeSolid(), fakeSolid());
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error).toMatch(/empty shape/);
+    // The fix: the null Shape() handle is freed (it leaked before).
+    expect(deleted).toContain("shape");
+    expect(deleted).toEqual(expect.arrayContaining(["shape", "op", "range"]));
+  });
+});
+
+describe("loft frees the maker, progress range, and wires on the failure path", () => {
+  const fakeSketches = (): Sketch[] =>
+    [
+      { toWire: () => ({ delete: del("wire0") }) },
+      { toWire: () => ({ delete: del("wire1") }) },
+    ] as unknown as Sketch[];
+
+  it("deletes the null shape (plus maker/progress/wires) when Shape() is null", () => {
+    const maker = { AddWire: () => {}, Build: () => {}, Shape: () => nullShape(), delete: del("maker") };
+    const oc = {
+      BRepOffsetAPI_ThruSections: function () {
+        return maker;
+      },
+      Message_ProgressRange_1: function () {
+        return { delete: del("progress") };
+      },
+    } as unknown as Occt;
+
+    expect(() => loft(oc, fakeSketches(), { ruled: true })).toThrow(/empty shape/);
+    expect(deleted).toContain("shape");
+    expect(deleted).toEqual(expect.arrayContaining(["maker", "progress", "wire0", "wire1"]));
+  });
+
+  it("frees the maker/progress/wires when Build() throws a Standard_Failure", () => {
+    const maker = {
+      AddWire: () => {},
+      Build: () => {
+        throw new Error("Standard_Failure: degenerate sections");
+      },
+      Shape: () => nullShape(),
+      delete: del("maker"),
+    };
+    const oc = {
+      BRepOffsetAPI_ThruSections: function () {
+        return maker;
+      },
+      Message_ProgressRange_1: function () {
+        return { delete: del("progress") };
+      },
+    } as unknown as Occt;
+
+    expect(() => loft(oc, fakeSketches(), { ruled: true })).toThrow(/Standard_Failure/);
+    // No shape was ever allocated; the maker, progress range, and both wires are freed.
+    expect(deleted).toEqual(expect.arrayContaining(["maker", "progress", "wire0", "wire1"]));
+  });
+});
+
+describe("sweep frees the null Shape() handle before cleanup", () => {
+  it("deletes the null shape plus maker/progress/profile/spine", () => {
+    stubSpine("spine");
+    const maker = {
+      SetMode_1: () => {},
+      SetTransitionMode: () => {},
+      Add_1: () => {},
+      IsReady: () => true,
+      Build: () => {},
+      IsDone: () => true,
+      MakeSolid: () => true,
+      Shape: () => nullShape(),
+      delete: del("maker"),
+    };
+    const oc = {
+      BRepOffsetAPI_MakePipeShell: function () {
+        return maker;
+      },
+      Message_ProgressRange_1: function () {
+        return { delete: del("progress") };
+      },
+      BRepBuilderAPI_TransitionMode: { BRepBuilderAPI_RightCorner: 0 },
+    } as unknown as Occt;
+    const sketch = { toWire: () => ({ delete: del("profile") }) } as unknown as Sketch;
+    const path = { kind: "polyline", points: [[0, 0, 0], [1, 0, 0]] } as unknown as SpinePath;
+
+    expect(() => sweep(oc, sketch, path)).toThrow(/empty shape/);
+    expect(deleted).toContain("shape");
+    expect(deleted).toEqual(expect.arrayContaining(["maker", "progress", "profile", "spine"]));
+  });
+
+  it("frees the maker/progress/profile/spine when Build() throws a Standard_Failure", () => {
+    stubSpine("spine");
+    const maker = {
+      SetMode_1: () => {},
+      SetTransitionMode: () => {},
+      Add_1: () => {},
+      IsReady: () => true,
+      Build: () => {
+        throw new Error("Standard_Failure: cannot sweep this profile");
+      },
+      IsDone: () => true,
+      MakeSolid: () => true,
+      Shape: () => nullShape(),
+      delete: del("maker"),
+    };
+    const oc = {
+      BRepOffsetAPI_MakePipeShell: function () {
+        return maker;
+      },
+      Message_ProgressRange_1: function () {
+        return { delete: del("progress") };
+      },
+      BRepBuilderAPI_TransitionMode: { BRepBuilderAPI_RightCorner: 0 },
+    } as unknown as Occt;
+    const sketch = { toWire: () => ({ delete: del("profile") }) } as unknown as Sketch;
+    const path = { kind: "polyline", points: [[0, 0, 0], [1, 0, 0]] } as unknown as SpinePath;
+
+    expect(() => sweep(oc, sketch, path)).toThrow(/Standard_Failure/);
+    // A thrown Build must not bypass cleanup — every temporary is still freed.
+    expect(deleted).toEqual(expect.arrayContaining(["maker", "progress", "profile", "spine"]));
+  });
+});
+
+describe("fillet frees the maker (and resolved edges) on the failure path", () => {
+  const fakeEdges = (): EdgeRef[] => [{ faceNormals: [] }] as unknown as EdgeRef[];
+  const makeOc = (maker: object): Occt =>
+    ({
+      ChFi3d_FilletShape: { ChFi3d_Rational: 0 },
+      BRepFilletAPI_MakeFillet: function () {
+        return maker;
+      },
+    }) as unknown as Occt;
+
+  it("deletes the null shape and the maker when Shape() is null", () => {
+    stubEdge("edge");
+    const maker = { Add_2: () => {}, Shape: () => nullShape(), delete: del("maker") };
+
+    expect(() => fillet(makeOc(maker), fakeSolid(), fakeEdges(), 0.003)).toThrow(/empty shape/);
+    expect(deleted).toContain("shape");
+    expect(deleted).toEqual(expect.arrayContaining(["maker", "edge"]));
+  });
+
+  it("frees the maker and the in-flight edge when Add_2 throws a Standard_Failure", () => {
+    stubEdge("edge");
+    const maker = {
+      Add_2: () => {
+        throw new Error("Standard_Failure: bad edge");
+      },
+      Shape: () => nullShape(),
+      delete: del("maker"),
+    };
+
+    expect(() => fillet(makeOc(maker), fakeSolid(), fakeEdges(), 0.003)).toThrow(/Standard_Failure/);
+    expect(deleted).toEqual(expect.arrayContaining(["maker", "edge"]));
+  });
+});
+
+describe("chamfer frees the maker and the null shape on the failure path", () => {
+  it("deletes the null shape and the maker when Shape() is null", () => {
+    stubEdge("edge");
+    const maker = { Add_2: () => {}, Shape: () => nullShape(), delete: del("maker") };
+    const oc = {
+      BRepFilletAPI_MakeChamfer: function () {
+        return maker;
+      },
+    } as unknown as Occt;
+
+    expect(() =>
+      chamfer(oc, fakeSolid(), [{ faceNormals: [] }] as unknown as EdgeRef[], 0.003),
+    ).toThrow(/empty shape/);
+    expect(deleted).toContain("shape");
+    expect(deleted).toEqual(expect.arrayContaining(["maker", "edge"]));
+  });
+});
+
+describe("shell frees the face list, resolved faces, maker, and progress on failure", () => {
+  const fakeFaces = (): FaceRef[] => [{ normal: [0, 0, 1] }] as unknown as FaceRef[];
+  const makeOc = (maker: object): Occt =>
+    ({
+      TopTools_ListOfShape_1: function () {
+        return { Append_1: () => {}, delete: del("list") };
+      },
+      BRepOffsetAPI_MakeThickSolid: function () {
+        return maker;
+      },
+      Message_ProgressRange_1: function () {
+        return { delete: del("progress") };
+      },
+      BRepOffset_Mode: { BRepOffset_Skin: 0 },
+      GeomAbs_JoinType: { GeomAbs_Arc: 0 },
+    }) as unknown as Occt;
+
+  it("deletes the null shape plus list/faces/maker/progress when Shape() is null", () => {
+    stubFace("face");
+    const maker = { MakeThickSolidByJoin: () => {}, Shape: () => nullShape(), delete: del("maker") };
+
+    expect(() => shell(makeOc(maker), fakeSolid(), fakeFaces(), 0.003)).toThrow(/empty shape/);
+    expect(deleted).toContain("shape");
+    expect(deleted).toEqual(expect.arrayContaining(["maker", "progress", "face", "list"]));
+  });
+
+  it("frees list/faces/maker/progress when MakeThickSolidByJoin throws (thickness > wall)", () => {
+    stubFace("face");
+    const maker = {
+      MakeThickSolidByJoin: () => {
+        throw new Error("Standard_Failure: cannot offset");
+      },
+      Shape: () => nullShape(),
+      delete: del("maker"),
+    };
+
+    expect(() => shell(makeOc(maker), fakeSolid(), fakeFaces(), 0.05)).toThrow(/Standard_Failure/);
+    expect(deleted).toEqual(expect.arrayContaining(["maker", "progress", "face", "list"]));
+  });
+});
+
+describe("draft frees the null Shape() handle (and the da/gp temporaries) on failure", () => {
+  it("deletes the null shape plus the draft maker and its gp_* temporaries", () => {
+    stubFace("face");
+    const da = {
+      Add: () => {},
+      Build: () => {},
+      IsDone: () => true,
+      Shape: () => nullShape(),
+      delete: del("da"),
+    };
+    const oc = {
+      BRepOffsetAPI_DraftAngle_2: function () {
+        return da;
+      },
+      gp_Dir_4: function () {
+        return { delete: del("dir") };
+      },
+      gp_Pnt_3: function () {
+        return { delete: del("origin") };
+      },
+      gp_Pln_3: function () {
+        return { delete: del("plane") };
+      },
+      Message_ProgressRange_1: function () {
+        return { delete: del("progress") };
+      },
+    } as unknown as Occt;
+
+    expect(() =>
+      draft(oc, fakeSolid(), {
+        face: { normal: [1, 0, 0] },
+        pullDirection: [0, 0, 1],
+        neutralOrigin: [0, 0, 0],
+        neutralNormal: [0, 0, 1],
+        angle: 0.1,
+      }),
+    ).toThrow(/empty shape/);
+    expect(deleted).toContain("shape");
+    expect(deleted).toEqual(expect.arrayContaining(["da", "plane", "origin", "face", "progress"]));
+  });
+});

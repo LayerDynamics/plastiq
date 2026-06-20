@@ -167,6 +167,26 @@ describe("CAD Studio store — undo / redo (FR-23 / M2.2)", () => {
     expect(s().features).toHaveLength(0);
   });
 
+  it("live param writes coalesce into ONE undo step (feature-edit gizmo history flood fix)", () => {
+    // The feature-edit gizmo opens a session right after addFeature (which snapshots the
+    // pre-feature state), then streams param writes as the user drags/scrubs/types: the
+    // FIRST write carries history, every later write suppresses it. A whole drag must add
+    // exactly ONE undo entry — not one per frame — so it neither deep-clones the doc per
+    // tick nor evicts real undo states from the 100-cap stack.
+    const id = s().addFeature({ type: "extrude", params: { height: 0.02 } });
+    const baseline = s().past.length; // 1: the pre-feature snapshot from addFeature
+    s().updateParams(id, { height: 0.03 }, { history: true }); // first write → checkpoint
+    s().updateParams(id, { height: 0.04 }, { history: false }); // live frame
+    s().updateParams(id, { height: 0.05 }, { history: false }); // live frame
+    expect(s().past.length).toBe(baseline + 1); // exactly one new entry, not three
+    expect(s().features[0]!.params).toEqual({ height: 0.05 });
+
+    s().undo(); // reverts the whole sizing burst to the seeded default (one step)
+    expect(s().features[0]!.params).toEqual({ height: 0.02 });
+    s().undo(); // removes the feature (addFeature's snapshot)
+    expect(s().features).toHaveLength(0);
+  });
+
   it("undo restores nextSeq so re-created features don't skip ids (CADStudio.md §5.2)", () => {
     const f1 = s().addFeature({ type: "box", params: { dx: 0.06, dy: 0.04, dz: 0.03 } });
     expect(f1).toBe("f1");

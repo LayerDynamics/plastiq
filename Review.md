@@ -71,7 +71,7 @@ code.
   — does nothing; only Ctrl/Cmd+click (which don't set `boxStart`) or a rubber-band drag
   actually extend a selection. Core multi-select correctness bug. -->
 
-- **ammo backend leaks every per-spawn wasm allocation** (`packages/sim/src/backends/ammo.ts:37-82`, `209-228`)
+<!-- - **ammo backend leaks every per-spawn wasm allocation** (`packages/sim/src/backends/ammo.ts:37-82`, `209-228`)
   — `spawn()` allocates a `btDefaultCollisionConfiguration`, `btCollisionDispatcher`,
   `btDbvtBroadphase`, `btSequentialImpulseConstraintSolver` (lines 37-41), plus per body a
   `btCompoundShape`, a `btConvexHullShape` + one `btVector3` per hull vertex (52-59), a
@@ -86,9 +86,9 @@ code.
   ownership rules are clearly understood, making `spawn()` an oversight. ammo-only:
   rapier/cannon use GC'd JS objects; MuJoCo uses owning embind handles. (Related Medium:
   ammo's `pose()`/`snapshot()` each leak one `btQuaternion` per call from the
-  return-by-value `getRotation()`, ammo.ts:140,153 — on the per-frame readout path.)
+  return-by-value `getRotation()`, ammo.ts:140,153 — on the per-frame readout path.) -->
 
-- **`updateParams` deep-clones the entire document on every gizmo/scrub drag frame**
+<!-- - **`updateParams` deep-clones the entire document on every gizmo/scrub drag frame**
   (`apps/plastiq/src/store/store.ts:315-321, 239-245`; `apps/plastiq/src/three/gizmos/featureEdit.gizmo.tsx:119-122, 143, 167-169`)
   — `updateParams` unconditionally prepends `...pushHistory(s)`, and `pushHistory`→
   `snapshot()` `structuredClone`s features + params + **assembly + assemblyResult** every
@@ -100,9 +100,9 @@ code.
   History is capped so this is *not* unbounded growth — the cost is per-frame clone
   overhead plus history pollution. The `TransformGizmo` does it correctly: it writes only
   on `onMouseUp` (transform.gizmo.tsx:37-39, one undo step). Coalesce the feature-edit
-  path the same way (write live with history suppressed; push one snapshot at drag end).
+  path the same way (write live with history suppressed; push one snapshot at drag end). -->
 
-- **Persistence write failures are silently swallowed mid-edit, and `projectsStore` has
+<!-- - **Persistence write failures are silently swallowed mid-edit, and `projectsStore` has
   no unit test** (`apps/plastiq/src/persistence/projectsStore.ts:140-180`) — `save()` and
   `saveAs()` set `status: "saving…"` *before* `await store.save(...)` (lines 147-148,
   166-169) with no try/catch. `store.save` genuinely throws when the project row was
@@ -117,7 +117,7 @@ code.
   clean recovery write runs *after* the await (153-160), a failed save leaves the prior
   *dirty* recovery snapshot intact, so a crash is still recoverable — but only by ordering
   luck. **Fix:** wrap the awaits, surface a "save failed" status, and add the regression
-  test for the rejection path.
+  test for the rejection path. -->
 
 - **Coverage gate blanket-excludes the entire `.tsx` layer even though dozens of those
   components are unit-tested** (`vitest.config.ts:46-60`) — `exclude: ["**/*.tsx", …]`
@@ -137,15 +137,15 @@ code.
 
 #### Medium
 
-- **`isSimManifest` validates structure but not numeric payloads** (`packages/cad/src/lower/manifest.ts:52-71`)
+<!-- - **`isSimManifest` validates structure but not numeric payloads** (`packages/cad/src/lower/manifest.ts:52-71`)
   — the documented trust boundary for a parsed/untrusted manifest checks array presence and
   a few `typeof` tags but never that `gravity`/`com`/`orientation` are numbers of the right
   arity, that `points.length % 3 === 0`, or that `faces` entries are index triples. `NaN`,
   wrong-length arrays, and non-integer face indices pass straight through to
   `@plastiq/sim`. (`@plastiq/sim`'s own `parseManifest`, manifest.ts:91-109, *does*
-  validate finiteness — so harden the kernel-side guard to match.)
+  validate finiteness — so harden the kernel-side guard to match.) -->
 
-- **OCCT temporaries leaked on the operation failure path** (`packages/cad/src/action/dressup.ts:45,80,127,157`, `loft.ts:28,70`, `boolean.ts:18`)
+<!-- - **OCCT temporaries leaked on the operation failure path** (`packages/cad/src/action/dressup.ts:45,80,127,157`, `loft.ts:28,70`, `boolean.ts:18`)
   — when an op produces a null/empty shape these sites do `const shape = maker.Shape()`
   (an owned embind allocation) and then `throw`/`return {ok:false}` **without**
   `shape.delete()`. The kernel's own convention proves it's required (`extrude.ts:69-71`,
@@ -153,21 +153,31 @@ code.
   (e.g. a fillet radius the local geometry can't absorb), so it accumulates in the
   long-lived worker. Several ops also lack `try/finally` around `Build`/`MakeThickSolid`,
   so a thrown `Standard_Failure` leaks makers/wires; adopt the closure-cleanup pattern
-  (`dressup.ts` draft / `loft.ts` sweep already do this) uniformly.
+  (`dressup.ts` draft / `loft.ts` sweep already do this) uniformly. -->
 
-- **Per-edge `computeBoundingSphere()` on every hover pointer-move** (`apps/plastiq/src/three/Picking.tsx:31, 163, 203`)
+<!-- - **Per-edge `computeBoundingSphere()` on every hover pointer-move** (`apps/plastiq/src/three/Picking.tsx:31, 163, 203`)
   — in edge/vertex mode each `onMove` that misses the raycast calls
   `screenNearest → selectionCandidates`, which calls `line.geometry.computeBoundingSphere()`
   for *every* edge plus projects all candidates — on every mouse move. Meaningful per-frame
   work on a part with many edges during plain hover. Cache the per-part candidate
   projections / bounding spheres or throttle (faces/bodies are already exempt via the
-  mode guard at line 156).
+  mode guard at line 156). -->
 
+<!-- RESOLVED (incremental split-store persistence): the SQLite DB is now a
+  metadata-only index (id/name/units/created/updated); each project's document and
+  thumbnail live in a per-id ProjectRecordStore (IndexedDB `docs`/`thumbs` object
+  stores). A mutation rewrites only the changed project's records plus the tiny
+  index image, so cost is O(changed-project), not O(whole-library). The project
+  list still shows thumbnails via an in-store cache warmed by one cursor over the
+  thumbnails (no document reads). Pre-split combined images migrate on first open
+  (gated by `PRAGMA user_version`, idempotent). See
+  `apps/plastiq/src/persistence/{types,idb,memory,sqlite,index}.ts` + sqlite/memory
+  tests. Original finding:
 - **Whole SQLite image re-serialized to IndexedDB on every mutation** (`apps/plastiq/src/persistence/sqlite.ts:44-46`)
   — `persist()` does `db.export()` (the entire DB — all projects + full data-URL PNG
   thumbnails) and writes the blob under one key after *each* save/create/rename/delete,
   with autosave firing every 1500 ms. Cost is O(total-DB-size) per edit burst, not
-  O(changed-project); fine for a few small projects, degrades as the library grows.
+  O(changed-project); fine for a few small projects, degrades as the library grows. -->
 
 - **`getOc()` memoizes a rejected init promise — a transient wasm-load blip bricks the
   worker until reload** (`apps/plastiq/src/worker/geometry.worker.ts:18`) —
@@ -331,10 +341,10 @@ Prioritized, highest-leverage first:
 4. **Restore the coverage gate's truthfulness** — stop excluding jsdom-tested `.tsx` from
    coverage, drop the non-existent `SceneController.ts` entry, and un-exclude the
    unit-tested `snapshot.ts`, so a UI regression can actually trip the floor.
-5. **Harden the kernel trust boundaries and clean up** — validate numeric payloads in
-   `isSimManifest`; adopt the closure-cleanup pattern across all feature ops so failure
-   paths free OCCT temporaries; reset `getOc()` on init failure; cap STEP import size and
-   surface recovery-snapshot quota failures.
+5. **Harden the kernel trust boundaries and clean up** — reset `getOc()` on init
+   failure; cap STEP import size and surface recovery-snapshot quota failures. (Numeric-payload
+   validation in `isSimManifest` and the closure-cleanup pattern that frees OCCT temporaries
+   on every feature op's failure path are both done — see the resolved Medium findings above.)
 6. **Reconcile the docs** — fix PROVENANCE.md test counts, the README "interchange"
    wording, and the stale vitest comment, per the project's accuracy rule.
 7. **Lower-risk polish** — memoize the sketch render subtrees / throttle the per-move

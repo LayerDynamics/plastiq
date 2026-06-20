@@ -32,6 +32,11 @@ function cancelPendingRecovery(): void {
   }
 }
 
+/** Best-effort message from an unknown thrown value (Error, DOMException, …). */
+function errMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
 let autosaveWired = false;
 function wireAutosave(get: () => ProjectsState): void {
   if (autosaveWired) return;
@@ -145,38 +150,57 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
       return;
     }
     set({ status: "saving…" });
-    await store.save(currentId, useCadStore.getState().toDocument(), thumbnail?.() ?? null);
-    await get().refresh();
-    set({ status: "saved" });
-    // The on-disk project is now current → the recovery snapshot is clean. Cancel
-    // any pending dirty write so it can't clobber this clean one.
-    cancelPendingRecovery();
-    writeRecovery({
-      doc: useCadStore.getState().toDocument(),
-      name: currentName,
-      currentId,
-      dirty: false,
-      savedAt: Date.now(),
-    });
+    try {
+      await store.save(currentId, useCadStore.getState().toDocument(), thumbnail?.() ?? null);
+      await get().refresh();
+      set({ status: "saved" });
+      // The on-disk project is now current → the recovery snapshot is clean. Cancel
+      // any pending dirty write so it can't clobber this clean one.
+      cancelPendingRecovery();
+      writeRecovery({
+        doc: useCadStore.getState().toDocument(),
+        name: currentName,
+        currentId,
+        dirty: false,
+        savedAt: Date.now(),
+      });
+    } catch (err) {
+      // store.save genuinely rejects — the project row was deleted in another tab
+      // (sqlite.ts: getRowsModified() === 0) or IndexedDB `put` hit quota. Every
+      // caller invokes save() as `void` (the autosave timer + the Save buttons), so
+      // an unguarded rejection would be an unhandled promise: the status line stays
+      // stuck on "saving…" forever and the user never learns their work didn't
+      // persist. Surface the failure on the only channel the UI reads. Because the
+      // clean writeRecovery above never ran, the prior *dirty* snapshot is left
+      // intact, so a crash is still recoverable. No re-throw: the status IS the signal.
+      set({ status: `save failed — changes not saved (${errMessage(err)})` });
+    }
   },
 
   saveAs: async (name) => {
     const { store, thumbnail } = get();
     if (!store) return;
     set({ status: "saving…" });
-    const meta = await store.create(name, useCadStore.getState().toDocument());
-    // Attach the thumbnail in the same flow.
-    await store.save(meta.id, useCadStore.getState().toDocument(), thumbnail?.() ?? null);
-    await get().refresh();
-    set({ currentId: meta.id, currentName: name, status: "saved" });
-    cancelPendingRecovery();
-    writeRecovery({
-      doc: useCadStore.getState().toDocument(),
-      name,
-      currentId: meta.id,
-      dirty: false,
-      savedAt: Date.now(),
-    });
+    try {
+      const meta = await store.create(name, useCadStore.getState().toDocument());
+      // Attach the thumbnail in the same flow.
+      await store.save(meta.id, useCadStore.getState().toDocument(), thumbnail?.() ?? null);
+      await get().refresh();
+      set({ currentId: meta.id, currentName: name, status: "saved" });
+      cancelPendingRecovery();
+      writeRecovery({
+        doc: useCadStore.getState().toDocument(),
+        name,
+        currentId: meta.id,
+        dirty: false,
+        savedAt: Date.now(),
+      });
+    } catch (err) {
+      // Same rationale as save(): create/save reject on quota or a backend failure,
+      // and the callers invoke saveAs() as `void`. Surface it on the status line and
+      // keep the dirty recovery snapshot intact rather than throwing into the void.
+      set({ status: `save failed — changes not saved (${errMessage(err)})` });
+    }
   },
 
   rename: async (id, name) => {

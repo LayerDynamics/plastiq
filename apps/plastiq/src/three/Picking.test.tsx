@@ -39,6 +39,41 @@ function quad(): TransferMesh {
   };
 }
 
+// The same unit quad, but with its four sides as separate B-rep edges, so the
+// candidate-cache assertion has several edge geometries to count bounding-sphere
+// computes against (the single-edge quad() can't distinguish per-edge from per-move).
+function multiEdgeQuad(): TransferMesh {
+  const edge = (
+    edgeId: number,
+    positions: number[],
+    midpoint: [number, number, number],
+  ): TransferMesh["edges"][number] => ({
+    edgeId,
+    positions: new Float32Array(positions),
+    faceNormals: [
+      [0, 0, 1],
+      [0, -1, 0],
+    ],
+    midpoint,
+  });
+  return {
+    vertices: new Float32Array([0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0]),
+    indices: new Uint32Array([0, 1, 2, 0, 2, 3]),
+    faceGroups: [
+      { faceId: 7, start: 0, count: 3, normal: [0, 0, 1], centroid: [0.667, 0.333, 0] },
+      { faceId: 9, start: 3, count: 3, normal: [0, 0, 1], centroid: [0.333, 0.667, 0] },
+    ],
+    edges: [
+      edge(1, [0, 0, 0, 1, 0, 0], [0.5, 0, 0]),
+      edge(2, [1, 0, 0, 1, 1, 0], [1, 0.5, 0]),
+      edge(3, [1, 1, 0, 0, 1, 0], [0.5, 1, 0]),
+      edge(4, [0, 1, 0, 0, 0, 0], [0, 0.5, 0]),
+    ],
+    vertexIds: [11, 12, 13, 14],
+    vertexPositions: new Float32Array([0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0]),
+  };
+}
+
 // A no-drag left click: pointerdown on the canvas (sets the down anchor), then
 // pointerup on window (the global handler that resolves the click) at the same
 // coords so it reads as a click, not an orbit drag. MouseEvent carries the
@@ -173,6 +208,54 @@ describe("Picking — additive selection (Shift+click)", () => {
       { kind: "edge", id: 4 },
       { kind: "edge", id: 8 },
     ]);
+
+    await r.unmount();
+  });
+});
+
+describe("Picking — hover candidate caching (perf)", () => {
+  beforeEach(() => useCadStore.getState().reset());
+  afterEach(() => {
+    vi.restoreAllMocks();
+    useCadStore.getState().reset();
+  });
+
+  it("computes each edge's bounding sphere at most once across many hover moves", async () => {
+    const part = buildPart(multiEdgeQuad());
+    const edgeCount = part.edges.length;
+    expect(edgeCount).toBe(4);
+    useCadStore.getState().setSelMode("edge");
+
+    // A null raycast hit routes every pointer-move through the screen-nearest
+    // fallback → selectionCandidates, which is the cached path under test.
+    vi.spyOn(Picker.prototype, "pick").mockReturnValue(null);
+    // Spy that still calls through, so each geometry's boundingSphere is really set
+    // (the cache guard keys off it). We only assert how OFTEN it's recomputed.
+    const sphereSpy = vi.spyOn(THREE.BufferGeometry.prototype, "computeBoundingSphere");
+
+    let canvas: HTMLCanvasElement | undefined;
+    const r = await ReactThreeTestRenderer.create(<Picking part={part} />, {
+      beforeReturn: (c) => {
+        canvas = c;
+      },
+    });
+    expect(canvas).toBeDefined();
+
+    // Count only what the hover moves trigger, not any mount-time work.
+    sphereSpy.mockClear();
+
+    const MOVES = 6;
+    for (let i = 0; i < MOVES; i++) {
+      canvas!.dispatchEvent(
+        new MouseEvent("pointermove", { clientX: 10 + i, clientY: 20 + i, bubbles: true }),
+      );
+    }
+
+    // Cached: at most one bounding-sphere compute per edge for the whole hover
+    // session. The pre-fix code recomputed every edge on every move (edgeCount *
+    // MOVES = 24), so this would have been 24 without the per-part candidate cache.
+    expect(sphereSpy.mock.calls.length).toBeLessThanOrEqual(edgeCount);
+    expect(sphereSpy.mock.calls.length).toBeLessThan(edgeCount * MOVES);
 
     await r.unmount();
   });

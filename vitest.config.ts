@@ -62,8 +62,8 @@ export default defineConfig({
       // Baseline floor, set a couple points below the measured current
       // (stmts 82.5 / branch 70.5 / funcs 83.1 / lines 85.9) so the build fails
       // on a real coverage regression while tolerating sub-2% run-to-run noise.
-      // Ratchet these up as the remaining gaps (projectsStore, simulator class,
-      // spline2d) get tests.
+      // Ratchet these up as the remaining gaps (simulator class, spline2d) get
+      // tests.
       thresholds: {
         statements: 80,
         branches: 68,

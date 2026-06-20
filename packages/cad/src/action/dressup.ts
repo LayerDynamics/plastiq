@@ -19,31 +19,44 @@ import type { EdgeRef, FaceRef } from "../mesh/tagged.js";
 export function fillet(oc: Occt, base: Solid, edges: readonly EdgeRef[], radius: number): Solid {
   const shapeType = oc.ChFi3d_FilletShape.ChFi3d_Rational as unknown as ChFi3d_FilletShape;
   const maker = new oc.BRepFilletAPI_MakeFillet(base.shape, shapeType);
-  let added = 0;
-  for (const ref of edges) {
-    const edge = resolveEdgeRef(oc, base, ref);
-    if (edge) {
-      maker.Add_2(radius, edge);
-      edge.delete();
-      added++;
+  // The maker is freed on EVERY exit — incl. a Standard_Failure thrown by `Add_2`
+  // or `Shape()` (a fillet radius the local geometry can't absorb is reachable in
+  // normal editing) — so a failed fillet doesn't leak it in the long-lived worker.
+  try {
+    let added = 0;
+    for (const ref of edges) {
+      const edge = resolveEdgeRef(oc, base, ref);
+      if (edge) {
+        try {
+          maker.Add_2(radius, edge);
+        } finally {
+          edge.delete();
+        }
+        added++;
+      }
     }
-  }
-  // Every requested edge must resolve. Filleting only the subset that resolved
-  // would silently return partial geometry (the missing edges un-rounded) as a
-  // success — exactly the case an upstream rebuild can perturb. Fail loudly so
-  // the feature is marked errored instead.
-  if (edges.length === 0 || added < edges.length) {
+    // Every requested edge must resolve. Filleting only the subset that resolved
+    // would silently return partial geometry (the missing edges un-rounded) as a
+    // success — exactly the case an upstream rebuild can perturb. Fail loudly so
+    // the feature is marked errored instead.
+    if (edges.length === 0 || added < edges.length) {
+      throw new Error(
+        edges.length === 0
+          ? "fillet: no edges selected"
+          : `fillet: ${edges.length - added} of ${edges.length} selected edge(s) did not resolve on the current body`,
+      );
+    }
+    const shape = maker.Shape();
+    // The null `Shape()` handle is itself an owned allocation — free it before the
+    // throw. On success the returned Solid owns it, so it is freed exactly once.
+    if (shape.IsNull()) {
+      shape.delete();
+      throw new Error("fillet: produced an empty shape");
+    }
+    return new Solid(oc, shape);
+  } finally {
     maker.delete();
-    throw new Error(
-      edges.length === 0
-        ? "fillet: no edges selected"
-        : `fillet: ${edges.length - added} of ${edges.length} selected edge(s) did not resolve on the current body`,
-    );
   }
-  const shape = maker.Shape();
-  maker.delete();
-  if (shape.IsNull()) throw new Error("fillet: produced an empty shape");
-  return new Solid(oc, shape);
 }
 
 /** Chamfer the picked edges of `base` by a symmetric setback `distance`. */
@@ -54,78 +67,100 @@ export function chamfer(
   distance: number,
 ): Solid {
   const maker = new oc.BRepFilletAPI_MakeChamfer(base.shape);
-  let added = 0;
-  for (const ref of edges) {
-    const edge = resolveEdgeRef(oc, base, ref);
-    if (edge) {
-      maker.Add_2(distance, edge);
-      edge.delete();
-      added++;
+  // Free the maker on every exit, including a Standard_Failure from `Add_2`/`Shape`
+  // — see the note in `fillet`.
+  try {
+    let added = 0;
+    for (const ref of edges) {
+      const edge = resolveEdgeRef(oc, base, ref);
+      if (edge) {
+        try {
+          maker.Add_2(distance, edge);
+        } finally {
+          edge.delete();
+        }
+        added++;
+      }
     }
-  }
-  // Every requested edge must resolve — see the note in `fillet`. Chamfering only
-  // the subset that resolved would silently return partial geometry as success.
-  if (edges.length === 0 || added < edges.length) {
+    // Every requested edge must resolve — see the note in `fillet`. Chamfering only
+    // the subset that resolved would silently return partial geometry as success.
+    if (edges.length === 0 || added < edges.length) {
+      throw new Error(
+        edges.length === 0
+          ? "chamfer: no edges selected"
+          : `chamfer: ${edges.length - added} of ${edges.length} selected edge(s) did not resolve on the current body`,
+      );
+    }
+    // BRepFilletAPI_MakeChamfer.IsDone() may stay false until Shape() builds; guard
+    // on a non-null result instead. The null handle is freed before the throw.
+    const shape = maker.Shape();
+    if (shape.IsNull()) {
+      shape.delete();
+      throw new Error("chamfer: produced an empty shape");
+    }
+    return new Solid(oc, shape);
+  } finally {
     maker.delete();
-    throw new Error(
-      edges.length === 0
-        ? "chamfer: no edges selected"
-        : `chamfer: ${edges.length - added} of ${edges.length} selected edge(s) did not resolve on the current body`,
-    );
   }
-  // BRepFilletAPI_MakeChamfer.IsDone() may stay false until Shape() builds; guard
-  // on a non-null result instead.
-  const shape = maker.Shape();
-  maker.delete();
-  if (shape.IsNull()) throw new Error("chamfer: produced an empty shape");
-  return new Solid(oc, shape);
 }
 
 /** Hollow `base` to a wall `thickness`, opening the picked faces. */
 export function shell(oc: Occt, base: Solid, faces: readonly FaceRef[], thickness: number): Solid {
   const list = new oc.TopTools_ListOfShape_1();
   const resolved: TopoDS_Face[] = [];
-  for (const ref of faces) {
-    const f = resolveFaceRef(oc, base, ref);
-    if (f) {
-      list.Append_1(f);
-      resolved.push(f);
+  // The face list and every resolved face are freed on EVERY exit (incl. a
+  // Standard_Failure from MakeThickSolidByJoin — a wall thicker than the part can
+  // absorb is reachable in normal editing), so a failed shell leaks nothing.
+  try {
+    for (const ref of faces) {
+      const f = resolveFaceRef(oc, base, ref);
+      if (f) {
+        list.Append_1(f);
+        resolved.push(f);
+      }
     }
-  }
-  // Every requested open-face must resolve. Shelling with fewer openings than
-  // asked changes the result's topology (e.g. an enclosed cavity instead of an
-  // open-top shell) — fail loudly rather than returning the wrong solid as success.
-  if (faces.length === 0 || resolved.length < faces.length) {
+    // Every requested open-face must resolve. Shelling with fewer openings than
+    // asked changes the result's topology (e.g. an enclosed cavity instead of an
+    // open-top shell) — fail loudly rather than returning the wrong solid as success.
+    if (faces.length === 0 || resolved.length < faces.length) {
+      throw new Error(
+        faces.length === 0
+          ? "shell: no faces selected"
+          : `shell: ${faces.length - resolved.length} of ${faces.length} selected face(s) did not resolve on the current body`,
+      );
+    }
+    const maker = new oc.BRepOffsetAPI_MakeThickSolid();
+    const progress = new oc.Message_ProgressRange_1();
+    try {
+      // Negative offset hollows inward, leaving a wall of `thickness`.
+      maker.MakeThickSolidByJoin(
+        base.shape,
+        list,
+        -thickness,
+        1e-3,
+        oc.BRepOffset_Mode.BRepOffset_Skin as unknown as BRepOffset_Mode,
+        false,
+        false,
+        oc.GeomAbs_JoinType.GeomAbs_Arc as unknown as GeomAbs_JoinType,
+        false,
+        progress,
+      );
+      const shape = maker.Shape();
+      // The null `Shape()` handle is itself an owned allocation — free it before the
+      // throw. On success the returned Solid owns it, so it is freed exactly once.
+      if (shape.IsNull()) {
+        shape.delete();
+        throw new Error("shell: produced an empty shape");
+      }
+      return new Solid(oc, shape);
+    } finally {
+      maker.delete();
+      progress.delete();
+    }
+  } finally {
     for (const f of resolved) f.delete();
     list.delete();
-    throw new Error(
-      faces.length === 0
-        ? "shell: no faces selected"
-        : `shell: ${faces.length - resolved.length} of ${faces.length} selected face(s) did not resolve on the current body`,
-    );
   }
-  const maker = new oc.BRepOffsetAPI_MakeThickSolid();
-  const progress = new oc.Message_ProgressRange_1();
-  // Negative offset hollows inward, leaving a wall of `thickness`.
-  maker.MakeThickSolidByJoin(
-    base.shape,
-    list,
-    -thickness,
-    1e-3,
-    oc.BRepOffset_Mode.BRepOffset_Skin as unknown as BRepOffset_Mode,
-    false,
-    false,
-    oc.GeomAbs_JoinType.GeomAbs_Arc as unknown as GeomAbs_JoinType,
-    false,
-    progress,
-  );
-  const shape = maker.Shape();
-  maker.delete();
-  progress.delete();
-  for (const f of resolved) f.delete();
-  list.delete();
-  if (shape.IsNull()) throw new Error("shell: produced an empty shape");
-  return new Solid(oc, shape);
 }
 
 export interface DraftOptions {
@@ -154,7 +189,13 @@ export function draft(oc: Occt, base: Solid, opts: DraftOptions): Solid {
     da.Build(progress);
     if (!da.IsDone()) throw new Error("draft: the taper could not be applied");
     const shape = da.Shape();
-    if (shape.IsNull()) throw new Error("draft: produced an empty shape");
+    // The null `Shape()` handle is an owned allocation; free it before the throw.
+    // (`da` and the gp_* temporaries are freed by the finally; on success the
+    // returned Solid owns `shape`, so it is freed exactly once.)
+    if (shape.IsNull()) {
+      shape.delete();
+      throw new Error("draft: produced an empty shape");
+    }
     return new Solid(oc, shape);
   } finally {
     da.delete();

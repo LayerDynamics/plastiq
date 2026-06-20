@@ -54,6 +54,11 @@ export function FeatureEditGizmo({ part }: { part: BuiltPart | null }): React.JS
   const input = useRef<HTMLInputElement>(null);
   const dragging = useRef(false);
   const scrub = useRef<{ x: number; start: number } | null>(null);
+  // One interactive edit session = one undo step. The first param write of a session
+  // carries history (its pushHistory snapshots the seeded default); every later write
+  // suppresses history, so a drag/scrub/typing burst doesn't deep-clone the whole doc
+  // per frame or flood the 100-entry undo stack with intermediate frames.
+  const wrote = useRef(false);
 
   const feature = edit ? features.find((f) => f.id === edit.id) : undefined;
   const spec = feature ? FEATURE_EDIT_SPECS[feature.type] : undefined;
@@ -108,10 +113,22 @@ export function FeatureEditGizmo({ part }: { part: BuiltPart | null }): React.JS
     }
   }, [active, edit?.id]);
 
+  // A new edit session (different feature, or the edit re-opening) starts a fresh undo
+  // step: the next param write carries history again.
+  useEffect(() => {
+    wrote.current = false;
+  }, [edit?.id]);
+
   if (!active || !part || !edit || !spec || !geom || !boxPos) return null;
   const commit = (): void => useCadStore.getState().setActiveFeatureEdit(null);
   const cancel = (): void => useCadStore.getState().removeFeature(edit.id);
-  const setSI = (si: number): void => useCadStore.getState().updateParams(edit.id, { [spec.param]: si });
+  const setSI = (si: number): void => {
+    // First write of the session snapshots the pre-edit value (one undo step); the
+    // rest write live with history suppressed (coalesces drag + scrub + typing).
+    const first = !wrote.current;
+    wrote.current = true;
+    useCadStore.getState().updateParams(edit.id, { [spec.param]: si }, { history: first });
+  };
   const display = Number(toDisplayUnit(value, spec.unit).toFixed(3));
   const unitLabel = spec.unit === "deg" ? "°" : "mm";
 
