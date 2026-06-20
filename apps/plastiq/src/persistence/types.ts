@@ -4,7 +4,7 @@
 // SQLite (sql.js) backend is the real implementation; an in-memory one backs
 // fast unit tests.
 
-import type { CadDocument } from "../store/types.js";
+import type { PersistedDoc } from "../store/types.js";
 
 /** Metadata for a saved project (NOT part of the deterministic document path). */
 export interface ProjectMeta {
@@ -22,7 +22,7 @@ export interface ProjectMeta {
 /** A full project: its metadata + the serialized document. */
 export interface Project {
   readonly meta: ProjectMeta;
-  readonly doc: CadDocument;
+  readonly doc: PersistedDoc;
 }
 
 /** A durable key/value blob sink (the lightweight SQLite metadata-index image
@@ -39,14 +39,14 @@ export interface BlobStore {
  * project list can warm its thumbnails without reading any (large) documents. */
 export interface ProjectRecordStore {
   /** A project's serialized document, or null if absent. */
-  getDoc(id: string): Promise<CadDocument | null>;
+  getDoc(id: string): Promise<PersistedDoc | null>;
   /** A project's thumbnail data-URL, or null. */
   getThumbnail(id: string): Promise<string | null>;
   /** Every stored project's thumbnail (id → thumbnail) in a single pass — warms
    * the list view without reading documents. */
   allThumbnails(): Promise<Map<string, string | null>>;
   /** Write (replace) a project's document. */
-  putDoc(id: string, doc: CadDocument): Promise<void>;
+  putDoc(id: string, doc: PersistedDoc): Promise<void>;
   /** Write (replace) a project's thumbnail; null clears it. */
   putThumbnail(id: string, thumbnail: string | null): Promise<void>;
   /** Remove a project's document and thumbnail. */
@@ -60,9 +60,9 @@ export interface ProjectStore {
   /** Full project by id, or null if absent. */
   load(id: string): Promise<Project | null>;
   /** Create a new project from a document; returns its metadata (new id). */
-  create(name: string, doc: CadDocument, units?: string): Promise<ProjectMeta>;
+  create(name: string, doc: PersistedDoc, units?: string): Promise<ProjectMeta>;
   /** Overwrite an existing project's document + optional thumbnail (updates `updated`). */
-  save(id: string, doc: CadDocument, thumbnail?: string | null): Promise<void>;
+  save(id: string, doc: PersistedDoc, thumbnail?: string | null): Promise<void>;
   rename(id: string, name: string): Promise<void>;
   delete(id: string): Promise<void>;
 }

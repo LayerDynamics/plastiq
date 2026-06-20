@@ -11,6 +11,7 @@
 
 import * as THREE from "three";
 import type { TransferMesh } from "../worker/protocol.js";
+import type { MeshBody } from "../mesh/meshBody.js";
 
 /** Material slots shared by every face group / edge line; highlight = swap. */
 export const FACE_MATERIAL = { base: 0, hover: 1, selected: 2 } as const;
@@ -109,6 +110,54 @@ export function buildPart(transfer: TransferMesh): BuiltPart {
   for (const line of edges) group.add(line);
   if (vertexPoints) group.add(vertexPoints);
   return { group, mesh, edges, edgeMaterials, vertexPoints };
+}
+
+/** A renderable generated/imported mesh body (the creative path; SPEC-6 R4.2). */
+export interface BuiltMeshBody {
+  /** The triangle-soup mesh, ready to add to the scene. */
+  mesh: THREE.Mesh;
+  /** Free its geometry + material. */
+  dispose(): void;
+}
+
+/** Fallback surface colour for a mesh body that carries no material. */
+const MESH_BODY_COLOR = 0xb8c0d0;
+
+/** Build a renderable THREE.Mesh from a MeshBody triangle soup (SPEC-6 R4.2).
+ * A mesh document renders these directly on the main thread — no OCCT and no
+ * worker round-trip (decision 24 / R4 refinement 2). Supplied per-vertex normals
+ * are reused as-is; otherwise smooth vertex normals are computed for lighting.
+ * Unlike {@link buildPart} there are no per-face groups or pickable B-rep
+ * entities — a mesh body is opaque display geometry, not an editable B-rep. */
+export function buildMeshBody(body: MeshBody): BuiltMeshBody {
+  const geom = new THREE.BufferGeometry();
+  geom.setAttribute("position", new THREE.BufferAttribute(body.positions, 3));
+  geom.setIndex(new THREE.BufferAttribute(body.indices, 1));
+  if (body.normals && body.normals.length === body.positions.length) {
+    geom.setAttribute("normal", new THREE.BufferAttribute(body.normals, 3));
+  } else {
+    geom.computeVertexNormals();
+  }
+
+  const m = body.material;
+  const opacity = m?.opacity ?? 1;
+  const material = new THREE.MeshStandardMaterial({
+    color: m?.color ?? MESH_BODY_COLOR,
+    metalness: m?.metalness ?? 0.1,
+    roughness: m?.roughness ?? 0.7,
+    opacity,
+    transparent: opacity < 1,
+  });
+
+  const mesh = new THREE.Mesh(geom, material);
+  mesh.name = "mesh-body";
+  return {
+    mesh,
+    dispose() {
+      geom.dispose();
+      material.dispose();
+    },
+  };
 }
 
 /** Free the GPU/CPU buffers of a built part. */

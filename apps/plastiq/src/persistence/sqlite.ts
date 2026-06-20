@@ -14,7 +14,7 @@
 // metadata-only. The migration is idempotent and gated by `PRAGMA user_version`.
 
 import type { Database, SqlJsStatic } from "sql.js";
-import type { CadDocument } from "../store/types.js";
+import type { PersistedDoc } from "../store/types.js";
 import type {
   Project,
   ProjectMeta,
@@ -103,7 +103,7 @@ export async function createSqliteProjectStore(opts: SqliteStoreOptions): Promis
     if (tableColumns("projects").includes("doc")) {
       for (const r of query("SELECT id, doc, thumbnail FROM projects")) {
         const id = String(r["id"]);
-        await records.putDoc(id, JSON.parse(String(r["doc"])) as CadDocument);
+        await records.putDoc(id, JSON.parse(String(r["doc"])) as PersistedDoc);
         await records.putThumbnail(id, r["thumbnail"] == null ? null : String(r["thumbnail"]));
       }
       db.run("ALTER TABLE projects RENAME TO projects_legacy");
@@ -171,7 +171,7 @@ export async function createSqliteProjectStore(opts: SqliteStoreOptions): Promis
       return { meta: metaFromRow(r, thumbnail), doc };
     },
 
-    async create(name: string, doc: CadDocument, units = "mm"): Promise<ProjectMeta> {
+    async create(name: string, doc: PersistedDoc, units = "mm"): Promise<ProjectMeta> {
       const t = now();
       const meta: ProjectMeta = {
         id: newId(),
@@ -195,7 +195,7 @@ export async function createSqliteProjectStore(opts: SqliteStoreOptions): Promis
       return meta;
     },
 
-    async save(id: string, doc: CadDocument, thumbnail?: string | null): Promise<void> {
+    async save(id: string, doc: PersistedDoc, thumbnail?: string | null): Promise<void> {
       // Bump the metadata row FIRST and check it matched before writing any
       // payload: an UPDATE that matches no row means the project was deleted (e.g.
       // in another tab), so persisting would report success while the document is

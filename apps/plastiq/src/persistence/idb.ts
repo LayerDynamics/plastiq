@@ -6,7 +6,7 @@
 // Documents and thumbnails live in separate object stores so the project list can
 // warm its thumbnails (a cursor over `thumbs`) without reading any documents.
 
-import type { CadDocument } from "../store/types.js";
+import type { PersistedDoc } from "../store/types.js";
 import type { BlobStore, ProjectRecordStore } from "./types.js";
 
 const DB_NAME = "plastiq";
@@ -73,11 +73,11 @@ export class IdbBlobStore implements BlobStore {
 }
 
 export class IdbProjectRecordStore implements ProjectRecordStore {
-  async getDoc(id: string): Promise<CadDocument | null> {
+  async getDoc(id: string): Promise<PersistedDoc | null> {
     const db = await openDb();
     try {
       const v = await run<unknown>(db, DOC_STORE, "readonly", (s) => s.get(id));
-      return v == null ? null : (v as CadDocument);
+      return v == null ? null : (v as PersistedDoc);
     } finally {
       db.close();
     }
@@ -115,7 +115,7 @@ export class IdbProjectRecordStore implements ProjectRecordStore {
     }
   }
 
-  async putDoc(id: string, doc: CadDocument): Promise<void> {
+  async putDoc(id: string, doc: PersistedDoc): Promise<void> {
     const db = await openDb();
     try {
       await run(db, DOC_STORE, "readwrite", (s) => s.put(doc, id));

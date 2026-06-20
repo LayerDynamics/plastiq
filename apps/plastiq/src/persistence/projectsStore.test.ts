@@ -11,8 +11,9 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useProjectsStore } from "./projectsStore.js";
+import { useCadStore } from "../store/store.js";
 import { clearRecovery, readRecovery, writeRecovery } from "./recovery.js";
-import type { CadDocument } from "../store/types.js";
+import type { CadDocument, MeshDoc } from "../store/types.js";
 import type { ProjectMeta, ProjectStore } from "./types.js";
 
 const doc: CadDocument = { features: [], params: {} };
@@ -42,6 +43,8 @@ afterEach(() => {
     currentId: null,
     currentName: "Untitled",
     status: "",
+    activeMeshDoc: null,
+    busy: false,
   });
   clearRecovery();
 });
@@ -137,5 +140,60 @@ describe("projectsStore — save failures are surfaced, never swallowed (Review 
     expect(st.currentName).toBe("Part B");
     expect(st.status).toBe("saved");
     expect(readRecovery()!.dirty).toBe(false);
+  });
+});
+
+describe("projectsStore — open() routes mesh vs parametric documents (SPEC-6 R4.2)", () => {
+  const meshProjectDoc: MeshDoc = {
+    kind: "mesh",
+    name: "Vase",
+    glb: "Z2xURgIAAAA=",
+    source: { mode: "text3d", providerId: "fal:tripo", prompt: "a vase" },
+  };
+
+  it("opening a MESH project sets activeMeshDoc and does NOT load the parametric editor", async () => {
+    // Stub loadDocument so a buggy call can't throw — we assert it is never called.
+    const loadSpy = vi.spyOn(useCadStore.getState(), "loadDocument").mockImplementation(() => {});
+    useProjectsStore.setState({
+      store: fakeStore({ load: async () => ({ meta: meta("m1", "Vase"), doc: meshProjectDoc }) }),
+    });
+
+    await useProjectsStore.getState().open("m1");
+
+    const st = useProjectsStore.getState();
+    expect(st.activeMeshDoc).toEqual(meshProjectDoc);
+    expect(st.currentId).toBe("m1");
+    expect(st.currentName).toBe("Vase");
+    expect(st.status).toBe("opened");
+    expect(st.busy).toBe(false);
+    expect(loadSpy).not.toHaveBeenCalled(); // mesh docs bypass the B-rep editor
+    loadSpy.mockRestore();
+  });
+
+  it("opening a PARAMETRIC project loads the editor and clears any stale activeMeshDoc", async () => {
+    const paramProjectDoc: CadDocument = { features: [], params: {} };
+    const loadSpy = vi.spyOn(useCadStore.getState(), "loadDocument").mockImplementation(() => {});
+    // Pre-set a stale mesh doc to prove opening a parametric project clears it.
+    useProjectsStore.setState({
+      store: fakeStore({ load: async () => ({ meta: meta("p9", "Bracket"), doc: paramProjectDoc }) }),
+      activeMeshDoc: meshProjectDoc,
+    });
+
+    await useProjectsStore.getState().open("p9");
+
+    const st = useProjectsStore.getState();
+    expect(loadSpy).toHaveBeenCalledWith(paramProjectDoc);
+    expect(st.activeMeshDoc).toBeNull();
+    expect(st.currentId).toBe("p9");
+    expect(st.currentName).toBe("Bracket");
+    expect(st.status).toBe("opened");
+    expect(st.busy).toBe(false);
+    loadSpy.mockRestore();
+  });
+
+  it("opening a missing project reports 'project not found'", async () => {
+    useProjectsStore.setState({ store: fakeStore({ load: async () => null }) });
+    await useProjectsStore.getState().open("ghost");
+    expect(useProjectsStore.getState().status).toBe("project not found");
   });
 });

@@ -41,7 +41,7 @@ describe("MemoryProjectRecordStore (unit)", () => {
     const input = doc(0.05);
     await store.putDoc("a", input);
     input.features[0]!.name = "MUTATED"; // mutate the source after storing
-    expect((await store.getDoc("a"))!.features[0]!.name).toBe("Box 1");
+    expect(((await store.getDoc("a"))! as CadDocument).features[0]!.name).toBe("Box 1");
   });
 
   it("putThumbnail stores the value, including an explicit null", async () => {

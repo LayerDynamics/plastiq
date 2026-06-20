@@ -10,6 +10,7 @@ import { defaultDocument } from "../store/seed.js";
 import { projectStore } from "./index.js";
 import { clearRecovery, readRecovery, writeRecovery, type RecoverySnapshot } from "./recovery.js";
 import type { ProjectMeta, ProjectStore } from "./types.js";
+import { isMeshDoc, type MeshDoc } from "../store/types.js";
 
 /** Debounced autosave (FR-40): persist the open project a quiet interval after
  * its document changes. Wired once, after the store loads. */
@@ -76,6 +77,10 @@ export interface ProjectsState {
   busy: boolean;
   /** A dirty recovery snapshot found at startup (a prior crash), else null. */
   recoverable: RecoverySnapshot | null;
+  /** The open project's mesh document when it is a mesh-kind project (SPEC-6
+   * decision 20); null for a parametric project. The viewport renders it from its
+   * GLB; the parametric editor (cad store) stays empty for a mesh project. */
+  activeMeshDoc: MeshDoc | null;
 
   init: () => Promise<void>;
   refresh: () => Promise<void>;
@@ -101,6 +106,7 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
   thumbnail: null,
   busy: false,
   recoverable: null,
+  activeMeshDoc: null,
 
   init: async () => {
     if (get().store) return;
@@ -138,8 +144,14 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
       return;
     }
     set({ busy: true });
-    useCadStore.getState().loadDocument(project.doc);
-    set({ currentId: id, currentName: project.meta.name, status: "opened", busy: false });
+    if (isMeshDoc(project.doc)) {
+      // A generated mesh project (decision 20): held as activeMeshDoc and rendered
+      // from its GLB by the viewport; the parametric cad store stays empty for it.
+      set({ activeMeshDoc: project.doc, currentId: id, currentName: project.meta.name, status: "opened", busy: false });
+    } else {
+      useCadStore.getState().loadDocument(project.doc);
+      set({ activeMeshDoc: null, currentId: id, currentName: project.meta.name, status: "opened", busy: false });
+    }
   },
 
   save: async () => {

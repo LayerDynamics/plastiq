@@ -40,6 +40,35 @@ export interface CadDocument {
   readonly assembly?: AssemblyModel;
 }
 
+/** How a mesh document was generated (the creative path; SPEC-6 R4). */
+export interface MeshSource {
+  mode: "text2img3d" | "img3d" | "text3d";
+  providerId: string;
+  prompt?: string;
+  imageId?: string;
+}
+
+/** A generated mesh document — a separate document KIND from the parametric
+ * CadDocument (SPEC-6 decision 20: a project is parametric OR mesh, not mixed).
+ * Geometry is re-derived from the stored GLB (base64) via importGltf on load,
+ * mirroring how an importStep feature re-imports its STEP text. */
+export interface MeshDoc {
+  readonly kind: "mesh";
+  name?: string;
+  /** The generated model as a base64 GLB (JSON-safe; re-parsed on load). */
+  glb: string;
+  source: MeshSource;
+}
+
+/** A persisted document: a parametric CadDocument or a generated MeshDoc. A
+ * CadDocument carries no `kind` (back-compat: an absent `kind` ⇒ parametric). */
+export type PersistedDoc = CadDocument | MeshDoc;
+
+/** Discriminate a persisted document as a mesh document. */
+export function isMeshDoc(doc: PersistedDoc): doc is MeshDoc {
+  return (doc as Partial<MeshDoc>).kind === "mesh";
+}
+
 /** Which kind of sub-entity the 3D viewport selects. */
 export type SelectionMode = "face" | "edge" | "vertex" | "body";
 

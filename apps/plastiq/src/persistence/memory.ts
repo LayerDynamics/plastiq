@@ -5,7 +5,7 @@
 // real SQLite. Both copy on write/read so a stored value can't be aliased and
 // mutated out from under the store (matching IndexedDB's structured-clone).
 
-import type { CadDocument } from "../store/types.js";
+import type { PersistedDoc } from "../store/types.js";
 import type { BlobStore, ProjectRecordStore } from "./types.js";
 
 export class MemoryBlobStore implements BlobStore {
@@ -21,12 +21,12 @@ export class MemoryBlobStore implements BlobStore {
 }
 
 export class MemoryProjectRecordStore implements ProjectRecordStore {
-  private docs = new Map<string, CadDocument>();
+  private docs = new Map<string, PersistedDoc>();
   private thumbs = new Map<string, string | null>();
 
-  async getDoc(id: string): Promise<CadDocument | null> {
+  async getDoc(id: string): Promise<PersistedDoc | null> {
     const d = this.docs.get(id);
-    return d === undefined ? null : (structuredClone(d) as CadDocument);
+    return d === undefined ? null : (structuredClone(d) as PersistedDoc);
   }
 
   async getThumbnail(id: string): Promise<string | null> {
@@ -37,8 +37,8 @@ export class MemoryProjectRecordStore implements ProjectRecordStore {
     return new Map(this.thumbs);
   }
 
-  async putDoc(id: string, doc: CadDocument): Promise<void> {
-    this.docs.set(id, structuredClone(doc) as CadDocument);
+  async putDoc(id: string, doc: PersistedDoc): Promise<void> {
+    this.docs.set(id, structuredClone(doc) as PersistedDoc);
   }
 
   async putThumbnail(id: string, thumbnail: string | null): Promise<void> {

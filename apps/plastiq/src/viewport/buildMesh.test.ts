@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import type * as THREE from "three";
 import type { TransferMesh } from "../worker/protocol.js";
-import { buildPart, FACE_MATERIAL } from "./buildMesh.js";
+import type { MeshBody } from "../mesh/meshBody.js";
+import { buildMeshBody, buildPart, FACE_MATERIAL } from "./buildMesh.js";
 
 // A minimal tagged mesh: two triangles split across two faces + two edges.
 function sampleMesh(): TransferMesh {
@@ -77,5 +78,48 @@ describe("buildPart — tagged mesh → three.js (SPEC-5 M0.5)", () => {
     expect(part.group.children.length).toBe(1 + part.edges.length + 1);
     // Vertex normals were computed (lighting needs them).
     expect(part.mesh.geometry.getAttribute("normal")).toBeDefined();
+  });
+});
+
+// A minimal triangle-soup body: a unit quad (two triangles). Material/normals
+// are supplied per-test via the override bag.
+function sampleBody(overrides: Partial<MeshBody> = {}): MeshBody {
+  return {
+    positions: new Float32Array([0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0]),
+    indices: new Uint32Array([0, 1, 2, 0, 2, 3]),
+    ...overrides,
+  };
+}
+
+describe("buildMeshBody — mesh triangle soup → three.js (SPEC-6 R4.2)", () => {
+  it("builds a Mesh carrying the body's position + index buffers", () => {
+    const built = buildMeshBody(sampleBody());
+    const geom = built.mesh.geometry;
+    expect(geom.getAttribute("position").count).toBe(4);
+    expect(geom.getIndex()!.count).toBe(6);
+  });
+
+  it("computes vertex normals when the body supplies none (lighting needs them)", () => {
+    const built = buildMeshBody(sampleBody());
+    expect(built.mesh.geometry.getAttribute("normal")).toBeDefined();
+  });
+
+  it("reuses the body's normals verbatim when supplied (no recompute)", () => {
+    const normals = new Float32Array([0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1]);
+    const built = buildMeshBody(sampleBody({ normals }));
+    expect(built.mesh.geometry.getAttribute("normal").array).toEqual(normals);
+  });
+
+  it("applies the body material — colour + sub-1 opacity ⇒ transparent", () => {
+    const built = buildMeshBody(sampleBody({ material: { color: 0xff0000, opacity: 0.5 } }));
+    const mat = built.mesh.material as THREE.MeshStandardMaterial;
+    expect(mat.color.getHex()).toBe(0xff0000);
+    expect(mat.opacity).toBe(0.5);
+    expect(mat.transparent).toBe(true);
+  });
+
+  it("dispose frees the geometry + material without throwing", () => {
+    const built = buildMeshBody(sampleBody());
+    expect(() => built.dispose()).not.toThrow();
   });
 });

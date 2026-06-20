@@ -75,7 +75,7 @@ describe("SqliteProjectStore — CRUD over real sql.js (SPEC-5 M5.1)", () => {
     const meta = await store.create("P", doc(0.06));
     await store.save(meta.id, doc(0.09), "data:image/png;base64,AAAA");
     const loaded = await store.load(meta.id);
-    expect(loaded?.doc.features[0]!.params).toEqual({ dx: 0.09, dy: 0.04, dz: 0.03 });
+    expect((loaded!.doc as CadDocument).features[0]!.params).toEqual({ dx: 0.09, dy: 0.04, dz: 0.03 });
     expect(loaded?.meta.thumbnail).toBe("data:image/png;base64,AAAA");
     expect(loaded!.meta.updated).toBeGreaterThanOrEqual(meta.updated);
   });
@@ -148,7 +148,7 @@ describe("SqliteProjectStore — CRUD over real sql.js (SPEC-5 M5.1)", () => {
     const meta = await store.create("P", doc(0.06));
     await expect(store.save(meta.id, doc(0.09))).resolves.toBeUndefined();
     const reopened = await createSqliteProjectStore({ SQL, blob, records });
-    expect((await reopened.load(meta.id))?.doc.features[0]!.params).toEqual({
+    expect(((await reopened.load(meta.id))!.doc as CadDocument).features[0]!.params).toEqual({
       dx: 0.09,
       dy: 0.04,
       dz: 0.03,
