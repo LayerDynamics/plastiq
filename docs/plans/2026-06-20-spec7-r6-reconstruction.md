@@ -71,8 +71,13 @@ Deterministic (NFR-2); never drops geometry (faceted fallback, NFR-1).
 
 ---
 
-### R6.5 — Freeform (BSpline / filling) for smooth non-primitive regions — planned
-- **Files (new):** `services/reconstruct/app/freeform.py`, `tests/test_freeform.py`.
+### R6.5 — Freeform (BSpline / filling) for smooth non-primitive regions — ✅ shipped (standalone)
+- Done: `app/freeform.py` (`freeform_face` + `freeform_region_face` via `BRepOffsetAPI_MakeFilling`;
+  interior constraints subsampled so the fill stays tractable) + `tests/test_freeform.py`.
+  Builder is standalone — NOT wired into the fitted sewing path: MakeFilling respects the
+  boundary only within ~1e-4 (< the 1e-6 sew gate), so joining a solid needs per-region
+  tolerance / the topology tail. Closed organic blobs keep the valid faceted solid.
+- (original task, for the future topology-tail integration:)
 - **Test-first:** a smooth bounded region's points + boundary → a valid `TopoDS_Face`;
   assert the face is valid and within tolerance of the sample points. Red first.
 - **Implement:** `BRepOffsetAPI_MakeFilling` (boundary edges + interior `gp_Pnt` constraints,
