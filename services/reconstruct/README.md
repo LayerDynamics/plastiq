@@ -92,8 +92,12 @@ automatic reconstruction, not an implementation gap.
   analytic 3-face solid sharing the exact rim circles (`curved_faces.py`) + region detection
   (`detect.py`). Proves `is_solid` survives the analytic collapse; faceted caps regress to a
   shell (the shared-edge crux). See SPEC-7.
-- **R6.4b** — integrate cylinder fitting into the general pipeline + shared-edge topology tail
-  (cylinder↔plane), then sphere + cone.
+- **R6.4b (done)** — sphere + cone fits/solids + **auto single-primitive classification**
+  (`detect.try_single_primitive`, default `method="auto"`, box-safe shape gates), and
+  **surface-of-revolution** mixed parts (`revolution.py` — stepped shafts / chamfered /
+  capped cylinders → one analytic revolved solid, volume-validated).
+- **R6.4b-iii** — general non-coaxial mixed parts (box-with-hole) via surface-intersection
+  shared edges (deferred frontier; faceted fallback keeps them valid).
 - **R6.5** — BSpline freeform fallback for non-primitive regions.
 - **R6.6 (done)** — client `reconstructMesh` (submit/poll) + a "Convert mesh → CAD (STEP)"
   action in the GenerationPanel → `stepToImportDocument` → the kernel `importStep` feature

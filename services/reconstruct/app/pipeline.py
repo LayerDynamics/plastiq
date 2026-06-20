@@ -18,6 +18,7 @@ from .faceted import faceted_shape
 from .fitted import fitted_shape
 from .meshio import load_mesh
 from .occ_step import shape_to_step
+from .revolution import reconstruct_revolution
 
 
 @dataclass
@@ -58,6 +59,7 @@ def reconstruct(
     used = len(faces)
 
     if method == "auto":
+        # 1) whole mesh is one analytic primitive (cleanest result for cylinder/sphere/cone)
         prim = try_single_primitive(vertices, faces)
         if prim is not None:
             report = ReconstructionReport(
@@ -71,7 +73,21 @@ def reconstruct(
                 primitive=prim.primitive,
             )
             return ReconstructionResult(step=shape_to_step(prim.shape), report=report)
-        method = "fitted"  # not a single primitive → fall through
+        # 2) a multi-segment solid of revolution (stepped shaft, chamfered/capped cylinder)
+        rev = reconstruct_revolution(vertices, faces)
+        if rev is not None:
+            report = ReconstructionReport(
+                triangles_in=raw_triangles,
+                triangles_used=used,
+                faces_built=rev.n_faces,
+                planar_faces=0,
+                is_solid=rev.is_solid,
+                is_valid=rev.is_valid,
+                method="revolution",
+                primitive="revolution",
+            )
+            return ReconstructionResult(step=shape_to_step(rev.shape), report=report)
+        method = "fitted"  # not a primitive / revolution → fall through
 
     if method == "faceted":
         result = faceted_shape(vertices, faces)
