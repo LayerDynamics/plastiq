@@ -141,6 +141,13 @@ export function Viewport(): React.JSX.Element {
     ).__plastiqExport = (format) =>
       client.exportFile(useCadStore.getState().toDocument(), format);
 
+    // AI generation seam (SPEC-6 R2.4): off-thread build of an arbitrary document on
+    // the ONE geometry worker — the build_part probe + inspect_geometry both use this
+    // (no second OCCT worker), and the deterministic AI E2E drives it directly.
+    (
+      globalThis as { __plastiqBuild?: (doc: CadDocument) => Promise<TransferMesh | null> }
+    ).__plastiqBuild = (doc) => client.build(doc);
+
     // Projects (M5): start the store (loads SQLite, arms crash-recovery autosave,
     // FR-40) and let Save capture the viewport canvas as the thumbnail (M5.3).
     const projects = useProjectsStore.getState();
@@ -412,6 +419,7 @@ export function Viewport(): React.JSX.Element {
       client.dispose();
       delete (globalThis as { __plastiqLower?: unknown }).__plastiqLower;
       delete (globalThis as { __plastiqExport?: unknown }).__plastiqExport;
+      delete (globalThis as { __plastiqBuild?: unknown }).__plastiqBuild;
       useProjectsStore.getState().setThumbnailProvider(null);
     };
   }, [setStatus]);

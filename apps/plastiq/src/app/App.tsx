@@ -10,6 +10,7 @@ import { StatusBar } from "./StatusBar.js";
 import { FeatureTree } from "./FeatureTree.js";
 import { AssemblyTree } from "./AssemblyTree.js";
 import { PropertiesPanel } from "./PropertiesPanel.js";
+import { GenerationPanel } from "../ai/GenerationPanel.js";
 import { Viewport } from "../three/index.js";
 import { Sketcher } from "../sketch/Sketcher.js";
 import { Welcome } from "./Welcome.js";
@@ -193,6 +194,9 @@ export function App(): React.JSX.Element {
                 {collapseBtn(() => setLeftOpen(false), "Collapse feature panel", "‹")}
               </div>
               <WorkspacePanel />
+              <div className="my-2 border-t border-[#222a36]" />
+              <h2 className="mb-2 text-xs font-bold tracking-wide text-[#8aa]">GENERATE (AI)</h2>
+              <GenerationPanel />
               <div className="my-2 border-t border-[#222a36]" />
               <h2 className="mb-2 text-xs font-bold tracking-wide text-[#8aa]">FEATURE TREE</h2>
               <div id="tree-root">
