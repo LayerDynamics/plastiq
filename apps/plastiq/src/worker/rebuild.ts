@@ -28,6 +28,8 @@ import {
   offsetPlane,
   faceDatumPlane,
   resolveFaceRef,
+  resolveSelector,
+  isSelector,
   planeXY,
   revolve,
   sweep,
@@ -115,6 +117,23 @@ function unionAll(oc: Occt, copies: readonly Solid[], featureId: string): Solid 
     acc = r.solid;
   }
   return acc;
+}
+
+/** Dress-up edge selection: explicit EdgeRef[] if given, else resolve a selector
+ * predicate against the current solid (SPEC-6 R3.2, FR-13/FR-14). */
+function dressEdges(oc: Occt, base: Solid, f: EditorFeature): EdgeRef[] {
+  const explicit = (f.data?.["edges"] ?? []) as EdgeRef[];
+  if (explicit.length > 0) return explicit;
+  const sel = f.data?.["selector"];
+  return isSelector(sel) ? resolveSelector(oc, base, sel).edges : [];
+}
+
+/** Dress-up face selection: explicit FaceRef[] if given, else resolve a selector. */
+function dressFaces(oc: Occt, base: Solid, f: EditorFeature): FaceRef[] {
+  const explicit = (f.data?.["faces"] ?? []) as FaceRef[];
+  if (explicit.length > 0) return explicit;
+  const sel = f.data?.["selector"];
+  return isSelector(sel) ? resolveSelector(oc, base, sel).faces : [];
 }
 
 /**
@@ -258,16 +277,16 @@ export function rebuildDocument(oc: Occt, doc: CadDocument): Solid | null {
       case "fillet": {
         const base = solid;
         if (!base) throw new Error(`feature '${f.id}' (fillet): no solid to fillet`);
-        const edges = (f.data?.["edges"] ?? []) as EdgeRef[];
+        // Explicit EdgeRefs (re-resolved each rebuild, FR-16/R2) or a selector predicate (R3.2).
+        const edges = dressEdges(oc, base, f);
         if (edges.length === 0) throw new Error(`feature '${f.id}' (fillet): no edges selected`);
-        // EdgeRefs re-resolve against THIS rebuild's topology (FR-16/R2).
         replace(fillet(oc, base, edges, num(f, "radius")));
         break;
       }
       case "chamfer": {
         const base = solid;
         if (!base) throw new Error(`feature '${f.id}' (chamfer): no solid to chamfer`);
-        const edges = (f.data?.["edges"] ?? []) as EdgeRef[];
+        const edges = dressEdges(oc, base, f);
         if (edges.length === 0) throw new Error(`feature '${f.id}' (chamfer): no edges selected`);
         replace(chamfer(oc, base, edges, num(f, "distance")));
         break;
@@ -275,7 +294,7 @@ export function rebuildDocument(oc: Occt, doc: CadDocument): Solid | null {
       case "shell": {
         const base = solid;
         if (!base) throw new Error(`feature '${f.id}' (shell): no solid to shell`);
-        const faces = (f.data?.["faces"] ?? []) as FaceRef[];
+        const faces = dressFaces(oc, base, f);
         if (faces.length === 0) throw new Error(`feature '${f.id}' (shell): no faces selected`);
         replace(shell(oc, base, faces, num(f, "thickness")));
         break;
@@ -283,7 +302,7 @@ export function rebuildDocument(oc: Occt, doc: CadDocument): Solid | null {
       case "draft": {
         const base = solid;
         if (!base) throw new Error(`feature '${f.id}' (draft): no solid to draft`);
-        const face = f.data?.["face"] as FaceRef | undefined;
+        const face = (f.data?.["face"] as FaceRef | undefined) ?? dressFaces(oc, base, f)[0];
         if (!face) throw new Error(`feature '${f.id}' (draft): no face selected`);
         const vec = (key: string, d: Vec3): Vec3 => {
           const v = f.data?.[key];
