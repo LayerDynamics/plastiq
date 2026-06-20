@@ -71,3 +71,19 @@ def test_unknown_job_is_404():
             assert (await c.get("/jobs/does-not-exist/result")).status_code == 404
 
     asyncio.run(run())
+
+
+def test_cors_headers_present_for_browser_origin():
+    # the browser client is cross-origin → the service must echo CORS headers (R6.7b)
+    async def run():
+        async with _client() as c:
+            r = await c.options(
+                "/reconstruct",
+                headers={
+                    "Origin": "http://localhost:4177",
+                    "Access-Control-Request-Method": "POST",
+                },
+            )
+            assert r.headers.get("access-control-allow-origin") in ("*", "http://localhost:4177")
+
+    asyncio.run(run())

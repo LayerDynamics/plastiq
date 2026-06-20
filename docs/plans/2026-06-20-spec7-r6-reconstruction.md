@@ -111,8 +111,13 @@ Deterministic (NFR-2); never drops geometry (faceted fallback, NFR-1).
 - **Done when:** box+boss and box+hole+boss reconstruct to valid volume-matching solids;
   out-of-scope parts fall back cleanly.
 
-### R6.7b — Browser reconstruction E2E (Playwright) — planned
-- **Files:** `e2e/plastiq/reconstruct.spec.ts`; a small run note (service must be up).
+### R6.7b — Browser reconstruction E2E (Playwright) — ✅ shipped
+- Done: `e2e/plastiq/reconstruct.spec.ts` — full no-mock browser E2E (open a mesh doc →
+  "Convert to CAD" → client → HTTP → live service → STEP → kernel importStep (real OCCT) →
+  rendered B-rep part, faceCount>0). Verified live; skips when the service is unreachable
+  (CI-safe). Required adding CORS to the service (`main.py`) so the browser can call it
+  cross-origin (+ a CORS preflight test). 
+- (original task notes:)
 - **Test-first:** with the service running (gate the spec on `RECONSTRUCT_URL` reachability so
   CI without it skips), drive the real app: open a mesh document → "Convert to CAD (STEP)" →
   the viewport renders a B-rep part (assert `__plastiqViewport.builtPart` / `faceCount()>0`).

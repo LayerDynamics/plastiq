@@ -15,13 +15,29 @@ from __future__ import annotations
 import asyncio
 import base64
 
+import os
+
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from .jobs import JobState, JobStore
 from .pipeline import reconstruct
 
 app = FastAPI(title="plastiq-reconstruct", version="0.1.0")
+
+# The browser client (apps/plastiq) calls this service cross-origin, so it must send CORS
+# headers. Default permissive for local/self-hosted dev (the service holds no secrets);
+# override with RECONSTRUCT_CORS_ORIGINS (comma-separated) to lock it down.
+_origins_env = os.environ.get("RECONSTRUCT_CORS_ORIGINS", "*")
+_origins = ["*"] if _origins_env.strip() == "*" else [o.strip() for o in _origins_env.split(",") if o.strip()]
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_origins,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 store = JobStore()
 
 
