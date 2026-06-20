@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from math import pi
+from typing import Optional
 
 import numpy as np
 from OCC.Core.BRepBuilderAPI import (
@@ -24,13 +25,14 @@ from OCC.Core.BRepBuilderAPI import (
 )
 from OCC.Core.BRepCheck import BRepCheck_Analyzer
 from OCC.Core.BRepGProp import brepgprop
+from OCC.Core.BRepPrimAPI import BRepPrimAPI_MakeCone, BRepPrimAPI_MakeSphere
 from OCC.Core.gp import gp_Ax2, gp_Ax3, gp_Circ, gp_Cylinder, gp_Dir, gp_Pln, gp_Pnt
 from OCC.Core.GProp import GProp_GProps
-from OCC.Core.TopAbs import TopAbs_SHELL
+from OCC.Core.TopAbs import TopAbs_FACE, TopAbs_SHELL
 from OCC.Core.TopExp import TopExp_Explorer
 from OCC.Core.TopoDS import TopoDS_Shape, topods
 
-from .primitives import CylinderFit
+from .primitives import ConeFit, CylinderFit, SphereFit
 
 
 @dataclass
@@ -41,6 +43,7 @@ class SolidResult:
     free_edges: int
     volume: float
     n_faces: int
+    primitive: Optional[str] = None  # "cylinder" | "sphere" | "cone" when known
 
 
 def _circle_cap(center: np.ndarray, axis: np.ndarray, v: float, radius: float, outward: float):
@@ -89,3 +92,38 @@ def cylinder_solid(fit: CylinderFit, sew_tol: float = 1e-6) -> SolidResult:
     # MakeSolid does NOT validate closure — require valid + no free edges + positive volume.
     is_solid = bool(valid and free == 0 and volume > 0)
     return SolidResult(solid if is_solid else sewn, is_solid, valid, free, volume, 3)
+
+
+def _solid_report(solid: TopoDS_Shape) -> SolidResult:
+    """Validate + measure a BRepPrimAPI solid (sphere/cone) — no sewing needed (these are
+    born closed). Closure is still verified, never assumed."""
+    valid = BRepCheck_Analyzer(solid).IsValid()
+    props = GProp_GProps()
+    brepgprop.VolumeProperties(solid, props)
+    volume = float(props.Mass())
+    n_faces = 0
+    exp = TopExp_Explorer(solid, TopAbs_FACE)
+    while exp.More():
+        n_faces += 1
+        exp.Next()
+    is_solid = bool(valid and volume > 0)
+    return SolidResult(solid, is_solid, valid, 0, volume, n_faces)
+
+
+def sphere_solid(fit: SphereFit) -> SolidResult:
+    """A watertight analytic sphere solid from a sphere fit (BRepPrimAPI handles the seam +
+    poles correctly — a hand-sewn natural-bounds sphere face does not solidify)."""
+    center = np.asarray(fit.center, dtype=float)
+    solid = BRepPrimAPI_MakeSphere(gp_Ax2(gp_Pnt(*center), gp_Dir(0, 0, 1)), fit.radius).Solid()
+    return _solid_report(solid)
+
+
+def cone_solid(fit: ConeFit) -> SolidResult:
+    """A watertight analytic cone solid from a cone fit: BRepPrimAPI cone with the base at
+    `base_center`, the axis pointing base→apex, top radius 0 (a pointed cone)."""
+    base = np.asarray(fit.base_center, dtype=float)
+    axis = np.asarray(fit.axis, dtype=float)  # base → apex
+    solid = BRepPrimAPI_MakeCone(
+        gp_Ax2(gp_Pnt(*base), gp_Dir(*axis)), fit.base_radius, 0.0, fit.height
+    ).Solid()
+    return _solid_report(solid)
