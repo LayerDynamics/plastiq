@@ -9,10 +9,12 @@
 import { useCallback, useRef, useState } from "react";
 import { useAiStore } from "./aiStore.js";
 import { useCadStore } from "../store/store.js";
+import { useProjectsStore } from "../persistence/projectsStore.js";
 import { buildProvider } from "./providers/registry.js";
 import { toProviderSettings, type AiSettings } from "./settings.js";
 import { buildAgentTools } from "./tools/toolDefs.js";
 import { runGeneration } from "./runGeneration.js";
+import { reconstructMesh, stepToImportDocument } from "./reconstruct.js";
 import { UsageMeter, type UsageSnapshot } from "./usage.js";
 import type { BuildProbe, ApplyDocument } from "./tools/buildPart.js";
 import type { MeshProbe } from "./tools/inspectGeometry.js";
@@ -88,8 +90,89 @@ function FirstRunChooser(): React.JSX.Element {
   );
 }
 
+/** Shown when a generated MESH document is open: convert it to editable CAD by sending it
+ * to the reconstruction backend (R6.6) and loading the returned STEP as a B-rep part. */
+function MeshConvertSection(): React.JSX.Element {
+  const [busy, setBusy] = useState(false);
+  const [status, setStatus] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
+
+  const convert = useCallback(async (): Promise<void> => {
+    const doc = useProjectsStore.getState().activeMeshDoc;
+    if (!doc || busy) return;
+    const controller = new AbortController();
+    abortRef.current = controller;
+    setBusy(true);
+    setError(null);
+    setStatus("submitting…");
+    try {
+      const baseURL = useAiStore.getState().settings?.reconstructBaseURL;
+      const result = await reconstructMesh(doc.glb, {
+        ...(baseURL ? { baseURL } : {}),
+        signal: controller.signal,
+        onState: (s) => setStatus(s),
+      });
+      const name = doc.name ?? "Reconstructed mesh";
+      useCadStore.getState().loadDocument(stepToImportDocument(result.step, name));
+      // Switch out of mesh mode: the viewport now renders the new B-rep part as a fresh
+      // untitled parametric document (the original mesh project is left untouched).
+      useProjectsStore.setState({
+        activeMeshDoc: null,
+        currentId: null,
+        currentName: name,
+        status: `converted to CAD — ${result.report.faces_built} face${result.report.faces_built === 1 ? "" : "s"}${result.report.is_solid ? ", solid" : ", shell"}`,
+      });
+      setStatus(null);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+      setStatus(null);
+    } finally {
+      setBusy(false);
+      abortRef.current = null;
+    }
+  }, [busy]);
+
+  return (
+    <div data-testid="mesh-convert" className="space-y-2 text-xs text-[#9ab]">
+      <p>This is a generated mesh. Convert it to an editable B-rep CAD part (STEP) via the reconstruction service.</p>
+      <div className="flex items-center gap-2">
+        <button
+          type="button"
+          data-testid="mesh-convert-run"
+          onClick={() => void convert()}
+          disabled={busy}
+          className="rounded border border-[#3a5a7a] bg-[#14253a] px-2 py-1 text-[#bfe] hover:bg-[#1a2f48] disabled:opacity-40"
+        >
+          {busy ? "Converting…" : "Convert to CAD (STEP)"}
+        </button>
+        {busy && (
+          <button
+            type="button"
+            data-testid="mesh-convert-cancel"
+            onClick={() => abortRef.current?.abort()}
+            className="rounded border border-[#7a3a3a] bg-[#2a1414] px-2 py-1 text-[#fbb] hover:bg-[#341a1a]"
+          >
+            Cancel
+          </button>
+        )}
+        {status && <span className="text-[10px] text-[#789]">{status}</span>}
+      </div>
+      {error && (
+        <p data-testid="mesh-convert-error" className="text-[10px] text-[#fb9]">
+          {error}
+        </p>
+      )}
+      <p className="text-[10px] text-[#678]">
+        Organic shapes reconstruct as dense surfaces; mechanical shapes (flats, holes) convert best.
+      </p>
+    </div>
+  );
+}
+
 export function GenerationPanel(): React.JSX.Element {
   const settings = useAiStore((s) => s.settings);
+  const activeMeshDoc = useProjectsStore((s) => s.activeMeshDoc);
   const [prompt, setPrompt] = useState("");
   const [lines, setLines] = useState<Line[]>([]);
   const [running, setRunning] = useState(false);
@@ -179,7 +262,9 @@ export function GenerationPanel(): React.JSX.Element {
 
   return (
     <div data-testid="generation-panel" className="flex flex-col gap-2 text-xs">
-      {!settings ? (
+      {activeMeshDoc ? (
+        <MeshConvertSection />
+      ) : !settings ? (
         <FirstRunChooser />
       ) : (
         <>

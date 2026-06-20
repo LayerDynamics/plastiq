@@ -90,8 +90,9 @@ automatic reconstruction, not an implementation gap.
   (faceted fallback for holed facets + leftovers). Curved-surface fitting
   (cylinders/spheres/cones → single faces) is the remaining part of R6.4.
 - **R6.5** — BSpline freeform fallback for non-primitive regions.
-- **R6.6** — client `ReconstructionProvider` + "Convert mesh → CAD (STEP)" action →
-  `importStep` → a normal `CadDocument`.
+- **R6.6 (done)** — client `reconstructMesh` (submit/poll) + a "Convert mesh → CAD (STEP)"
+  action in the GenerationPanel → `stepToImportDocument` → the kernel `importStep` feature
+  → an editable `CadDocument` (`apps/plastiq/src/ai/reconstruct.ts`).
 - **R6.7** — server + client tests (unit + real-mesh integration).
 - **R6.8** — deploy + docs.
 

@@ -19,6 +19,9 @@ export interface AiSettings {
   baseURL?: string;
   /** BYO keys by provider key (client-side only). Empty for Ollama / proxy. */
   apiKeys: Record<string, string>;
+  /** Base URL of the self-hosted mesh→B-rep reconstruction service (SPEC-6 R6.6);
+   * absent ⇒ the client default (http://localhost:8000). */
+  reconstructBaseURL?: string;
 }
 
 const DB_NAME = "plastiq-ai";
