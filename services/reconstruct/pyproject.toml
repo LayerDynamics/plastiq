@@ -1,0 +1,19 @@
+[project]
+name = "plastiq-reconstruct"
+version = "0.1.0"
+description = "Mesh→B-rep reconstruction + STEP service for Plastiq (pythonOCC)"
+requires-python = ">=3.11"
+# NOTE: pythonocc-core is conda-forge only (not on PyPI), so the runtime env is created
+# from environment.yml / the Dockerfile, not pip. These entries document the pip-installable
+# deps + pin the pytest config.
+dependencies = [
+  "fastapi",
+  "uvicorn[standard]",
+  "trimesh",
+  "numpy",
+  "pydantic",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]

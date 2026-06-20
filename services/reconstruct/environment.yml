@@ -1,0 +1,17 @@
+# Conda env for the Plastiq reconstruction service. pythonocc-core (OCCT Python bindings)
+# is conda-forge only — this is the source of truth for the runtime env (local + Docker).
+#   mamba env create -f environment.yml   # then: mamba run -n plastiq-reconstruct ...
+name: plastiq-reconstruct
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11
+  - pythonocc-core
+  - trimesh
+  - numpy
+  - fastapi
+  - uvicorn
+  - pydantic
+  - python-multipart
+  - httpx
+  - pytest
