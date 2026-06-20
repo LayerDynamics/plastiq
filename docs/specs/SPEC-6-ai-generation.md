@@ -11,6 +11,21 @@
 
 ## Revision history
 
+- **2026-06-20 (r3, implementation reconciliation):** Two below-the-decisions
+  refinements found during R4.1/R4.2 implementation, recorded here for accuracy (the
+  24 locked decisions are unchanged — decision 20 "parametric OR mesh" still holds):
+  (1) **`MeshBody` + the GLB importer live in the app, not `@plastiq/cad`**, and mesh
+  rendering is **main-thread** (`viewport/buildMesh.ts` → `THREE.Mesh`), bypassing the
+  OCCT worker / `TransferMesh` (which is B-rep-only) — `three` is an app dep, not a
+  kernel dep (decision 24). (2) **A `MeshDoc` stores the model as an inline base64 GLB**
+  (`{ kind:"mesh", name?, glb, source }`) and re-derives geometry via `importGltf` on
+  load (mirroring how `importStep` re-imports STEP text) — **not** a pre-parsed
+  `bodies: MeshBody[]` array plus a separate GLB blob. Reason: `Float32Array`/
+  `Uint32Array` do not survive `JSON.stringify`, so a `bodies` array would break the
+  FR-39 byte-identical round-trip and the sqlite/recovery JSON paths; an inline,
+  self-contained base64 GLB round-trips cleanly and never reaches the localStorage
+  recovery snapshot (mesh docs route to `activeMeshDoc`, not the cad store). FR-16,
+  FR-16a, §6.5, and §7.2 below are updated to match the shipped code.
 - **2026-06-20 (r2):** Resolved all open questions via user decisions. Scope changes
   from r1: vision→parametric moves **into** v1 (user-routed images); a generated mesh
   becomes its **own document kind** (not a body inside a B-rep part — mixing moves out
@@ -250,12 +265,15 @@ Plastiq has the better substrate and should expose it.
 - **FR-15** A `create_mesh` tool produces a mesh from one of three inputs —
   text→image→3D, image→3D, or text→3D — via a user-selected `MeshGenProvider`
   (and `ImageGenProvider` for the text→image stage), and ingests the resulting GLB.
-- **FR-16** `@plastiq/cad` gains a `MeshBody` representation and a GLB/glTF importer
-  (three.js `GLTFLoader`); the worker, transfer protocol, and viewport render mesh
-  bodies.
+- **FR-16** The **app** (`apps/plastiq/src/mesh/`, not `@plastiq/cad`) gains a `MeshBody`
+  representation and a GLB/glTF importer (three.js `GLTFLoader`); a mesh document renders
+  **main-thread** (`viewport/buildMesh.ts` → `THREE.Mesh`), bypassing the OCCT worker and
+  `TransferMesh` (which is B-rep-only). See r3 reconciliation note.
 - **FR-16a** A generated mesh is persisted as a **distinct document kind**
-  (`kind: "mesh"`) via `projectsStore`, holding the mesh bodies + the source GLB blob +
-  generation metadata. It is **not** a feature inside a B-rep `CadDocument`.
+  (`kind: "mesh"`) via `projectsStore`, holding the source GLB **inline as base64** plus
+  generation metadata; geometry is re-derived via `importGltf` on load. It is **not** a
+  feature inside a B-rep `CadDocument`, and **not** a pre-parsed `bodies[]` array (r3
+  note: typed arrays don't survive `JSON.stringify`).
 - **FR-17** The product clearly communicates that creative generation (and cloud vision)
   uses an external service (network + account/key) and is not offline/no-server.
 - **FR-18** Mesh documents are export-capable (GLB at least). B-rep feature operations
@@ -449,10 +467,11 @@ step cap. Because our inspection is structured text (faces/edges with normals), 
   parses GLB/glTF (three.js `GLTFLoader`) into one or more `MeshBody`. This lives in the
   app because `three` is an app dep, not a kernel dep (decision 24).
 - **Document kind:** persistence becomes `kind`-discriminated —
-  `ParametricDoc (CadDocument)` | `MeshDoc { kind:"mesh", bodies: MeshBody[], source:
-  { glbBlobId, mode, providerId, prompt?, imageId? } }`. A generated mesh is a **new
-  mesh document** (decision 20), not a feature in a B-rep part. The GLB blob persists as
-  a project blob so the doc reloads reproducibly. (Touches all store backends —
+  `ParametricDoc (CadDocument)` | `MeshDoc { kind:"mesh", name?, glb /* base64 GLB */,
+  source: { mode, providerId, prompt?, imageId? } }`. A generated mesh is a **new
+  mesh document** (decision 20), not a feature in a B-rep part. The GLB persists **inline
+  as base64** in the document (self-contained, JSON-safe) and geometry is re-derived via
+  `importGltf` on load, so the doc reloads reproducibly. (Touches all store backends —
   `persistence/{types,projectsStore,idb,sqlite,memory}.ts`; back-compat: a doc with no
   `kind` loads as parametric.)
 - **Rendering is main-thread (no worker round-trip):** mesh bodies do **not** go through
@@ -528,8 +547,8 @@ step cap. Because our inspection is structured text (faces/edges with normals), 
 - Parametric parts persist as ordinary `CadDocument` via `projectsStore` — **no schema
   change** for the parametric path.
 - A `kind`-discriminator is added to the persisted document so **mesh documents**
-  (`kind:"mesh"`, bodies + source GLB blob) persist alongside parametric ones
-  (decision 20).
+  (`kind:"mesh"`, inline base64 GLB + generation `source`) persist alongside parametric
+  ones (decision 20).
 
 ### 7.3 Data-shape transform (parametric, incl. edit)
 
