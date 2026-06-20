@@ -23,13 +23,16 @@ import { Section } from "./Section.js";
 import { Assembly, type InstanceBody } from "./Assembly.js";
 import type { DatumPlane } from "@plastiq/cad";
 import { GRID_CENTER, GRID_CELL } from "./colors.js";
-import { buildPart, disposePart, type BuiltPart } from "../viewport/buildMesh.js";
+import { buildPart, buildMeshBody, disposePart, type BuiltPart, type BuiltMeshBody } from "../viewport/buildMesh.js";
 import { applyPlacement, findPlacement, placementFromFeature } from "../viewport/placement.js";
 import { useCadStore } from "../store/store.js";
 import type { TransferMesh } from "../worker/protocol.js";
+import type { MeshBody } from "../mesh/meshBody.js";
 
 interface ViewportGlobal {
   builtPart: BuiltPart | null;
+  /** Number of rendered mesh-document bodies (SPEC-6 R4.2); 0 in the parametric path. */
+  meshBodyCount?: number;
   fitToView?: () => void;
   /** Orient the camera to look along `dir` (target → camera), keeping framing. */
   setView?: (dir: readonly [number, number, number]) => void;
@@ -55,10 +58,12 @@ interface OrbitLike {
 
 export function Scene({
   mesh,
+  meshBodies,
   sketchFrame,
   instances,
 }: {
   mesh: TransferMesh | null;
+  meshBodies: MeshBody[] | null;
   sketchFrame: DatumPlane | null;
   instances: InstanceBody[] | null;
 }): React.JSX.Element {
@@ -82,6 +87,24 @@ export function Scene({
       el.releasePointerCapture = native;
     };
   }, [controls]);
+
+  // A mesh document renders its triangle-soup bodies directly (SPEC-6 R4.2), bypassing
+  // the OCCT B-rep path. Built once per body set; disposed + count published on swap.
+  const builtBodies = useMemo<BuiltMeshBody[] | null>(
+    () => (meshBodies && meshBodies.length > 0 ? meshBodies.map(buildMeshBody) : null),
+    [meshBodies],
+  );
+  useEffect(() => {
+    const vp = ((globalThis as { __plastiqViewport?: ViewportGlobal }).__plastiqViewport ??= {
+      builtPart: null,
+    });
+    vp.meshBodyCount = builtBodies?.length ?? 0;
+    return () => {
+      if (builtBodies) for (const b of builtBodies) b.dispose();
+      const v = (globalThis as { __plastiqViewport?: ViewportGlobal }).__plastiqViewport;
+      if (v) v.meshBodyCount = 0;
+    };
+  }, [builtBodies]);
 
   // Build the renderable part once per tessellation; shared by render + picking +
   // highlight (same object), and published for the test seams. Disposed on swap.
@@ -150,6 +173,32 @@ export function Scene({
       delete vp.setView;
     };
   }, [camera, controls]);
+
+  // A mesh document is display-only triangle geometry (decision 20): render the bodies
+  // with the standard light rig + grid + orbit, but NONE of the B-rep editor surfaces
+  // (picking, gizmos, sections, assembly) — those operate on a B-rep solid this doc has
+  // no equivalent of (FR-16/FR-18: B-rep ops are simply not offered, never a silent no-op).
+  if (builtBodies) {
+    return (
+      <>
+        <ambientLight intensity={0.55} />
+        <directionalLight intensity={1.1} position={[0.3, -0.4, 0.6]} />
+        <directionalLight intensity={0.35} color={0x88aaff} position={[-0.3, 0.3, 0.2]} />
+        <gridHelper args={[0.4, 40, GRID_CENTER, GRID_CELL]} rotation={[Math.PI / 2, 0, 0]} />
+        <group name="mesh-document">
+          {builtBodies.map((b, i) => (
+            <primitive key={i} object={b.mesh} />
+          ))}
+        </group>
+        <OrbitControls
+          makeDefault
+          enableDamping
+          target={[0, 0, 0.02]}
+          mouseButtons={{ LEFT: THREE.MOUSE.ROTATE, MIDDLE: THREE.MOUSE.PAN }}
+        />
+      </>
+    );
+  }
 
   return (
     <>

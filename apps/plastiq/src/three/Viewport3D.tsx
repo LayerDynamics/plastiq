@@ -9,13 +9,16 @@ import { VIEWPORT_BG } from "./colors.js";
 import type { InstanceBody } from "./Assembly.js";
 import type { DatumPlane } from "@plastiq/cad";
 import type { TransferMesh } from "../worker/protocol.js";
+import type { MeshBody } from "../mesh/meshBody.js";
 
 export function Viewport3D({
   mesh,
+  meshBodies,
   sketchFrame,
   instances,
 }: {
   mesh: TransferMesh | null;
+  meshBodies: MeshBody[] | null;
   sketchFrame: DatumPlane | null;
   instances: InstanceBody[] | null;
 }): React.JSX.Element {
@@ -32,7 +35,7 @@ export function Viewport3D({
       style={{ position: "absolute", inset: 0 }}
     >
       <color attach="background" args={[VIEWPORT_BG]} />
-      <Scene mesh={mesh} sketchFrame={sketchFrame} instances={instances} />
+      <Scene mesh={mesh} meshBodies={meshBodies} sketchFrame={sketchFrame} instances={instances} />
     </Canvas>
   );
 }

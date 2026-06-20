@@ -9,9 +9,11 @@
 import { useEffect, useRef, useState } from "react";
 import * as THREE from "three";
 import { useCadStore } from "../store/store.js";
-import { PLACEMENT_TYPE, type CadDocument } from "../store/types.js";
+import { PLACEMENT_TYPE, type CadDocument, type MeshDoc } from "../store/types.js";
 import { GeometryClient } from "../worker/bridge.js";
 import { useProjectsStore } from "../persistence/projectsStore.js";
+import { importGltf } from "../mesh/importGltf.js";
+import type { MeshBody } from "../mesh/meshBody.js";
 import { Viewport3D } from "./Viewport3D.js";
 import { resolveDatumPlane } from "../worker/sketchPlane.js";
 import { createCoalescer } from "./coalesce.js";
@@ -116,8 +118,19 @@ function geometrySignature(s: {
   return JSON.stringify(buildFeatures(s).filter((f) => f.type !== PLACEMENT_TYPE));
 }
 
+/** Decode a base64 GLB to bytes (the MeshDoc stores the model inline; SPEC-6 R4.2). */
+function decodeBase64(b64: string): ArrayBuffer {
+  const bin = atob(b64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return bytes.buffer;
+}
+
 export function Viewport(): React.JSX.Element {
   const [mesh, setMesh] = useState<TransferMesh | null>(null);
+  // The generated mesh document's bodies (SPEC-6 R4.2), re-derived from its inline GLB
+  // via importGltf. Non-null ⇒ the viewport renders a mesh document (B-rep path off).
+  const [meshBodies, setMeshBodies] = useState<MeshBody[] | null>(null);
   // The resolved plane the active sketch is "normal to" (datum or, via the worker,
   // a model face) — drives the ortho sketch camera. null when not sketching.
   const [sketchFrame, setSketchFrame] = useState<DatumPlane | null>(null);
@@ -424,9 +437,37 @@ export function Viewport(): React.JSX.Element {
     };
   }, [setStatus]);
 
+  // Re-derive mesh-document geometry from its inline GLB whenever the open mesh project
+  // changes (SPEC-6 R4.2 / decision 20). A mesh document renders main-thread (importGltf
+  // → MeshBody → buildMeshBody), bypassing the OCCT worker; null ⇒ the parametric path.
+  useEffect(() => {
+    let cancelled = false;
+    const load = (doc: MeshDoc | null): void => {
+      if (!doc) {
+        setMeshBodies(null);
+        return;
+      }
+      void importGltf(decodeBase64(doc.glb))
+        .then((bodies) => {
+          if (!cancelled) setMeshBodies(bodies);
+        })
+        .catch(() => {
+          if (!cancelled) setMeshBodies(null);
+        });
+    };
+    load(useProjectsStore.getState().activeMeshDoc);
+    const unsub = useProjectsStore.subscribe((s, prev) => {
+      if (s.activeMeshDoc !== prev.activeMeshDoc) load(s.activeMeshDoc);
+    });
+    return () => {
+      cancelled = true;
+      unsub();
+    };
+  }, []);
+
   return (
     <>
-      <Viewport3D mesh={mesh} sketchFrame={sketchFrame} instances={instances} />
+      <Viewport3D mesh={mesh} meshBodies={meshBodies} sketchFrame={sketchFrame} instances={instances} />
       {/* The in-scene 3D view cube (viewCube.gizmo, top-right) owns click-to-orient;
           explicit named views + Fit live in the sidebar's Inspect panel (ViewControl
           + the fit-view action). No floating panel sits over the cube any more. */}
