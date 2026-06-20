@@ -40,15 +40,27 @@ def test_box_with_hole_volume_matches_box_minus_cylinder():
     assert abs(res.volume - expected) / expected < 0.02
 
 
+def test_box_with_boss_reconstructs_via_boolean_fuse():
+    # A protruding cylindrical boss (additive) → Fuse(box, cylinder); the base box is taken
+    # from the dominant planar faces, so the boss top doesn't inflate it.
+    m = _load("box_with_boss.glb")
+    res = reconstruct_csg(np.asarray(m.vertices), np.asarray(m.faces, dtype=np.int64))
+    assert res is not None
+    assert res.is_solid and res.is_valid
+    assert res.volume > 0.04 * 0.03 * 0.01  # strictly more than the bare box (material added)
+    assert abs(res.volume - abs(float(m.volume))) / abs(float(m.volume)) < 0.03
+
+
 def test_auto_pipeline_classifies_box_with_hole_as_csg():
-    res = reconstruct(_glb("box_with_hole.glb"))
-    assert res.report.method == "csg"
-    assert res.report.is_solid
-    assert res.step.startswith("ISO-10303-21")
+    for fixture in ("box_with_hole.glb", "box_with_boss.glb"):
+        res = reconstruct(_glb(fixture))
+        assert res.report.method == "csg", fixture
+        assert res.report.is_solid
+        assert res.step.startswith("ISO-10303-21")
 
 
 def test_csg_rejects_out_of_scope_parts():
-    # A boss (additive), a pure cylinder, and a stepped shaft are NOT box-with-holes.
-    for name in ("box_with_boss.glb", "cylinder.glb", "stepped_shaft.glb"):
+    # A pure cylinder and a stepped shaft are NOT box+feature CSG — their own paths handle them.
+    for name in ("cylinder.glb", "stepped_shaft.glb"):
         m = _load(name)
         assert reconstruct_csg(np.asarray(m.vertices), np.asarray(m.faces, dtype=np.int64)) is None, name

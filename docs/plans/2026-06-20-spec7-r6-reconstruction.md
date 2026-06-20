@@ -85,8 +85,12 @@ Deterministic (NFR-2); never drops geometry (faceted fallback, NFR-1).
   faceted solid (already valid).
 - **Done when:** freeform faces build + validate; no regression; honest scope noted.
 
-### R6.4b-iv — General CSG (additive bosses, multi-primitive, non-axis bases) — planned
-- **Files:** extend `app/csg.py`; `tests/test_csg.py` (add `box_with_boss`).
+### R6.4b-iv — General CSG (additive bosses, multi-primitive) — ✅ shipped (bosses)
+- Done: `app/csg.py` now does box (∪ bosses) (− holes) — base box from the dominant planar
+  faces (boss top doesn't inflate it), bosses `Fuse` then holes `Cut`, volume-validated. A
+  box-with-boss → 9-face solid (`tests/test_csg.py`). Remaining future: non-axis-aligned
+  bases, non-cylindrical features, nested/repeated trees.
+- (original task, for the remaining future scope:)
 - **Test-first:** a box-with-cylindrical-boss GLB → `BRepAlgoAPI_Fuse(box, cylinder)` → valid
   solid, volume = box + boss; then a part with both a hole and a boss; assert volume match.
   Red first.
