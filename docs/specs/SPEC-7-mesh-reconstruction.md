@@ -184,8 +184,8 @@ data:{ step }}], params:{} }`.
 | **R6.2** | Mesh cleanup (trimesh repair) | ✅ shipped |
 | **R6.3/R6.4** | Planar facet fitting → trimmed analytic faces | ✅ shipped |
 | **R6.6** | Browser client (submit/poll + importStep) | ✅ shipped |
-| **R6.4a** | **Cylinder spike (GATE):** detect+fit one cylinder; rebuild caps as circle-bounded faces SHARING the cylinder's exact rim edge (plane∩cylinder); sew; **assert `is_solid` survives** the analytic collapse. If it drops to shell, finish shared-edge handling before proceeding. | planned |
-| **R6.4b** | Sphere + cone detection/fit + analytic faces + topology tail; report `curved_faces`. | planned |
+| **R6.4a** | **Cylinder spike (GATE) — ✅ shipped.** Deterministic cylinder fit (`app/primitives.py` — Gauss-map axis via face-normal SVD + Kåsa circle from vertices) + analytic 3-face solid (`app/curved_faces.py` — lateral + two circle caps sharing the exact rim circles) + region detection (`app/detect.py` — dominant normal-cluster axis). **Gate passes:** `is_solid` survives the analytic collapse (`test_cylinder.py`: watertight, free_edges=0, exact volume); a contrast test documents the crux (polygon caps → shell). | ✅ shipped |
+| **R6.4b** | Integrate cylinder fitting into the general pipeline (cylinders within arbitrary meshes) + the shared-edge **topology tail** between cylinder and adjacent planar faces (intersect/snap); add sphere + cone detection/fit; report `curved_faces`. | planned |
 | **R6.5** | Freeform (MakeFilling/GeomPlate) for smooth non-primitive regions; faceted fallback. | planned |
 | **R6.7** | Tests: keyed client↔server integration (`reconstruct.integration.test.ts`, skips without `RECONSTRUCT_URL`) + reconstruction **E2E** (app → running service → STEP → editable part) + existing live-OCCT pytest. | planned |
 | **R6.8** | Deploy (Railway/Docker, prebuilt image) | deferred (D-6) |

@@ -87,8 +87,13 @@ automatic reconstruction, not an implementation gap.
 - **R6.2 (done)** — mesh cleanup (weld/repair/winding/normals/fill-holes via trimesh).
 - **R6.3 (done)** — planar facet segmentation (coplanar+adjacent triangles via trimesh/scipy).
 - **R6.4 (done, planar)** — collapse each planar facet into a single trimmed analytic face
-  (faceted fallback for holed facets + leftovers). Curved-surface fitting
-  (cylinders/spheres/cones → single faces) is the remaining part of R6.4.
+  (faceted fallback for holed facets + leftovers).
+- **R6.4a (done)** — cylinder spike (GATE): deterministic cylinder fit (`primitives.py`) +
+  analytic 3-face solid sharing the exact rim circles (`curved_faces.py`) + region detection
+  (`detect.py`). Proves `is_solid` survives the analytic collapse; faceted caps regress to a
+  shell (the shared-edge crux). See SPEC-7.
+- **R6.4b** — integrate cylinder fitting into the general pipeline + shared-edge topology tail
+  (cylinder↔plane), then sphere + cone.
 - **R6.5** — BSpline freeform fallback for non-primitive regions.
 - **R6.6 (done)** — client `reconstructMesh` (submit/poll) + a "Convert mesh → CAD (STEP)"
   action in the GenerationPanel → `stepToImportDocument` → the kernel `importStep` feature
