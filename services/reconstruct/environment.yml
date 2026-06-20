@@ -9,6 +9,8 @@ dependencies:
   - pythonocc-core
   - trimesh
   - numpy
+  - scipy        # trimesh graph backend (facet/coplanar-region detection — R6.3)
+  - networkx
   - fastapi
   - uvicorn
   - pydantic

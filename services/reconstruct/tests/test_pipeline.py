@@ -28,9 +28,9 @@ def test_step_output_is_a_real_step_file():
     assert "END-ISO-10303-21" in step
 
 
-def test_reconstruct_glb_end_to_end():
+def test_reconstruct_glb_end_to_end_faceted():
     glb = trimesh.creation.box(extents=(0.03, 0.02, 0.01)).export(file_type="glb")
-    res = reconstruct(glb, "glb")
+    res = reconstruct(glb, "glb", method="faceted")
     assert res.report.method == "faceted"
     assert res.report.is_valid
     assert res.report.is_solid

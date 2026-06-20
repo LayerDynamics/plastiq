@@ -10,16 +10,23 @@ roadmap below) is not feasible in the browser's OCCT-WASM build. It reverses two
 decisions on purpose (see `docs/specs/SPEC-6-ai-generation.md` §13 and the no-server
 identity); the parametric path stays fully client-side and unchanged.
 
-## What it does today (R6.1 + R6.2)
+## What it does today (R6.1–R6.4)
 
-A complete, working **faceted** reconstruction with mesh cleanup: the mesh is first welded
-and repaired (R6.2 — coincident vertices merged, degenerate/duplicate faces dropped,
-winding/normals fixed, small holes filled), then every triangle becomes a planar OCCT
-face, sewn (`BRepBuilderAPI_Sewing`) into a shell and — when watertight — a solid, then
-written to STEP (`STEPControl_Writer`). It always yields a valid B-rep STEP from any
-triangle soup. It is **not yet** a clean parametric reconstruction: a faceted solid has
-one B-rep face per triangle (dense, large STEP, not nicely editable). Collapsing fitted
-regions into single analytic surfaces is the next milestones (see Roadmap).
+Reconstruction runs in two selectable methods; **`fitted` is the default**:
+
+- **`fitted`** (R6.3/R6.4) — clean the mesh, group coplanar+adjacent triangles into
+  **facets**, and collapse each planar facet into a **single trimmed OCCT planar face**
+  (built from the facet's boundary loop). Facets with holes (multiple loops) or that fail
+  to build, and triangles in no facet, fall back to per-triangle faces — nothing is
+  dropped. All faces are sewn into a shell and a solid when watertight. This is a clean,
+  compact B-rep for the flat regions of a part (e.g. a box → 6 faces, not 12 triangles).
+- **`faceted`** (R6.1) — the per-triangle baseline; always produces a valid B-rep from any
+  triangle soup. Useful as a fallback / comparison.
+
+Both run after mesh cleanup (R6.2 — weld coincident vertices, drop degenerate/duplicate
+faces, fix winding/normals, fill small holes) and write STEP via `STEPControl_Writer`.
+**Curved-surface fitting** (cylinders/spheres/cones → single analytic faces) is the next
+milestone; until then curved regions arrive as their planar sub-facets.
 
 Coordinates are passed through unscaled (SI metres), matching `@plastiq/cad`'s STEP I/O
 (`packages/cad/src/io/index.ts`), so the output imports back with consistent units.
@@ -33,8 +40,9 @@ Coordinates are passed through unscaled (SI metres), matching `@plastiq/cad`'s S
 | `GET`  | `/jobs/{id}/status` | `{ id, state, error? }` — `queued`/`running`/`completed`/`failed` |
 | `GET`  | `/jobs/{id}/result` | `{ step, report }` when completed (409 while running, 500 if failed) |
 
-`report` = `{ triangles_in, triangles_used, faces_built, is_solid, is_valid, method }`
-(`triangles_in` = raw, `triangles_used` = after cleanup).
+`report` = `{ triangles_in, triangles_used, faces_built, planar_faces, is_solid, is_valid,
+method }` — `triangles_in` = raw, `triangles_used` = after cleanup, `planar_faces` =
+facets collapsed into single trimmed faces (0 for `faceted`).
 
 ## Run locally
 
@@ -77,9 +85,10 @@ automatic reconstruction, not an implementation gap.
 
 - **R6.1 (done)** — service skeleton + faceted mesh→STEP.
 - **R6.2 (done)** — mesh cleanup (weld/repair/winding/normals/fill-holes via trimesh).
-- **R6.3** — RANSAC primitive segmentation (planes / cylinders / cones / spheres).
-- **R6.4** — replace fitted regions with single analytic trimmed faces (the clean,
-  editable reconstruction; collapses thousands of triangles per region).
+- **R6.3 (done)** — planar facet segmentation (coplanar+adjacent triangles via trimesh/scipy).
+- **R6.4 (done, planar)** — collapse each planar facet into a single trimmed analytic face
+  (faceted fallback for holed facets + leftovers). Curved-surface fitting
+  (cylinders/spheres/cones → single faces) is the remaining part of R6.4.
 - **R6.5** — BSpline freeform fallback for non-primitive regions.
 - **R6.6** — client `ReconstructionProvider` + "Convert mesh → CAD (STEP)" action →
   `importStep` → a normal `CadDocument`.
