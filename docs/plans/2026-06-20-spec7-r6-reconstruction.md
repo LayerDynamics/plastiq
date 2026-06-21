@@ -71,12 +71,20 @@ Deterministic (NFR-2); never drops geometry (faceted fallback, NFR-1).
 
 ---
 
-### R6.5 — Freeform (BSpline / filling) for smooth non-primitive regions — ✅ shipped (standalone)
+### R6.5 — Freeform (BSpline / filling) for smooth non-primitive regions — ✅ shipped (builder + bounded topology integration)
 - Done: `app/freeform.py` (`freeform_face` + `freeform_region_face` via `BRepOffsetAPI_MakeFilling`;
   interior constraints subsampled so the fill stays tractable) + `tests/test_freeform.py`.
-  Builder is standalone — NOT wired into the fitted sewing path: MakeFilling respects the
-  boundary only within ~1e-4 (< the 1e-6 sew gate), so joining a solid needs per-region
-  tolerance / the topology tail. Closed organic blobs keep the valid faceted solid.
+- **Topology integration (the bounded, verified increment):** `freeform_capped_solid` — a
+  freeform cap whose boundary IS the same straight mesh polyline its planar neighbours use
+  joins a WATERTIGHT solid: the coincident boundaries sew at 1e-6 (`NbFreeEdges()==0` →
+  `BRepBuilderAPI_MakeSolid` → `breplib.OrientClosedSolid`), volume-validated (box + bulged
+  freeform top → a 6-face solid; rejects an open boundary → `None`). This is freeform really
+  joining a solid — the case the earlier "standalone-only" note thought needed the full tail.
+- **Honest remaining scope:** the *general* problem is still open — the `auto` pipeline does
+  NOT yet segment freeform-vs-planar regions in an arbitrary organic mesh and feed their
+  shared boundaries here; and the **analytic-rim sagitta case** (a smooth fitted arc replacing
+  a faceted polyline neighbour, deviating ≫ the sew gate — §D-3) still needs the
+  surface-intersection tail. Arbitrary closed organic blobs keep the valid faceted solid.
 - (original task, for the future topology-tail integration:)
 - **Test-first:** a smooth bounded region's points + boundary → a valid `TopoDS_Face`;
   assert the face is valid and within tolerance of the sample points. Red first.

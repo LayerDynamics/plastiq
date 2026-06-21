@@ -7,6 +7,12 @@ mesh polyline — the SAME edges its planar/faceted neighbors use — so it sews
 (coincident boundaries), while the interior is a smooth surface rather than triangles. Regions
 with holes (multiple boundary loops) or that fail to fill are left to the faceted fallback, so
 nothing is dropped. Deterministic (no RNG).
+
+`freeform_capped_solid` takes that coincident-boundary property to its conclusion: planar side
+faces + a freeform cap that shares their rim sew into a WATERTIGHT solid (the bounded case
+where freeform genuinely joins a solid). The harder open cases — segmenting freeform vs planar
+regions in an arbitrary organic mesh, and the analytic-rim *sagitta* mismatch (a smooth arc vs
+a faceted polyline neighbour) — still need the surface-intersection topology tail (SPEC-7).
 """
 
 from __future__ import annotations
@@ -16,15 +22,26 @@ from typing import Optional
 import numpy as np
 import trimesh
 from OCC.Core.BRep import BRep_Tool
-from OCC.Core.BRepBuilderAPI import BRepBuilderAPI_MakeEdge
+from OCC.Core.BRepBuilderAPI import (
+    BRepBuilderAPI_MakeEdge,
+    BRepBuilderAPI_MakeFace,
+    BRepBuilderAPI_MakePolygon,
+    BRepBuilderAPI_MakeSolid,
+    BRepBuilderAPI_Sewing,
+)
 from OCC.Core.BRepCheck import BRepCheck_Analyzer
+from OCC.Core.BRepGProp import brepgprop
+from OCC.Core.BRepLib import breplib
 from OCC.Core.BRepOffsetAPI import BRepOffsetAPI_MakeFilling
 from OCC.Core.GeomAbs import GeomAbs_C0
 from OCC.Core.GeomAPI import GeomAPI_ProjectPointOnSurf
+from OCC.Core.GProp import GProp_GProps
 from OCC.Core.gp import gp_Pnt
-from OCC.Core.TopAbs import TopAbs_FACE
+from OCC.Core.TopAbs import TopAbs_FACE, TopAbs_SHELL
 from OCC.Core.TopExp import TopExp_Explorer
 from OCC.Core.TopoDS import TopoDS_Face, topods
+
+from .curved_faces import SolidResult
 
 
 _MAX_INTERIOR = 10  # MakeFilling degrades/fails with many point constraints
@@ -88,6 +105,80 @@ def freeform_region_face(mesh: trimesh.Trimesh, face_indices: np.ndarray) -> Opt
     if len(interior) > _MAX_INTERIOR:
         interior = interior[:: max(1, len(interior) // _MAX_INTERIOR)][:_MAX_INTERIOR]
     return freeform_face(boundary, interior if len(interior) else None)
+
+
+def _planar_face(loop: np.ndarray) -> Optional[TopoDS_Face]:
+    """A planar polygon face from an ordered boundary loop."""
+    pts = np.asarray(loop, dtype=float)
+    if len(pts) >= 2 and np.allclose(pts[0], pts[-1]):
+        pts = pts[:-1]
+    if len(pts) < 3:
+        return None
+    poly = BRepBuilderAPI_MakePolygon()
+    for p in pts:
+        poly.Add(gp_Pnt(float(p[0]), float(p[1]), float(p[2])))
+    poly.Close()
+    if not poly.IsDone():
+        return None
+    mk = BRepBuilderAPI_MakeFace(poly.Wire(), True)
+    return mk.Face() if mk.IsDone() else None
+
+
+def _faces_in(shape) -> int:
+    n = 0
+    exp = TopExp_Explorer(shape, TopAbs_FACE)
+    while exp.More():
+        n += 1
+        exp.Next()
+    return n
+
+
+def freeform_capped_solid(
+    side_loops: list[np.ndarray],
+    cap_boundary: np.ndarray,
+    cap_interior: Optional[np.ndarray] = None,
+    sew_tol: float = 1e-6,
+) -> Optional[SolidResult]:
+    """Build a WATERTIGHT solid from planar side faces + ONE freeform cap that SHARES its
+    boundary with them (SPEC-7 R6.5 topology integration). This is the case where freeform
+    really joins a solid: the cap's boundary is the same mesh polyline (straight segments) the
+    planar neighbours use, so the boundaries coincide and sewing at a tight tolerance closes
+    the shell — `NbFreeEdges()==0`. (Contrast the open sagitta case: a smooth ANALYTIC rim —
+    e.g. a circle — deviates from a faceted neighbour's polyline by the sagitta, far above the
+    sew tolerance; that still needs the surface-intersection tail and is out of scope.)
+
+    Returns a volume-/closure-validated SolidResult, or None if it can't close (caller keeps
+    the faceted solid — nothing is dropped). Deterministic."""
+    faces: list[TopoDS_Face] = []
+    for loop in side_loops:
+        f = _planar_face(loop)
+        if f is None:
+            return None
+        faces.append(f)
+    cap = freeform_face(cap_boundary, cap_interior)
+    if cap is None:
+        return None
+    faces.append(cap)
+
+    sew = BRepBuilderAPI_Sewing(sew_tol)
+    for f in faces:
+        sew.Add(f)
+    sew.Perform()
+    if sew.NbFreeEdges() != 0:
+        return None  # not watertight → caller falls back (no fragile output)
+    shape = sew.SewedShape()
+    if shape.ShapeType() != TopAbs_SHELL:
+        return None
+    solid = BRepBuilderAPI_MakeSolid(topods.Shell(shape)).Solid()
+    breplib.OrientClosedSolid(solid)  # ensure outward orientation (positive volume)
+    if not BRepCheck_Analyzer(solid).IsValid():
+        return None
+    props = GProp_GProps()
+    brepgprop.VolumeProperties(solid, props)
+    volume = float(props.Mass())
+    if volume <= 0:
+        return None
+    return SolidResult(solid, True, True, 0, volume, _faces_in(solid), primitive="freeform")
 
 
 def face_max_point_error(face: TopoDS_Face, points: np.ndarray) -> float:

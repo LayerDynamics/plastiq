@@ -36,11 +36,14 @@ reconstruction that volume-validates, and always falls back so nothing is droppe
 5. **`faceted`** — the per-triangle baseline; always produces a valid B-rep from any
    triangle soup. Selectable as `method="faceted"` (fallback / comparison).
 
-A freeform builder (`freeform.py` — `BRepOffsetAPI_MakeFilling`) exists standalone for
-smooth non-primitive regions; it is not yet sewn into a solid (the topology tail — see the
-honest caveat). Cleanup (weld coincident vertices, drop degenerate/duplicate faces, fix
-winding/normals, fill small holes — `cleanup.py`) runs first; STEP is written via
-`STEPControl_Writer`.
+A freeform builder (`freeform.py` — `BRepOffsetAPI_MakeFilling`) handles smooth non-primitive
+regions. A freeform cap whose boundary is the same straight mesh polyline its planar
+neighbours use **does join a watertight solid** (`freeform_capped_solid` — coincident
+boundaries sew at 1e-6 → `MakeSolid`, volume-validated). Still future: segmenting
+freeform-vs-planar regions in an arbitrary organic mesh inside `auto`, and the analytic-rim
+sagitta case (a smooth fitted arc vs a faceted polyline neighbour — see the honest caveat).
+Cleanup (weld coincident vertices, drop degenerate/duplicate faces, fix winding/normals, fill
+small holes — `cleanup.py`) runs first; STEP is written via `STEPControl_Writer`.
 
 Coordinates are passed through unscaled (SI metres), matching `@plastiq/cad`'s STEP I/O
 (`packages/cad/src/io/index.ts`), so the output imports back with consistent units.
@@ -126,9 +129,11 @@ automatic reconstruction, not an implementation gap.
   be axis-aligned **or arbitrarily rotated** (an oriented frame is derived from the part's own
   planar normals), and multiple features are supported. Non-cylindrical features and arbitrary
   nested CSG trees remain future (SPEC-7).
-- **R6.5 (done, standalone)** — freeform faces via `BRepOffsetAPI_MakeFilling` (`freeform.py`).
-  Builds + validates standalone; sewing a freeform face into a solid needs the topology tail,
-  so closed organic blobs still keep the valid faceted solid (see the honest caveat).
+- **R6.5 (done — builder + bounded topology integration)** — freeform faces via
+  `BRepOffsetAPI_MakeFilling` (`freeform.py`), and `freeform_capped_solid`: a freeform cap
+  whose boundary is the shared straight mesh polyline joins a watertight solid (sews at 1e-6,
+  volume-validated). Still future: arbitrary-mesh freeform/planar segmentation in `auto`, and
+  the analytic-rim sagitta case — closed organic blobs keep the valid faceted solid.
 - **R6.6 (done)** — client `reconstructMesh` (submit/poll) + a "Convert to CAD (STEP)"
   action in the GenerationPanel → `stepToImportDocument` → the kernel `importStep` feature
   → an editable `CadDocument` (`apps/plastiq/src/ai/reconstruct.ts`).

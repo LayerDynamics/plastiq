@@ -3,7 +3,12 @@
 import numpy as np
 import trimesh
 
-from app.freeform import face_max_point_error, freeform_face, freeform_region_face
+from app.freeform import (
+    face_max_point_error,
+    freeform_capped_solid,
+    freeform_face,
+    freeform_region_face,
+)
 
 
 def test_freeform_face_from_boundary_and_interior_point():
@@ -43,3 +48,41 @@ def test_freeform_region_face_none_for_closed_region():
     # the whole sphere has no single boundary loop → not fillable as one patch → None
     m = trimesh.creation.icosphere(subdivisions=2, radius=0.02)
     assert freeform_region_face(m, np.arange(len(m.faces))) is None
+
+
+# --- R6.5 topology integration: a freeform cap that JOINS a watertight solid -----------------
+
+
+def test_freeform_capped_solid_is_watertight_and_volume_matches():
+    # An open box (bottom + 4 walls) capped by a freeform top whose boundary is the SAME square
+    # rim the walls use (coincident boundaries) → sews into a watertight SOLID (NbFreeEdges==0),
+    # not just a shell. This is the case where freeform really joins a solid (R6.5).
+    a, h, bump = 0.04, 0.01, 0.004
+    base = [(0, 0, 0), (a, 0, 0), (a, a, 0), (0, a, 0)]
+    top = [(0, 0, h), (a, 0, h), (a, a, h), (0, a, h)]
+    side_loops = [np.array(base, dtype=float)]  # bottom
+    for i in range(4):  # 4 walls, each sharing a top rim edge with the cap
+        side_loops.append(np.array([base[i], base[(i + 1) % 4], top[(i + 1) % 4], top[i]], dtype=float))
+    cap_boundary = np.array(top, dtype=float)
+    cap_interior = np.array([[a / 2, a / 2, h + bump]], dtype=float)  # a raised apex → a bulged cap
+
+    res = freeform_capped_solid(side_loops, cap_boundary, cap_interior)
+    assert res is not None
+    assert res.is_solid and res.is_valid
+    assert res.n_faces == 6  # bottom + 4 walls + freeform cap
+    box_vol = a * a * h
+    # The bulged cap adds material above the box top → strictly more than the bare box, and
+    # bounded by the box + its bounding prism over the bump.
+    assert box_vol < res.volume < box_vol + a * a * bump
+
+
+def test_freeform_capped_solid_rejects_open_boundary():
+    # Missing a wall → the rim can't close → NbFreeEdges>0 → None (no fragile output).
+    a, h = 0.04, 0.01
+    base = [(0, 0, 0), (a, 0, 0), (a, a, 0), (0, a, 0)]
+    top = [(0, 0, h), (a, 0, h), (a, a, h), (0, a, h)]
+    side_loops = [np.array(base, dtype=float)]
+    for i in range(3):  # only 3 of 4 walls → an open side
+        side_loops.append(np.array([base[i], base[(i + 1) % 4], top[(i + 1) % 4], top[i]], dtype=float))
+    res = freeform_capped_solid(side_loops, np.array(top, dtype=float), np.array([[a / 2, a / 2, h + 0.004]]))
+    assert res is None
