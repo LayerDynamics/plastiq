@@ -355,12 +355,14 @@ apps/plastiq/src/ai/
   aiStore.ts             # conversation, status, settings, usage (persisted per project)
   GenerationPanel.tsx    # side-panel UI
   CommandPalette.tsx     # quick-prompt + action search (reuses actions/registry)
+  SettingsPanel.tsx      # full provider/model picker + base-URL/proxy/service URLs + key + preflight warning (FR-4/FR-5b)
   settings.ts            # provider/key storage (IndexedDB), proxy-ready indirection
   visionRoute.ts         # attachment routing: parametric (vision) vs creative (FR-10a/b)
 
 apps/plastiq/src/mesh/   # top-level, NOT under ai/ (used by viewport + persistence too)
   meshBody.ts            # MeshBody type + helpers (in the APP — three is an app dep)
   importGltf.ts          # GLB/glTF → MeshBody via three.js GLTFLoader (main-thread)
+  exportGlb.ts           # mesh document's inline base64 GLB → .glb download (FR-18)
 
 apps/plastiq/src/viewport/
   buildMesh.ts           # buildMeshBody: MeshBody → THREE.Mesh (main-thread render)
@@ -414,7 +416,9 @@ step cap. Because our inspection is structured text (faces/edges with normals), 
   `mm`/`deg`), producing the SI `CadDocument`. `toAuthoringDoc(cad)` is the inverse
   (`toMm`/`toDeg`), used to hand the model the current part for **edit mode** (FR-6a).
 - Validation runs **before** `loadDocument`. On failure, the structured zod error is the
-  `build_part` tool result; the agent retries (cap: default 4, tunable).
+  `build_part` tool result; the agent self-corrects on the next turn. *(Shipped: there is
+  no separate validation-retry counter — corrections are bounded by the single agent **step
+  cap**, default **12** (`agentRunner.ts` `maxSteps`), not the "4" the draft suggested.)*
 - Apply is **atomic**: the new document is validated and built off to the side
   (`GeometryClient.build`) before it replaces the live store, so a bad generation never
   corrupts the current part (FR-21).
@@ -620,7 +624,9 @@ no swallowed errors; a failed generation is a no-op on the live document.
 
 ### R4 — Creative path (mesh documents) + vision
 
-- **R4.1** `MeshBody` type + `importGltf` (GLTFLoader) in `@plastiq/cad`.
+- **R4.1** `MeshBody` type + `importGltf` (GLTFLoader) — **shipped in `apps/plastiq/src/mesh/`,
+  NOT `@plastiq/cad`** (per the r3 reconciliation note + decision 24: `three` is an app dep, so the
+  kernel stays three-free and mesh rendering is main-thread). This R4.1 wording predates that note.
 - **R4.2** `kind`-discriminated persistence + **mesh document kind**; worker/transfer/viewport rendering of mesh bodies; B-rep-op-unavailable UX (FR-16, FR-16a, FR-18, decision 20).
 - **R4.3** `ImageGenProvider` + `MeshGenProvider` (`fal.ts`: Tripo/Meshy/Hunyuan, selectable) + `create_mesh` (3 modes) + paid-job confirm gate (FR-15, FR-17, FR-18a).
 - **R4.4** Vision routing: image attach + route toggle; vision→`build_part` on capable models; disable + guide otherwise (FR-10a, FR-10b).

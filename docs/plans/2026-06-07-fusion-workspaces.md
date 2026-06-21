@@ -2,7 +2,11 @@
 
 **Date:** 2026-06-07
 **Branch:** `feat/workspaces` (off `main`, staged commits, PR at the end)
-**Status:** Planned — awaiting execution
+**Status:** ✅ SHIPPED (verified 2026-06-21) — workspace state in `store/store.ts`
+(`workspace` + `setWorkspace`); ribbon UI in `apps/plastiq/src/ribbon/`
+(`ribbonConfig.ts`, `WorkspacePanel.tsx`, `WorkspaceSwitcher.tsx`, `TopBar.tsx`,
+`ActionButton.tsx`, `useActionContext.ts`); shared `actions/registry.ts`; E2E
+`e2e/plastiq/workspaces.spec.ts`. (Header was stale "Planned"; corrected during the SPEC-6/7 audit.)
 
 ---
 

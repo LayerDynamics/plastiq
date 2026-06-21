@@ -2,7 +2,11 @@
 
 **Date:** 2026-06-07
 **Branch:** `feat/canvas-context-menu` (off `main`, staged commits, single PR at the end)
-**Status:** Planned — awaiting execution
+**Status:** ✅ SHIPPED (verified 2026-06-21) — `apps/plastiq/src/three/contextmenu/`
+(`contextSelection.ts`, `config.ts`, `contextOptions.ts`, `contextMenuProvider.ts`,
+`ContextMenuView.tsx`) + `three/gizmos/rightClickDropdown.gizmo.tsx`; E2E
+`e2e/plastiq/context-menu.spec.ts`. The action catalog is shared with the ribbon via
+`actions/registry.ts`. (Header was stale "Planned"; corrected during the SPEC-6/7 audit.)
 
 ---
 
