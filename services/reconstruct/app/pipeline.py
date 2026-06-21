@@ -32,6 +32,7 @@ class ReconstructionReport:
     is_valid: bool
     method: str
     primitive: Optional[str] = None  # "cylinder" | "sphere" | "cone" when method=="auto" hit one
+    freeform_faces: int = 0  # curved regions collapsed into freeform faces (R6.5), method="fitted"
 
 
 @dataclass
@@ -121,11 +122,12 @@ def reconstruct(
         report = ReconstructionReport(
             triangles_in=raw_triangles,
             triangles_used=used,
-            faces_built=fitted.planar_faces + fitted.triangle_faces,
+            faces_built=fitted.planar_faces + fitted.triangle_faces + fitted.freeform_faces,
             planar_faces=fitted.planar_faces,
             is_solid=fitted.is_solid,
             is_valid=fitted.is_valid,
             method="fitted",
+            freeform_faces=fitted.freeform_faces,
         )
         shape = fitted.shape
     else:

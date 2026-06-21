@@ -30,20 +30,25 @@ reconstruction that volume-validates, and always falls back so nothing is droppe
    (bosses) then `BRepAlgoAPI_Cut` (through-holes), OCCT computing the shared edges
    (InverseCSG paradigm), volume-validated (`csg.py`).
 4. **`fitted`** — group coplanar+adjacent triangles into **facets**, collapse each planar
-   facet into a **single trimmed OCCT planar face** (faceted fallback for holed facets +
-   leftover triangles). A clean, compact B-rep for flat regions (a box → 6 faces, not 12
-   triangles). Selectable directly as `method="fitted"`.
+   facet into a **single trimmed OCCT planar face**, AND collapse each single-loop non-planar
+   region into one **freeform face** (R6.5; accuracy- and volume-guarded), with a per-triangle
+   faceted fallback for holed facets, closed regions, and leftovers. A clean, compact B-rep
+   for flat *and* smooth regions (a box → 6 faces; a domed box → flat sides + a freeform cap).
+   Selectable directly as `method="fitted"`.
 5. **`faceted`** — the per-triangle baseline; always produces a valid B-rep from any
    triangle soup. Selectable as `method="faceted"` (fallback / comparison).
 
-A freeform builder (`freeform.py` — `BRepOffsetAPI_MakeFilling`) handles smooth non-primitive
-regions. A freeform cap whose boundary is the same straight mesh polyline its planar
-neighbours use **does join a watertight solid** (`freeform_capped_solid` — coincident
-boundaries sew at 1e-6 → `MakeSolid`, volume-validated). Still future: segmenting
-freeform-vs-planar regions in an arbitrary organic mesh inside `auto`, and the analytic-rim
-sagitta case (a smooth fitted arc vs a faceted polyline neighbour — see the honest caveat).
-Cleanup (weld coincident vertices, drop degenerate/duplicate faces, fix winding/normals, fill
-small holes — `cleanup.py`) runs first; STEP is written via `STEPControl_Writer`.
+Freeform faces (`freeform.py` — `BRepOffsetAPI_MakeFilling`) handle smooth non-primitive
+regions, and the **`fitted` path now uses them**: each connected non-planar region with a
+single boundary loop is collapsed into ONE freeform face (sharing the mesh-polyline boundary
+of its planar/faceted neighbours), guarded by a per-region accuracy gate and a post-assembly
+volume check (rebuilds faceted-only if freeform breaks closure/volume). A domed box becomes a
+freeform-capped solid instead of hundreds of triangles. Honest limits: a CLOSED region (no
+boundary loop — e.g. a whole organic blob) can't be one filled patch → stays faceted; and the
+analytic-rim sagitta case (a smooth fitted arc vs a faceted polyline neighbour — see the
+caveat) still needs the surface-intersection tail. Cleanup (weld coincident vertices, drop
+degenerate/duplicate faces, fix winding/normals, fill small holes — `cleanup.py`) runs first;
+STEP is written via `STEPControl_Writer`.
 
 Coordinates are passed through unscaled (SI metres), matching `@plastiq/cad`'s STEP I/O
 (`packages/cad/src/io/index.ts`), so the output imports back with consistent units.
@@ -79,8 +84,10 @@ mamba run -n plastiq-reconstruct python -m pytest -q
 Covers (real OCCT, no mocks): cleanup; planar `fitted` and `faceted`; the deterministic
 cylinder / sphere / cone fits → watertight analytic solids; `auto` classification (and that
 a box is not misread as a primitive); surface-of-revolution stepped shafts; CSG box−hole /
-box+boss solids; standalone freeform faces; and the full `POST /reconstruct` → poll →
-`result` flow over the ASGI app (incl. a CORS preflight) with real GLB fixtures.
+box+boss / rotated-base / two-hole solids; freeform faces + `freeform_capped_solid` + the
+**fitted/auto freeform integration** (a domed box → a freeform-capped solid, `freeform_faces>0`);
+and the full `POST /reconstruct` → poll → `result` flow over the ASGI app (incl. a CORS
+preflight) with real GLB fixtures.
 
 ## Docker / deploy
 
@@ -129,11 +136,12 @@ automatic reconstruction, not an implementation gap.
   be axis-aligned **or arbitrarily rotated** (an oriented frame is derived from the part's own
   planar normals), and multiple features are supported. Non-cylindrical features and arbitrary
   nested CSG trees remain future (SPEC-7).
-- **R6.5 (done — builder + bounded topology integration)** — freeform faces via
-  `BRepOffsetAPI_MakeFilling` (`freeform.py`), and `freeform_capped_solid`: a freeform cap
-  whose boundary is the shared straight mesh polyline joins a watertight solid (sews at 1e-6,
-  volume-validated). Still future: arbitrary-mesh freeform/planar segmentation in `auto`, and
-  the analytic-rim sagitta case — closed organic blobs keep the valid faceted solid.
+- **R6.5 (done — builders + pipeline integration)** — freeform faces via
+  `BRepOffsetAPI_MakeFilling` (`freeform.py`; interior-count ladder for accuracy), and
+  `freeform_capped_solid` proving freeform joins a watertight solid. **Wired into `fitted`/
+  `auto`:** each single-loop non-planar region collapses to one freeform face, accuracy- and
+  volume-guarded (faceted rebuild on failure). Honest limits: closed regions (no boundary
+  loop) stay faceted; the analytic-rim sagitta case still needs the surface-intersection tail.
 - **R6.6 (done)** — client `reconstructMesh` (submit/poll) + a "Convert to CAD (STEP)"
   action in the GenerationPanel → `stepToImportDocument` → the kernel `importStep` feature
   → an editable `CadDocument` (`apps/plastiq/src/ai/reconstruct.ts`).

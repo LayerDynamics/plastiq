@@ -9,10 +9,12 @@ with holes (multiple boundary loops) or that fail to fill are left to the facete
 nothing is dropped. Deterministic (no RNG).
 
 `freeform_capped_solid` takes that coincident-boundary property to its conclusion: planar side
-faces + a freeform cap that shares their rim sew into a WATERTIGHT solid (the bounded case
-where freeform genuinely joins a solid). The harder open cases — segmenting freeform vs planar
-regions in an arbitrary organic mesh, and the analytic-rim *sagitta* mismatch (a smooth arc vs
-a faceted polyline neighbour) — still need the surface-intersection topology tail (SPEC-7).
+faces + a freeform cap that shares their rim sew into a WATERTIGHT solid. The same idea is
+wired into the reconstruction pipeline by `fitted.py`, which collapses each single-loop
+non-planar mesh region into one freeform face alongside the planar facets. Genuinely open
+cases remain: a CLOSED region has no boundary loop so it can't be one filled patch (a whole
+organic blob stays faceted — a fundamental limit), and the analytic-rim *sagitta* mismatch (a
+smooth fitted arc vs a faceted polyline neighbour) still needs the surface-intersection tail.
 """
 
 from __future__ import annotations
@@ -44,7 +46,12 @@ from OCC.Core.TopoDS import TopoDS_Face, topods
 from .curved_faces import SolidResult
 
 
-_MAX_INTERIOR = 10  # MakeFilling degrades/fails with many point constraints
+# MakeFilling accuracy improves markedly with more interior constraints (a sphere cap:
+# ~2600 µm error at 10 points vs ~70 µm with the full set), but it is NOT monotonically
+# robust — some counts fail to build while neighbours succeed — and it slows on large sets.
+# So `freeform_region_face` tries a LADDER of counts (richest first, capped for tractability)
+# and returns the first face that builds, giving the best accuracy that's also robust.
+_INTERIOR_LADDER = (200, 100, 50, 25, 10)
 
 
 def _first_face(shape) -> Optional[TopoDS_Face]:
@@ -100,11 +107,16 @@ def freeform_region_face(mesh: trimesh.Trimesh, face_indices: np.ndarray) -> Opt
     region_v = mesh.vertices[np.unique(mesh.faces[face_indices])]
     bset = {tuple(np.round(p, 7)) for p in boundary}
     interior = np.array([v for v in region_v if tuple(np.round(v, 7)) not in bset], dtype=float)
-    # MakeFilling is an energy-minimizing fill that fails / degrades with many point
-    # constraints; subsample the interior to a tractable, deterministic set (evenly strided).
-    if len(interior) > _MAX_INTERIOR:
-        interior = interior[:: max(1, len(interior) // _MAX_INTERIOR)][:_MAX_INTERIOR]
-    return freeform_face(boundary, interior if len(interior) else None)
+    if len(interior) == 0:
+        return freeform_face(boundary, None)
+    # Try the richest (most accurate) interior set first, stepping down on a MakeFilling
+    # failure (deterministic even strides). Returns the most accurate face that builds.
+    for k in _INTERIOR_LADDER:
+        sub = interior if len(interior) <= k else interior[:: max(1, len(interior) // k)][:k]
+        face = freeform_face(boundary, sub)
+        if face is not None:
+            return face
+    return None
 
 
 def _planar_face(loop: np.ndarray) -> Optional[TopoDS_Face]:

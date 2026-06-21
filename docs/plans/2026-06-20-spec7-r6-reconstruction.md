@@ -71,20 +71,24 @@ Deterministic (NFR-2); never drops geometry (faceted fallback, NFR-1).
 
 ---
 
-### R6.5 — Freeform (BSpline / filling) for smooth non-primitive regions — ✅ shipped (builder + bounded topology integration)
-- Done: `app/freeform.py` (`freeform_face` + `freeform_region_face` via `BRepOffsetAPI_MakeFilling`;
-  interior constraints subsampled so the fill stays tractable) + `tests/test_freeform.py`.
-- **Topology integration (the bounded, verified increment):** `freeform_capped_solid` — a
-  freeform cap whose boundary IS the same straight mesh polyline its planar neighbours use
-  joins a WATERTIGHT solid: the coincident boundaries sew at 1e-6 (`NbFreeEdges()==0` →
-  `BRepBuilderAPI_MakeSolid` → `breplib.OrientClosedSolid`), volume-validated (box + bulged
-  freeform top → a 6-face solid; rejects an open boundary → `None`). This is freeform really
-  joining a solid — the case the earlier "standalone-only" note thought needed the full tail.
-- **Honest remaining scope:** the *general* problem is still open — the `auto` pipeline does
-  NOT yet segment freeform-vs-planar regions in an arbitrary organic mesh and feed their
-  shared boundaries here; and the **analytic-rim sagitta case** (a smooth fitted arc replacing
-  a faceted polyline neighbour, deviating ≫ the sew gate — §D-3) still needs the
-  surface-intersection tail. Arbitrary closed organic blobs keep the valid faceted solid.
+### R6.5 — Freeform (BSpline / filling) for smooth non-primitive regions — ✅ shipped (builders + pipeline integration)
+- Done: `app/freeform.py` (`freeform_face` + `freeform_region_face` via `BRepOffsetAPI_MakeFilling`)
+  + `tests/test_freeform.py`. Interior constraints use a **count ladder** (richest first, step
+  down on a MakeFilling failure): on a sphere cap that cut the surface error from ~2.6 mm (the
+  old fixed 10-point cap) to ~0.35 mm, robustly (some counts fail; the ladder skips them).
+- **Topology integration:** `freeform_capped_solid` — planar side faces + a freeform cap that
+  shares their rim sew into a WATERTIGHT solid (coincident boundaries → `NbFreeEdges()==0` →
+  `MakeSolid` → `breplib.OrientClosedSolid`, volume-validated; rejects an open boundary).
+- **WIRED into the pipeline:** `fitted_shape` now collapses each connected non-planar region
+  with a single boundary loop into ONE freeform face (sharing the mesh-polyline boundary of its
+  planar/faceted neighbours), guarded by a per-region accuracy gate AND a post-assembly volume
+  check that rebuilds faceted-only if freeform breaks closure/volume. So `auto` (→ `fitted`)
+  reconstructs a domed box as a freeform-capped solid (`report.freeform_faces>0`, ~10× fewer
+  faces than faceted; `test_freeform.py`).
+- **Honest remaining limits:** a CLOSED region (no boundary loop — a whole organic blob) can't
+  be one filled patch → stays faceted (a fundamental limit of single-patch filling, not a bug);
+  and the **analytic-rim sagitta case** (a smooth fitted arc replacing a faceted polyline
+  neighbour, deviating ≫ the sew gate — §D-3) still needs the surface-intersection tail.
 - (original task, for the future topology-tail integration:)
 - **Test-first:** a smooth bounded region's points + boundary → a valid `TopoDS_Face`;
   assert the face is valid and within tolerance of the sample points. Red first.
