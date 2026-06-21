@@ -1,8 +1,17 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { useCadStore } from "../store/store.js";
+import { useProjectsStore } from "../persistence/projectsStore.js";
+import type { MeshDoc } from "../store/types.js";
 import { CONTEXT_ACTIONS } from "../three/contextmenu/config.js";
 import type { ContextTarget } from "../three/contextmenu/contextSelection.js";
-import { ACTIONS, runAction } from "./registry.js";
+import { ACTIONS, meshMode, runAction } from "./registry.js";
+
+const MESH_DOC: MeshDoc = {
+  kind: "mesh",
+  name: "Generated",
+  glb: "Z2xURg==",
+  source: { mode: "text3d", providerId: "fal:tripo" },
+};
 
 function makeTarget(over: Partial<ContextTarget> = {}): ContextTarget {
   return {
@@ -72,10 +81,14 @@ describe("action registry — composition", () => {
     }
   });
 
-  it("derives context actions WITHOUT drift (shared run reference)", () => {
+  it("derives context actions WITHOUT drift (shared run; enabled delegates to the source)", () => {
     const ctx = CONTEXT_ACTIONS.find((a) => a.id === "extrude")!;
+    // `run` is the SAME reference (no copy-paste drift).
     expect(ACTIONS["extrude"]!.run).toBe(ctx.run);
-    expect(ACTIONS["extrude"]!.enabled).toBe(ctx.enabled);
+    // `enabled` is now wrapped by the mesh-mode gate (FR-18) but DELEGATES to the source
+    // predicate when no mesh document is open — so there is still no logic drift.
+    const t = makeTarget();
+    expect(ACTIONS["extrude"]!.enabled(t)).toBe(ctx.enabled(t));
   });
 });
 
@@ -129,5 +142,52 @@ describe("action registry — run() invokes the real store action", () => {
     expect(ACTIONS["export-gltf"]!.enabled(makeTarget())).toBe(false);
     expect(() => runAction("export-gltf", makeTarget())).not.toThrow();
     expect(useCadStore.getState().status).not.toMatch(/export/);
+  });
+});
+
+describe("action registry — mesh mode disables B-rep ops (FR-18)", () => {
+  beforeEach(() => {
+    useCadStore.getState().reset();
+    useProjectsStore.setState({ activeMeshDoc: MESH_DOC });
+  });
+  afterEach(() => useProjectsStore.setState({ activeMeshDoc: null }));
+
+  it("meshMode() reflects the open mesh document", () => {
+    expect(meshMode()).toBe(true);
+    useProjectsStore.setState({ activeMeshDoc: null });
+    expect(meshMode()).toBe(false);
+  });
+
+  it("B-rep feature ops + parametric export/import are disabled on a mesh document", () => {
+    const t = makeTarget();
+    for (const id of [
+      "loft",
+      "sweep",
+      "mirror",
+      "linearPattern",
+      "circularPattern",
+      "transform",
+      "import-step",
+      "export-gltf",
+      "export-step",
+      "export-iges",
+      "insert-instance",
+    ]) {
+      expect(ACTIONS[id]!.enabled(t)).toBe(false);
+    }
+  });
+
+  it("a disabled B-rep action is a no-op when run on a mesh document", () => {
+    runAction("loft", makeTarget());
+    runAction("transform", makeTarget());
+    expect(useCadStore.getState().features).toHaveLength(0);
+  });
+
+  it("editor-state actions (undo/redo, selection mode) stay available in mesh mode", () => {
+    // selection mode is always allowed
+    expect(ACTIONS["selmode-edge"]!.enabled(makeTarget())).toBe(true);
+    // undo still follows the history predicate (not mesh-gated), here with one feature
+    useCadStore.getState().addFeature({ type: "extrude", params: { height: 0.02 } });
+    expect(ACTIONS["undo"]!.enabled(makeTarget())).toBe(true);
   });
 });

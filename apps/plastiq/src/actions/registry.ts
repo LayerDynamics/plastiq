@@ -9,6 +9,7 @@
 // greys via `enabled` — it never uses the context menu's `visible`.
 
 import { useCadStore } from "../store/store.js";
+import { useProjectsStore } from "../persistence/projectsStore.js";
 import { booleanBodyFeature, loftFeature, sweepFeature } from "../viewport/dressup.js";
 import type { Profile } from "../sketch/profile.js";
 import type { SelectionMode } from "../store/types.js";
@@ -284,11 +285,39 @@ const CONTEXT_DEFS: Record<string, ActionDef> = Object.fromEntries(
   ]),
 );
 
-/** Every action by id — context-menu actions + ribbon-only actions. */
-export const ACTIONS: Record<string, ActionDef> = {
-  ...CONTEXT_DEFS,
-  ...Object.fromEntries(RIBBON_ONLY.map((a) => [a.id, a])),
-};
+/** True when a generated MESH document is open. In that mode the live document is a
+ * triangle mesh, not a B-rep CadDocument, so B-rep feature operations and the parametric
+ * STEP/IGES/glTF export are no-ops — SPEC-6 FR-18 requires the UI to reflect that rather
+ * than offer them. (Mesh documents get their own GLB export in the GenerationPanel.) */
+export const meshMode = (): boolean => useProjectsStore.getState().activeMeshDoc != null;
+
+/** Actions that remain meaningful while a mesh document is open: editor-state only, not
+ * B-rep feature operations. An ALLOWLIST (not a blocklist) so any action added later is
+ * disabled in mesh mode by default — exactly the FR-18 "no silent no-op" guarantee. */
+const MESH_SAFE_IDS: ReadonlySet<string> = new Set([
+  "undo",
+  "redo",
+  "selmode-face",
+  "selmode-edge",
+  "selmode-vertex",
+  "selmode-body",
+]);
+
+/** Augment a parametric/B-rep action so it is disabled while a mesh document is open. */
+function gateForMeshMode(a: ActionDef): ActionDef {
+  if (MESH_SAFE_IDS.has(a.id)) return a;
+  const base = a.enabled;
+  return { ...a, enabled: (ctx) => !meshMode() && base(ctx) };
+}
+
+/** Every action by id — context-menu actions + ribbon-only actions, each gated so B-rep
+ * operations + parametric export are unavailable on a mesh document (FR-18). */
+export const ACTIONS: Record<string, ActionDef> = Object.fromEntries(
+  [...Object.values(CONTEXT_DEFS), ...RIBBON_ONLY].map((a) => {
+    const gated = gateForMeshMode(a);
+    return [gated.id, gated];
+  }),
+);
 
 /** Run an action by id against a resolved target, honouring `enabled`. */
 export function runAction(id: string, ctx: ContextTarget): void {

@@ -14,9 +14,11 @@ import { buildProvider } from "./providers/registry.js";
 import { toProviderSettings, type AiSettings } from "./settings.js";
 import { runGeneration } from "./runGeneration.js";
 import { reconstructMesh, stepToImportDocument } from "./reconstruct.js";
+import { exportMeshGlb } from "../mesh/exportGlb.js";
 import { buildMeshGenDeps, meshGenConfigured } from "./meshGenDeps.js";
 import { buildTurnTools, buildCreateMeshDeps, buildSeam, type TurnToolsDeps } from "./agentTurn.js";
 import { PaidJobConfirmModal, type PendingConfirm } from "./PaidJobConfirmModal.js";
+import { SettingsPanel } from "./SettingsPanel.js";
 import { planAttachmentRoute, type AttachmentRoute } from "./visionRoute.js";
 import { UsageMeter, type UsageSnapshot } from "./usage.js";
 import { createMesh } from "./tools/createMesh.js";
@@ -101,6 +103,14 @@ function FirstRunChooser(): React.JSX.Element {
           Use
         </button>
       </div>
+      {/* Advanced: OpenAI / other OpenAI-compatible, a custom model, a base URL, or a
+          hosted proxy — the full configuration surface on first run too (FR-5a/FR-5b). */}
+      <details data-testid="ai-setup-advanced" className="text-[10px] text-[#678]">
+        <summary className="cursor-pointer select-none">Other provider / advanced…</summary>
+        <div className="mt-1">
+          <SettingsPanel />
+        </div>
+      </details>
       <p className="text-[10px] text-[#678]">
         Keys stay in your browser (IndexedDB) and are sent only to the provider you choose.
       </p>
@@ -174,6 +184,21 @@ function MeshConvertSection(): React.JSX.Element {
             Cancel
           </button>
         )}
+        {/* FR-18: a mesh document is export-capable (GLB). The parametric export commands
+            export the B-rep CadDocument via the worker and don't apply here, so a mesh doc
+            gets its own binary GLB download straight from the inline base64 model. */}
+        <button
+          type="button"
+          data-testid="mesh-export-glb"
+          disabled={busy}
+          onClick={() => {
+            const doc = useProjectsStore.getState().activeMeshDoc;
+            if (doc) exportMeshGlb(doc.glb, doc.name ?? "mesh");
+          }}
+          className="rounded border border-[#2a3444] bg-[#10141c] px-2 py-1 text-[#cde] hover:bg-[#16202c] disabled:opacity-40"
+        >
+          Export GLB
+        </button>
         {status && <span className="text-[10px] text-[#789]">{status}</span>}
       </div>
       {error && (
@@ -545,6 +570,15 @@ export function GenerationPanel(): React.JSX.Element {
             </div>
           )}
           <CreativeKeyField />
+          {/* Full provider/model/base-URL/key configuration (FR-4/FR-5/FR-5b) — collapsed
+              by default so the prompt stays the focus; the first-run chooser only sets the
+              minimum, this is where the curated model picker + proxy/service URLs live. */}
+          <details data-testid="ai-settings" className="text-[10px] text-[#678]">
+            <summary className="cursor-pointer select-none">⚙ Provider settings</summary>
+            <div className="mt-1">
+              <SettingsPanel />
+            </div>
+          </details>
         </>
       )}
     </div>
