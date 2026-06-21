@@ -9,6 +9,7 @@ import { useCadStore } from "./store/store.js";
 import { useSketchStore } from "./sketch/sketchStore.js";
 import { useProjectsStore } from "./persistence/projectsStore.js";
 import { useAiStore } from "./ai/aiStore.js";
+import { installAiTestSeam } from "./ai/testSeam.js";
 import { defaultDocument } from "./store/seed.js";
 import "./index.css";
 
@@ -30,6 +31,8 @@ useCadStore.getState().loadDocument(defaultDocument());
 (globalThis as { __cadStore?: typeof useCadStore }).__cadStore = useCadStore;
 (globalThis as { __projectsStore?: typeof useProjectsStore }).__projectsStore = useProjectsStore;
 (globalThis as { __aiStore?: typeof useAiStore }).__aiStore = useAiStore;
+// Model-free AI tool seam (__plastiqAi) for the deterministic pipeline E2E (R2.6/R5.2).
+installAiTestSeam();
 
 const root = document.getElementById("root");
 if (!root) throw new Error("CAD Studio: #root element missing");
