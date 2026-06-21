@@ -5,28 +5,42 @@ shape and exports it as **STEP**, so the creative path's output can become edita
 geometry that round-trips through `@plastiq/cad`'s `importStep`.
 
 This is a **server** (Python + [pythonOCC]) — a deliberate departure from Plastiq's
-otherwise no-server design — because OCCT surface fitting (RANSAC primitive detection,
-roadmap below) is not feasible in the browser's OCCT-WASM build. It reverses two SPEC-6
-decisions on purpose (see `docs/specs/SPEC-6-ai-generation.md` §13 and the no-server
-identity); the parametric path stays fully client-side and unchanged.
+otherwise no-server design — because OCCT surface fitting and analytic-solid construction
+are not feasible in the browser's trimmed OCCT-WASM build. It reverses two SPEC-6 decisions
+on purpose (see `docs/specs/SPEC-6-ai-generation.md` §13 and the no-server identity); the
+parametric path stays fully client-side and unchanged. The reconstruction work is specified
+in its own milestone — see **[`docs/specs/SPEC-7-mesh-reconstruction.md`](../../docs/specs/SPEC-7-mesh-reconstruction.md)**
+and the plan in `docs/plans/2026-06-20-spec7-r6-reconstruction.md`.
 
-## What it does today (R6.1–R6.4)
+All detection and fitting are **deterministic** (SPEC-7 NFR-2): a normal-cluster /
+Gauss-map axis with closed-form least-squares primitive fits — **no RANSAC** (randomised
+fitters break reproducibility). The same mesh always reconstructs to the same B-rep.
 
-Reconstruction runs in two selectable methods; **`fitted` is the default**:
+## What it does today
 
-- **`fitted`** (R6.3/R6.4) — clean the mesh, group coplanar+adjacent triangles into
-  **facets**, and collapse each planar facet into a **single trimmed OCCT planar face**
-  (built from the facet's boundary loop). Facets with holes (multiple loops) or that fail
-  to build, and triangles in no facet, fall back to per-triangle faces — nothing is
-  dropped. All faces are sewn into a shell and a solid when watertight. This is a clean,
-  compact B-rep for the flat regions of a part (e.g. a box → 6 faces, not 12 triangles).
-- **`faceted`** (R6.1) — the per-triangle baseline; always produces a valid B-rep from any
-  triangle soup. Useful as a fallback / comparison.
+The default method is **`auto`**: after mesh cleanup it tries, in order, the cleanest
+reconstruction that volume-validates, and always falls back so nothing is dropped:
 
-Both run after mesh cleanup (R6.2 — weld coincident vertices, drop degenerate/duplicate
-faces, fix winding/normals, fill small holes) and write STEP via `STEPControl_Writer`.
-**Curved-surface fitting** (cylinders/spheres/cones → single analytic faces) is the next
-milestone; until then curved regions arrive as their planar sub-facets.
+1. **single analytic primitive** — the whole mesh is one **cylinder / sphere / cone** →
+   one watertight analytic solid (`detect.py` + `curved_faces.py`, box-safe shape gates).
+2. **surface of revolution** — a turned part (stepped shaft, chamfered / capped cylinder)
+   → a section profile revolved with `BRepPrimAPI_MakeRevol` into one analytic solid,
+   volume-validated (`revolution.py`).
+3. **CSG booleans** — an axis-aligned box with cylindrical features → `BRepAlgoAPI_Fuse`
+   (bosses) then `BRepAlgoAPI_Cut` (through-holes), OCCT computing the shared edges
+   (InverseCSG paradigm), volume-validated (`csg.py`).
+4. **`fitted`** — group coplanar+adjacent triangles into **facets**, collapse each planar
+   facet into a **single trimmed OCCT planar face** (faceted fallback for holed facets +
+   leftover triangles). A clean, compact B-rep for flat regions (a box → 6 faces, not 12
+   triangles). Selectable directly as `method="fitted"`.
+5. **`faceted`** — the per-triangle baseline; always produces a valid B-rep from any
+   triangle soup. Selectable as `method="faceted"` (fallback / comparison).
+
+A freeform builder (`freeform.py` — `BRepOffsetAPI_MakeFilling`) exists standalone for
+smooth non-primitive regions; it is not yet sewn into a solid (the topology tail — see the
+honest caveat). Cleanup (weld coincident vertices, drop degenerate/duplicate faces, fix
+winding/normals, fill small holes — `cleanup.py`) runs first; STEP is written via
+`STEPControl_Writer`.
 
 Coordinates are passed through unscaled (SI metres), matching `@plastiq/cad`'s STEP I/O
 (`packages/cad/src/io/index.ts`), so the output imports back with consistent units.
@@ -41,8 +55,10 @@ Coordinates are passed through unscaled (SI metres), matching `@plastiq/cad`'s S
 | `GET`  | `/jobs/{id}/result` | `{ step, report }` when completed (409 while running, 500 if failed) |
 
 `report` = `{ triangles_in, triangles_used, faces_built, planar_faces, is_solid, is_valid,
-method }` — `triangles_in` = raw, `triangles_used` = after cleanup, `planar_faces` =
-facets collapsed into single trimmed faces (0 for `faceted`).
+method, primitive? }` — `triangles_in` = raw, `triangles_used` = after cleanup,
+`planar_faces` = facets collapsed into single trimmed faces (0 unless `method="fitted"`),
+`method` = the path taken (`cylinder`/`sphere`/`cone`/`revolution`/`csg`/`fitted`/`faceted`),
+`primitive` = the analytic kind when `auto` matched one (else absent).
 
 ## Run locally
 
@@ -57,9 +73,11 @@ mamba run -n plastiq-reconstruct uvicorn app.main:app --port 8000
 mamba run -n plastiq-reconstruct python -m pytest -q
 ```
 
-Covers: a watertight cube → valid STEP **solid**; an open mesh → valid **shell**;
-degenerate triangles skipped; and the full `POST /reconstruct` → poll → `result` flow over
-the ASGI app with a real GLB.
+Covers (real OCCT, no mocks): cleanup; planar `fitted` and `faceted`; the deterministic
+cylinder / sphere / cone fits → watertight analytic solids; `auto` classification (and that
+a box is not misread as a primitive); surface-of-revolution stepped shafts; CSG box−hole /
+box+boss solids; standalone freeform faces; and the full `POST /reconstruct` → poll →
+`result` flow over the ASGI app (incl. a CORS preflight) with real GLB fixtures.
 
 ## Docker / deploy
 
@@ -81,7 +99,7 @@ milestones they reconstruct mostly as dense freeform/faceted faces. Mechanical-l
 meshes (flats, holes, fillets) reconstruct far better. This is a fundamental limit of
 automatic reconstruction, not an implementation gap.
 
-## Roadmap (milestone R6)
+## Roadmap (milestone R6 — full detail in SPEC-7)
 
 - **R6.1 (done)** — service skeleton + faceted mesh→STEP.
 - **R6.2 (done)** — mesh cleanup (weld/repair/winding/normals/fill-holes via trimesh).
@@ -91,19 +109,25 @@ automatic reconstruction, not an implementation gap.
 - **R6.4a (done)** — cylinder spike (GATE): deterministic cylinder fit (`primitives.py`) +
   analytic 3-face solid sharing the exact rim circles (`curved_faces.py`) + region detection
   (`detect.py`). Proves `is_solid` survives the analytic collapse; faceted caps regress to a
-  shell (the shared-edge crux). See SPEC-7.
+  shell (the shared-edge crux). See SPEC-7 §D-3.
 - **R6.4b (done)** — sphere + cone fits/solids + **auto single-primitive classification**
   (`detect.try_single_primitive`, default `method="auto"`, box-safe shape gates), and
   **surface-of-revolution** mixed parts (`revolution.py` — stepped shafts / chamfered /
   capped cylinders → one analytic revolved solid, volume-validated).
-- **R6.4b-iii (done, bounded)** — non-coaxial mixed parts via **CSG booleans** (`csg.py` —
-  InverseCSG paradigm): axis-aligned box − cylindrical through-holes via `BRepAlgoAPI_Cut`
-  (OCCT computes the shared edges), volume-validated. General arbitrary CSG trees remain future.
-- **R6.5** — BSpline freeform fallback for non-primitive regions.
-- **R6.6 (done)** — client `reconstructMesh` (submit/poll) + a "Convert mesh → CAD (STEP)"
+- **R6.4b-iii/iv (done, bounded)** — mixed parts via **CSG booleans** (`csg.py` — InverseCSG
+  paradigm): axis-aligned box, fuse cylindrical bosses, cut cylindrical through-holes
+  (`BRepAlgoAPI_Fuse`/`Cut`, OCCT computes shared edges), volume-validated. Non-axis-aligned
+  bases, non-cylindrical features, and arbitrary nested CSG trees remain future (SPEC-7).
+- **R6.5 (done, standalone)** — freeform faces via `BRepOffsetAPI_MakeFilling` (`freeform.py`).
+  Builds + validates standalone; sewing a freeform face into a solid needs the topology tail,
+  so closed organic blobs still keep the valid faceted solid (see the honest caveat).
+- **R6.6 (done)** — client `reconstructMesh` (submit/poll) + a "Convert to CAD (STEP)"
   action in the GenerationPanel → `stepToImportDocument` → the kernel `importStep` feature
   → an editable `CadDocument` (`apps/plastiq/src/ai/reconstruct.ts`).
-- **R6.7** — server + client tests (unit + real-mesh integration).
-- **R6.8** — deploy + docs.
+- **R6.7 (done)** — server tests (real-OCCT pytest) + client↔server integration test (keyed
+  on `RECONSTRUCT_URL`) + a no-mock browser E2E (`e2e/plastiq/reconstruct.spec.ts`, gated on
+  the service being reachable; CORS added to `main.py` so the browser can call cross-origin).
+- **R6.8 (deferred, local-only)** — the Dockerfile + `environment.yml` build/run locally
+  (below); a hosted deploy is descoped for now (SPEC-7 decision D-6).
 
 [pythonOCC]: https://github.com/tpaviot/pythonocc-core

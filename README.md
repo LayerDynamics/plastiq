@@ -1,22 +1,34 @@
 # Plastiq
 
 **Plastiq** is an interactive, parametric, web based **CAD editor that runs
-entirely in the browser** — no server. Sketch a 2D profile, build an ordered
+entirely in the browser**. Sketch a 2D profile, build an ordered
 feature history (extrude / revolve / cut / loft / sweep / fillet / chamfer /
 shell / draft / pattern / mirror / boolean), select faces/edges/vertices in 3D,
 assemble component instances with mates and joints, persist projects to an
 in-browser SQLite store with crash recovery, and **simulate the result under
 gravity in a real physics engine** — all client-side.
 
+It also has **AI generation** (SPEC-6): describe a part in natural language and a
+model authors it through a tool-using agent (`build_part` / `inspect_geometry`),
+can edit the open part, and runs from a side panel or a ⌘/Ctrl-K command palette.
+Providers are bring-your-own — **local Ollama** (no key, offline) or **Anthropic
+Claude** — so the editor itself stays serverless; only the model call leaves the
+browser, to the endpoint you choose. A creative path turns text/image prompts into
+mesh bodies via cloud 3D-gen, and those meshes can be reconstructed into editable
+B-rep STEP solids by an **optional, self-hosted** reconstruction service
+([`services/reconstruct`](services/reconstruct), Python + pythonOCC — see
+[SPEC-7](docs/specs/SPEC-7-mesh-reconstruction.md)).
+
 ## Architecture
 
 Plastiq is a pnpm workspace of one app and two owned packages:
 
 ```text
-apps/plastiq   React + Zustand + Tailwind + three.js editor (the front end)
-packages/cad      @plastiq/cad — the parametric CAD kernel
-packages/sim      @plastiq/sim — the pluggable physics layer
-e2e/plastiq    no-mock Playwright end-to-end tests
+apps/plastiq        React + Zustand + Tailwind + three.js editor (the front end)
+packages/cad           @plastiq/cad — the parametric CAD kernel
+packages/sim           @plastiq/sim — the pluggable physics layer
+services/reconstruct   optional Python + pythonOCC mesh→B-rep (STEP) service (SPEC-7)
+e2e/plastiq         no-mock Playwright end-to-end tests
 ```
 
 - **`@plastiq/cad`** — a parametric B-rep kernel built directly on

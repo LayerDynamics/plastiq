@@ -157,6 +157,30 @@ export function Welcome(): React.JSX.Element | null {
 
           <section>
             <h2 className="mb-2 text-xs font-bold uppercase tracking-wide text-[#7fb4ff]">
+              Generate with AI
+            </h2>
+            <ul className="list-disc space-y-1 pl-5 text-[13px] leading-snug text-[#9ab]">
+              <li>
+                Open the <b>Generate (AI)</b> panel (left sidebar) or press <b>Ctrl/⌘ + K</b> for
+                the command palette, then describe a part — e.g. “a 40×20×10&nbsp;mm bracket with a
+                5&nbsp;mm fillet on the top edges”. The model builds it and you can keep editing by
+                asking for changes.
+              </li>
+              <li>
+                Pick a provider on first run: <b>local Ollama</b> (no key, offline) or{" "}
+                <b>Anthropic Claude</b>. Keys stay in your browser. Attach an image to use as a
+                reference (vision model) or to generate a mesh from it.
+              </li>
+              <li>
+                Cloud 3D/image generation is <b>paid</b> and always asks you to confirm first; a
+                generated mesh can be <b>converted to editable CAD</b> when the reconstruction
+                service is running.
+              </li>
+            </ul>
+          </section>
+
+          <section>
+            <h2 className="mb-2 text-xs font-bold uppercase tracking-wide text-[#7fb4ff]">
               Keyboard &amp; mouse
             </h2>
             <div className="grid grid-cols-1 gap-x-8 sm:grid-cols-2">
@@ -168,6 +192,7 @@ export function Welcome(): React.JSX.Element | null {
               <Key keys="Scroll" action="Zoom to cursor" />
               <Key keys="Ctrl/⌘ + Shift + Z" action="Redo" />
               <Key keys="Right-click" action="Context menu" />
+              <Key keys="Ctrl/⌘ + K" action="Command palette / AI prompt" />
             </div>
           </section>
         </div>

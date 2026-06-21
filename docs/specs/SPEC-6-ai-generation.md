@@ -707,7 +707,14 @@ decision 16 / FR-10a (user-routed, in v1).
 - Hosted proxy with auth + billing (client is proxy-ready; service is a follow-on).
 - **Mixing mesh bodies and B-rep in one document** (separate kinds in v1 — decision 20).
 - AI-driven assemblies/mates; multi-part scenes from one prompt.
-- Mesh→B-rep reconstruction (so mesh bodies could feed B-rep features).
+- ~~Mesh→B-rep reconstruction (so mesh bodies could feed B-rep features).~~ **Reversed
+  (2026-06-20):** now in scope as a **separate, optional, self-hosted service**
+  (`services/reconstruct`, Python + pythonOCC) specified in
+  **[SPEC-7](SPEC-7-mesh-reconstruction.md)** — the "Convert to CAD (STEP)" action sends a
+  mesh document to it and imports the returned STEP as an editable `CadDocument`. The
+  parametric path stays fully client-side; the service is a deliberate, opt-in departure
+  from the no-server identity (it does not feed mesh bodies *into* B-rep features — it
+  replaces a mesh document with a reconstructed B-rep one).
 - Diff/patch edit protocol (v1 re-emits the whole document on edit — FR-6a).
 - Conversation branching à la CADAM message tree (v1 persists a linear per-project trace).
 

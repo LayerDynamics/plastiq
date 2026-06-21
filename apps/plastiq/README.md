@@ -28,6 +28,37 @@ See the [repository README](../../README.md) for the architecture overview.
   and crash recovery of unsaved work.
 - **Simulate & interchange** — drop/run the model in the real `@plastiq/sim`
   physics engine, plus glTF / STEP / IGES export and STEP import.
+- **AI generation (SPEC-6)** — describe a part in natural language and a model
+  authors it: a streaming agent loop calls `build_part` (validated mm/deg authoring
+  document → SI → the kernel) and `inspect_geometry`, can **edit** the open part, and
+  selects faces/edges by name or geometry. Reachable from the **Generate (AI)** side
+  panel and a **⌘/Ctrl-K command palette** (which also runs any editor action by name).
+  Providers are BYO and pluggable — **local Ollama** (no key, offline) or **Anthropic
+  Claude** (vision); keys are stored in the browser and structured for a future hosted
+  proxy. A creative path (`create_mesh`) turns text/image prompts into a GLB **mesh
+  document** via cloud 3D-gen (fal.ai Tripo / Meshy / Hunyuan3D); paid jobs require an
+  explicit one-click confirm and show running token/job usage.
+- **Mesh → editable CAD** — a generated/imported mesh document can be reconstructed
+  into a real B-rep STEP solid via the optional reconstruction service
+  ([`services/reconstruct`](../../services/reconstruct)) — the "Convert to CAD (STEP)"
+  action imports the result back as an editable `CadDocument`.
+
+## AI generation
+
+The AI features live in [`src/ai`](src/ai). The agent surface (`build_part`,
+`inspect_geometry`, `create_mesh`, `answer_user`) is wired once in
+[`agentTurn.ts`](src/ai/agentTurn.ts) and shared by both entry points (the
+`GenerationPanel` and the `CommandPalette`), so they behave identically.
+
+- **Providers** are BYO: pick **local Ollama** (default `qwen2.5`/`qwen3.6`, no key) or
+  **Anthropic** (paste a key) on first run. Keys never leave the browser except to the
+  endpoint you configured; the resolver is swappable for a future hosted proxy.
+- **Creative mesh-gen (fal.ai)** needs a fal key (set it in the panel's "Creative
+  mesh-gen" section) **or** a proxy base URL. Honest constraint: a *direct* browser→fal
+  call needs fal CORS, so in practice the creative path runs through a proxy or a
+  CORS-enabled key — without either, `create_mesh` fails cleanly rather than silently.
+- **Cost control:** every paid 3D/image-gen job is gated behind a one-click confirm; LLM
+  calls (Ollama / your own key) run freely; an agent step cap is always on.
 
 ## Scripts
 
@@ -37,3 +68,19 @@ pnpm -C apps/plastiq run build    # tsc --noEmit + production build
 pnpm exec vitest run                 # unit/integration suite (from the repo root)
 pnpm exec playwright test            # no-mock E2E (served on :4177)
 ```
+
+### AI / reconstruction E2E
+
+The AI and reconstruction E2E specs are real (no mocks) and self-skip when their
+dependency isn't reachable, so the default suite stays green offline:
+
+```sh
+pnpm e2e --grep "real pipeline without a model"   # model-free pipeline (always runs)
+pnpm e2e --grep "real local model"                # AI in the loop — needs local Ollama
+pnpm e2e --grep reconstruct                        # mesh→CAD — needs services/reconstruct up
+```
+
+- The Ollama spec needs a running Ollama with a tool-capable model
+  (`OLLAMA_URL`/`OLLAMA_MODEL`, default `qwen3.6:35b-mlx`).
+- The reconstruct spec needs the service running (`RECONSTRUCT_URL`, default
+  `http://127.0.0.1:8000`) — see [`services/reconstruct`](../../services/reconstruct).
