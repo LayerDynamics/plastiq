@@ -17,11 +17,16 @@ export interface AiSettings {
   model: string;
   /** Overrides the preset default base URL — also the hosted-proxy hook (FR-5). */
   baseURL?: string;
-  /** BYO keys by provider key (client-side only). Empty for Ollama / proxy. */
+  /** BYO keys by provider key (client-side only). Empty for Ollama / proxy. The
+   * creative mesh-gen (fal) key lives here under "fal" (FR-15/FR-18a). */
   apiKeys: Record<string, string>;
   /** Base URL of the self-hosted mesh→B-rep reconstruction service (SPEC-6 R6.6);
    * absent ⇒ the client default (http://localhost:8000). */
   reconstructBaseURL?: string;
+  /** Override the fal mesh-gen queue base URL — the hosted-proxy seam (decision 21).
+   * Absent ⇒ fal's queue default. A *direct* browser→fal call needs fal CORS; the
+   * proxy (empty fal key + this baseURL) is the production path. */
+  meshGenBaseURL?: string;
 }
 
 const DB_NAME = "plastiq-ai";

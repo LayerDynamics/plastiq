@@ -15,9 +15,11 @@ import { toProviderSettings, type AiSettings } from "./settings.js";
 import { buildAgentTools } from "./tools/toolDefs.js";
 import { runGeneration } from "./runGeneration.js";
 import { reconstructMesh, stepToImportDocument } from "./reconstruct.js";
+import { buildMeshGenDeps, meshGenConfigured } from "./meshGenDeps.js";
 import { UsageMeter, type UsageSnapshot } from "./usage.js";
 import type { BuildProbe, ApplyDocument } from "./tools/buildPart.js";
 import type { MeshProbe } from "./tools/inspectGeometry.js";
+import type { CreateMeshDeps, PaidJobInfo } from "./tools/createMesh.js";
 import type { CadDocument } from "../store/types.js";
 import type { TransferMesh } from "../worker/protocol.js";
 
@@ -170,6 +172,101 @@ function MeshConvertSection(): React.JSX.Element {
   );
 }
 
+/** A pending paid-job confirmation (FR-18a) bridged from the create_mesh handler's
+ * async `confirm` gate to a React modal: the handler awaits `resolve`, the modal's
+ * buttons call it. Used instead of window.confirm (testable; no blocking browser modal). */
+interface PendingConfirm {
+  info: PaidJobInfo;
+  resolve: (approved: boolean) => void;
+}
+
+/** Compact affordance to set the creative mesh-gen (fal) API key (FR-15). The key is
+ * stored in settings.apiKeys["fal"] and sent only to fal (or a configured proxy). A
+ * DIRECT browser→fal call needs fal CORS — the proxy seam (meshGenBaseURL) is the
+ * production path; this offers a BYO key for a CORS-enabled key/proxy. */
+function CreativeKeyField(): React.JSX.Element {
+  const settings = useAiStore((s) => s.settings);
+  const save = useAiStore((s) => s.save);
+  const [key, setKey] = useState("");
+  if (!settings) return <></>;
+  const configured = meshGenConfigured(settings);
+  const saveKey = (): void => {
+    if (!key.trim()) return;
+    void save({ ...settings, apiKeys: { ...settings.apiKeys, fal: key.trim() } });
+    setKey("");
+  };
+  return (
+    <details data-testid="creative-key" className="text-[10px] text-[#678]">
+      <summary className="cursor-pointer select-none">
+        Creative mesh-gen (fal) {configured ? "✓ configured" : "— not configured"}
+      </summary>
+      <div className="mt-1 flex gap-1">
+        <input
+          data-testid="creative-key-input"
+          type="password"
+          value={key}
+          onChange={(e) => setKey(e.target.value)}
+          placeholder="fal API key (for create_mesh)"
+          className="min-w-0 flex-1 rounded border border-[#2a3444] bg-[#0b0d12] px-2 py-1 text-[#cfe]"
+        />
+        <button
+          type="button"
+          data-testid="creative-key-save"
+          onClick={saveKey}
+          className="rounded border border-[#2a3444] bg-[#10141c] px-2 py-1 hover:bg-[#16202c]"
+        >
+          Save
+        </button>
+      </div>
+      <p className="mt-1">
+        Used only for AI mesh generation (organic shapes the parametric kernel can’t author).
+        A direct browser call needs fal CORS; otherwise route through a proxy. The key stays in
+        your browser and is sent only to the configured endpoint.
+      </p>
+    </details>
+  );
+}
+
+/** The paid-job confirm dialog (FR-18a), shown when a create_mesh call awaits approval.
+ * Resolves the bridged promise true/false; not a blocking browser modal. */
+function PaidJobConfirmModal({
+  info,
+  onResolve,
+}: {
+  info: PaidJobInfo;
+  onResolve: (approved: boolean) => void;
+}): React.JSX.Element {
+  const { mode, providerId, billableCalls } = info;
+  return (
+    <div data-testid="paid-confirm" className="rounded border border-[#7a5a2a] bg-[#1c1608] p-2 text-[11px] text-[#ecd]">
+      <p className="mb-1 font-semibold text-[#fda]">Confirm paid generation</p>
+      <p className="mb-2 text-[#cba]">
+        This runs a billable cloud job: <span className="text-[#fec]">{mode}</span> via{" "}
+        <span className="text-[#fec]">{providerId}</span> ({billableCalls} billable call
+        {billableCalls === 1 ? "" : "s"}). Your provider account is charged.
+      </p>
+      <div className="flex gap-2">
+        <button
+          type="button"
+          data-testid="paid-confirm-yes"
+          onClick={() => onResolve(true)}
+          className="rounded border border-[#3a5a7a] bg-[#14253a] px-2 py-1 text-[#bfe] hover:bg-[#1a2f48]"
+        >
+          Confirm &amp; run
+        </button>
+        <button
+          type="button"
+          data-testid="paid-confirm-no"
+          onClick={() => onResolve(false)}
+          className="rounded border border-[#7a3a3a] bg-[#2a1414] px-2 py-1 text-[#fbb] hover:bg-[#341a1a]"
+        >
+          Cancel
+        </button>
+      </div>
+    </div>
+  );
+}
+
 export function GenerationPanel(): React.JSX.Element {
   const settings = useAiStore((s) => s.settings);
   const activeMeshDoc = useProjectsStore((s) => s.activeMeshDoc);
@@ -177,7 +274,11 @@ export function GenerationPanel(): React.JSX.Element {
   const [lines, setLines] = useState<Line[]>([]);
   const [running, setRunning] = useState(false);
   const [usage, setUsage] = useState<UsageSnapshot | null>(null);
+  const [paidConfirm, setPaidConfirm] = useState<PendingConfirm | null>(null);
   const abortRef = useRef<AbortController | null>(null);
+  /** Set by create_mesh's persist dep when a mesh document is generated mid-run; the
+   * panel opens it AFTER the agent loop so a success never swaps the UI mid-generation. */
+  const createdMeshIdRef = useRef<string | null>(null);
 
   const append = useCallback((line: Line): void => setLines((prev) => [...prev, line]), []);
 
@@ -202,19 +303,41 @@ export function GenerationPanel(): React.JSX.Element {
     };
     const meshProbe: MeshProbe = (doc) => build(doc);
     const apply: ApplyDocument = (doc) => useCadStore.getState().loadDocument(doc);
+
+    const controller = new AbortController();
+    const meter = new UsageMeter();
+
+    // Creative path (FR-15/FR-18a): wire create_mesh from the fal providers + a
+    // promise-bridged confirm modal. The model can always reach the tool; without a fal
+    // key or proxy it fails with a clean error (meshGenConfigured surfaces an honest hint).
+    const providerDeps = buildMeshGenDeps(current);
+    createdMeshIdRef.current = null;
+    const createMeshDeps: CreateMeshDeps = {
+      ...providerDeps,
+      confirm: (info) => new Promise<boolean>((resolve) => setPaidConfirm({ info, resolve })),
+      persist: async (doc) => {
+        const id = await useProjectsStore.getState().createMeshProject(doc);
+        createdMeshIdRef.current = id;
+        return id;
+      },
+      recordPaidJob: () => {
+        meter.addPaidJob();
+        setUsage(meter.snapshot());
+      },
+      signal: controller.signal,
+    };
     const tools = buildAgentTools({
       buildPart: { probe, apply },
       probe: meshProbe,
       currentDoc: () => useCadStore.getState().toDocument(),
+      createMesh: createMeshDeps,
     });
 
     const provider = buildProvider(toProviderSettings(current));
-    const meter = new UsageMeter();
     const ai = useAiStore.getState();
     const history = ai.conversation.messages;
     const currentDoc = useCadStore.getState().toDocument();
 
-    const controller = new AbortController();
     abortRef.current = controller;
     setRunning(true);
     append({ kind: "text", text: `> ${text}` });
@@ -250,6 +373,14 @@ export function GenerationPanel(): React.JSX.Element {
         },
       });
       if (assistantText.trim()) void ai.appendMessage({ role: "assistant", content: assistantText });
+      // If create_mesh produced a mesh document this run, open it now (AFTER the loop)
+      // so the panel switches to the convert-to-CAD view without yanking a live run.
+      const newMeshId = createdMeshIdRef.current;
+      createdMeshIdRef.current = null;
+      if (newMeshId) {
+        append({ kind: "status", text: "Opening the generated mesh — convert it to CAD below." });
+        await useProjectsStore.getState().open(newMeshId);
+      }
     } catch (e) {
       append({ kind: "error", text: e instanceof Error ? e.message : String(e), isError: true });
     } finally {
@@ -268,6 +399,15 @@ export function GenerationPanel(): React.JSX.Element {
         <FirstRunChooser />
       ) : (
         <>
+          {paidConfirm && (
+            <PaidJobConfirmModal
+              info={paidConfirm.info}
+              onResolve={(ok) => {
+                paidConfirm.resolve(ok);
+                setPaidConfirm(null);
+              }}
+            />
+          )}
           <textarea
             data-testid="generation-prompt"
             value={prompt}
@@ -329,6 +469,7 @@ export function GenerationPanel(): React.JSX.Element {
               ))}
             </div>
           )}
+          <CreativeKeyField />
         </>
       )}
     </div>

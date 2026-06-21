@@ -267,3 +267,31 @@ describe("projectsStore — AI conversation lifecycle wiring (SPEC-6 R5.1)", () 
     expect(useAiStore.getState().conversation.messages).toHaveLength(0);
   });
 });
+
+describe("projectsStore — createMeshProject persists a generated mesh (SPEC-6 R4.3)", () => {
+  const meshDoc: MeshDoc = {
+    kind: "mesh",
+    name: "Gen Rock",
+    glb: "Z2xURgIAAAA=",
+    source: { mode: "text3d", providerId: "fal:tripo", prompt: "a rock" },
+  };
+
+  it("creates a project from the mesh doc, returns its id, and does NOT steal focus", async () => {
+    const create = vi.fn(async (name: string) => meta("mesh-1", name));
+    useProjectsStore.setState({ store: fakeStore({ create }), activeMeshDoc: null, currentId: "other" });
+
+    const id = await useProjectsStore.getState().createMeshProject(meshDoc);
+
+    expect(id).toBe("mesh-1");
+    expect(create).toHaveBeenCalledWith("Gen Rock", meshDoc);
+    // The new mesh project must NOT swap the open project (the panel opens it post-loop).
+    const st = useProjectsStore.getState();
+    expect(st.activeMeshDoc).toBeNull();
+    expect(st.currentId).toBe("other");
+  });
+
+  it("rejects when the store is not initialised (surfaces, never silently no-ops)", async () => {
+    useProjectsStore.setState({ store: null });
+    await expect(useProjectsStore.getState().createMeshProject(meshDoc)).rejects.toThrow(/not initialised/);
+  });
+});

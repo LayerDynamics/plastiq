@@ -87,6 +87,11 @@ export interface ProjectsState {
   refresh: () => Promise<void>;
   setThumbnailProvider: (provider: (() => string | null) | null) => void;
   newProject: () => void;
+  /** Persist a generated MESH document as a NEW project (the create_mesh creative path,
+   * SPEC-6 R4.3). Returns the new project id. Deliberately does NOT switch the open
+   * project or set activeMeshDoc — the caller opens it AFTER the agent loop finishes so
+   * a successful generation never yanks the panel out from under a still-running run. */
+  createMeshProject: (doc: MeshDoc) => Promise<string>;
   open: (id: string) => Promise<void>;
   save: () => Promise<void>;
   saveAs: (name: string) => Promise<void>;
@@ -135,6 +140,14 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
     useCadStore.getState().loadDocument(defaultDocument());
     set({ currentId: null, currentName: "Untitled", status: "new document", busy: false });
     void useAiStore.getState().openConversation(null); // fresh untitled → empty conversation
+  },
+
+  createMeshProject: async (doc) => {
+    const store = get().store;
+    if (!store) throw new Error("projects store not initialised");
+    const meta = await store.create(doc.name ?? "Generated mesh", doc);
+    await get().refresh();
+    return meta.id;
   },
 
   open: async (id) => {
