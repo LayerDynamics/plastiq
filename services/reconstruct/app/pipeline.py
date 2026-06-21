@@ -1,10 +1,16 @@
 """The reconstruction pipeline: mesh bytes → B-rep shape → STEP text + a report.
 
-Default method is "auto": clean the mesh, then if the whole mesh is a single analytic
-primitive (sphere/cylinder/cone — R6.4) emit that watertight analytic solid; otherwise fall
-back to "fitted" (R6.3/R6.4 — planar facets → trimmed faces, faceted fallback per region).
-"faceted" (R6.1) is the per-triangle baseline. Mixed multi-primitive parts with shared-edge
-topology are R6.4b+. Nothing is ever dropped (faceted fallback).
+Default method is "auto": clean the mesh, then try the analytic routes in order and emit the
+first watertight, volume-validated solid —
+  1. single analytic primitive    sphere / cylinder / cone (R6.4, `detect.try_single_primitive`)
+  2. solid of revolution          stepped/capped shaft (R6.4b, `revolution.reconstruct_revolution`)
+  3. CSG                          box ± cylinders: holes/bosses (R6.4b, `csg.reconstruct_csg`)
+  4. cut cylinder                 cylinder trimmed by oblique/axis-parallel planes
+                                  (R6.9, `topology.reconstruct_cut_cylinder` — FR-6 GeomAPI_IntSS)
+— otherwise fall back to "fitted" (R6.3/R6.4/R6.5 — planar facets → trimmed faces + freeform,
+faceted fallback per region). "faceted" (R6.1) is the per-triangle baseline. Every analytic route
+self-validates by volume against the cleaned mesh, so a near-miss falls through rather than
+inventing geometry. Nothing is ever dropped (faceted fallback).
 """
 
 from __future__ import annotations
@@ -14,12 +20,14 @@ from typing import Optional
 
 from .cleanup import clean_mesh
 from .csg import reconstruct_csg
+from .curved_faces import classify_faces
 from .detect import try_single_primitive
 from .faceted import faceted_shape
 from .fitted import fitted_shape
 from .meshio import load_mesh
 from .occ_step import shape_to_step
 from .revolution import reconstruct_revolution
+from .topology import reconstruct_cut_cylinder
 
 
 @dataclass
@@ -32,7 +40,9 @@ class ReconstructionReport:
     is_valid: bool
     method: str
     primitive: Optional[str] = None  # "cylinder" | "sphere" | "cone" when method=="auto" hit one
+    curved_faces: int = 0  # analytic non-planar faces (cylinder/sphere/cone/revolution) — FR-9
     freeform_faces: int = 0  # curved regions collapsed into freeform faces (R6.5), method="fitted"
+    faceted_faces: int = 0  # per-triangle fallback faces that survived (FR-8 fallback) — FR-9
 
 
 @dataclass
@@ -64,46 +74,76 @@ def reconstruct(
         # 1) whole mesh is one analytic primitive (cleanest result for cylinder/sphere/cone)
         prim = try_single_primitive(vertices, faces)
         if prim is not None:
+            planar, curved, freeform = classify_faces(prim.shape)
             report = ReconstructionReport(
                 triangles_in=raw_triangles,
                 triangles_used=used,
                 faces_built=prim.n_faces,
-                planar_faces=0,
+                planar_faces=planar,
                 is_solid=prim.is_solid,
                 is_valid=prim.is_valid,
                 method=prim.primitive or "primitive",
                 primitive=prim.primitive,
+                curved_faces=curved,
+                freeform_faces=freeform,
             )
             return ReconstructionResult(step=shape_to_step(prim.shape), report=report)
         # 2) a multi-segment solid of revolution (stepped shaft, chamfered/capped cylinder)
         rev = reconstruct_revolution(vertices, faces)
         if rev is not None:
+            planar, curved, freeform = classify_faces(rev.shape)
             report = ReconstructionReport(
                 triangles_in=raw_triangles,
                 triangles_used=used,
                 faces_built=rev.n_faces,
-                planar_faces=0,
+                planar_faces=planar,
                 is_solid=rev.is_solid,
                 is_valid=rev.is_valid,
                 method="revolution",
                 primitive="revolution",
+                curved_faces=curved,
+                freeform_faces=freeform,
             )
             return ReconstructionResult(step=shape_to_step(rev.shape), report=report)
         # 3) a box with cylindrical through-holes (CSG: box − cylinders)
         csg = reconstruct_csg(vertices, faces)
         if csg is not None:
+            planar, curved, freeform = classify_faces(csg.shape)
             report = ReconstructionReport(
                 triangles_in=raw_triangles,
                 triangles_used=used,
                 faces_built=csg.n_faces,
-                planar_faces=0,
+                planar_faces=planar,
                 is_solid=csg.is_solid,
                 is_valid=csg.is_valid,
                 method="csg",
                 primitive="csg",
+                curved_faces=curved,
+                freeform_faces=freeform,
             )
             return ReconstructionResult(step=shape_to_step(csg.shape), report=report)
-        method = "fitted"  # not a primitive / revolution / CSG → fall through
+        # 4) a cylinder trimmed by a non-perpendicular / axis-parallel plane (oblique cap, etc.)
+        #    — FR-6 surface-intersection edge recovery (R6.9). Runs LAST among the analytic
+        #    routes (after CSG, which is more mature) so it only claims meshes nothing else fit;
+        #    self-validated by volume, faceted fallback otherwise. An oblique-cut cylinder has
+        #    2 caps (not 3 orthogonal box planes), so CSG rejects it and this route fires.
+        cutcyl = reconstruct_cut_cylinder(vertices, faces)
+        if cutcyl is not None:
+            planar, curved, freeform = classify_faces(cutcyl.shape)
+            report = ReconstructionReport(
+                triangles_in=raw_triangles,
+                triangles_used=used,
+                faces_built=cutcyl.n_faces,
+                planar_faces=planar,
+                is_solid=cutcyl.is_solid,
+                is_valid=cutcyl.is_valid,
+                method="cut_cylinder",
+                primitive="cut_cylinder",
+                curved_faces=curved,
+                freeform_faces=freeform,
+            )
+            return ReconstructionResult(step=shape_to_step(cutcyl.shape), report=report)
+        method = "fitted"  # not a primitive / revolution / CSG / cut-cylinder → fall through
 
     if method == "faceted":
         result = faceted_shape(vertices, faces)
@@ -115,6 +155,7 @@ def reconstruct(
             is_solid=result.is_solid,
             is_valid=result.is_valid,
             method="faceted",
+            faceted_faces=result.faces_built,  # every face is a per-triangle fallback
         )
         shape = result.shape
     elif method == "fitted":
@@ -128,6 +169,7 @@ def reconstruct(
             is_valid=fitted.is_valid,
             method="fitted",
             freeform_faces=fitted.freeform_faces,
+            faceted_faces=fitted.triangle_faces,  # leftover regions kept per-triangle (FR-8)
         )
         shape = fitted.shape
     else:

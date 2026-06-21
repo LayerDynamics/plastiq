@@ -16,6 +16,7 @@ from math import pi
 from typing import Optional
 
 import numpy as np
+from OCC.Core.BRepAdaptor import BRepAdaptor_Surface
 from OCC.Core.BRepBuilderAPI import (
     BRepBuilderAPI_MakeEdge,
     BRepBuilderAPI_MakeFace,
@@ -24,6 +25,11 @@ from OCC.Core.BRepBuilderAPI import (
     BRepBuilderAPI_Sewing,
 )
 from OCC.Core.BRepCheck import BRepCheck_Analyzer
+from OCC.Core.GeomAbs import (
+    GeomAbs_BezierSurface,
+    GeomAbs_BSplineSurface,
+    GeomAbs_Plane,
+)
 from OCC.Core.BRepGProp import brepgprop
 from OCC.Core.BRepPrimAPI import BRepPrimAPI_MakeCone, BRepPrimAPI_MakeSphere
 from OCC.Core.gp import gp_Ax2, gp_Ax3, gp_Circ, gp_Cylinder, gp_Dir, gp_Pln, gp_Pnt
@@ -44,6 +50,33 @@ class SolidResult:
     volume: float
     n_faces: int
     primitive: Optional[str] = None  # "cylinder" | "sphere" | "cone" when known
+
+
+def classify_faces(shape: TopoDS_Shape) -> tuple[int, int, int]:
+    """Count (planar, curved, freeform) faces of a built shape by their OCCT surface type.
+
+    planar   = `Geom_Plane` (analytic flat faces, e.g. a cylinder cap or a box side).
+    curved   = analytic non-planar (cylinder / cone / sphere / torus / surface-of-revolution
+               / surface-of-extrusion) — everything that isn't a plane or a free-form patch.
+    freeform = BSpline / Bezier patches (the R6.5 `MakeFilling` output).
+
+    NOTE: a per-triangle FACETED face is also a `Geom_Plane`, so this helper is meaningful
+    only for the analytic methods (primitive / revolution / csg) which contain no faceted
+    faces. The `fitted`/`faceted` methods report their own faceted counts (they know which
+    faces they emitted as fallback) and do not use this helper for `planar`/`curved`.
+    """
+    planar = curved = freeform = 0
+    exp = TopExp_Explorer(shape, TopAbs_FACE)
+    while exp.More():
+        surf_type = BRepAdaptor_Surface(topods.Face(exp.Current())).GetType()
+        if surf_type == GeomAbs_Plane:
+            planar += 1
+        elif surf_type in (GeomAbs_BSplineSurface, GeomAbs_BezierSurface):
+            freeform += 1
+        else:
+            curved += 1
+        exp.Next()
+    return planar, curved, freeform
 
 
 def _circle_cap(center: np.ndarray, axis: np.ndarray, v: float, radius: float, outward: float):

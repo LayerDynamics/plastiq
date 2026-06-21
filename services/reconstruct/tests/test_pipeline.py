@@ -53,3 +53,25 @@ def test_open_mesh_falls_back_to_a_shell_not_a_solid():
     assert res.faces_built == 1
     assert res.is_solid is False
     assert res.is_valid
+
+
+def test_report_face_type_breakdown_faceted_is_all_faceted():
+    # FR-9 / §6: a faceted result reports every face as faceted; nothing analytic/freeform.
+    glb = trimesh.creation.box(extents=(0.03, 0.02, 0.01)).export(file_type="glb")
+    r = reconstruct(glb, "glb", method="faceted").report
+    assert r.faceted_faces == r.faces_built > 0
+    assert r.planar_faces == 0
+    assert r.curved_faces == 0
+    assert r.freeform_faces == 0
+
+
+def test_report_face_type_breakdown_cylinder_counts_curved():
+    # FR-9 / §6: an analytic cylinder (auto) reports curved + planar caps, no faceted faces,
+    # and the per-type counts sum to faces_built (the breakdown the honest-UX NFR-4 needs).
+    glb = trimesh.creation.cylinder(radius=0.011, height=0.027, sections=48).export(file_type="glb")
+    r = reconstruct(glb, "glb", method="auto").report
+    assert r.primitive == "cylinder"
+    assert r.curved_faces >= 1  # the lateral cylindrical face
+    assert r.planar_faces == 2  # the two circular caps
+    assert r.faceted_faces == 0  # nothing fell back to per-triangle
+    assert r.planar_faces + r.curved_faces + r.freeform_faces == r.faces_built

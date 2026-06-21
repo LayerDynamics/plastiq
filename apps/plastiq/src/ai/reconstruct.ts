@@ -13,9 +13,17 @@ export interface ReconstructReport {
   triangles_used: number;
   faces_built: number;
   planar_faces: number;
+  /** Analytic non-planar faces (cylinder/sphere/cone/revolution). Absent on older servers. */
+  curved_faces?: number;
+  /** Freeform (BSpline/MakeFilling) faces (R6.5). Absent on older servers. */
+  freeform_faces?: number;
+  /** Per-triangle fallback faces that survived (FR-8). Absent on older servers. */
+  faceted_faces?: number;
   is_solid: boolean;
   is_valid: boolean;
   method: string;
+  /** "cylinder" | "sphere" | "cone" | "revolution" | "csg" when method="auto" hit one. */
+  primitive?: string;
 }
 
 export interface ReconstructResult {

@@ -122,13 +122,31 @@ _MAX_GAP = np.radians(50.0)
 _MIN_SPHERE_NORMALS = 16  # a sphere shows many normal directions; a box shows ~6
 
 
-def try_single_primitive(vertices: np.ndarray, faces: np.ndarray, rel_tol: float = 0.02) -> Optional[SolidResult]:
+def _volume_ok(mesh: trimesh.Trimesh, res: SolidResult, tol: float) -> bool:
+    """The analytic solid must reproduce the mesh's volume. This REJECTS a *partial* primitive
+    — e.g. an oblique-cut or flat-sided ("D-shaft") cylinder whose side vertices lie perfectly
+    on the cylinder (near-zero RMS) but whose true shape is NOT the full primitive: building
+    the full cylinder/sphere/cone would silently invent volume. (Without this check such a part
+    is mis-reconstructed as a full primitive — it routes to the cut-cylinder/fitted paths
+    instead.) An open mesh can't be volume-checked, so the RMS + shape gate stands."""
+    if not mesh.is_volume:
+        return True
+    mv = float(mesh.volume)
+    if mv <= 0:
+        return True
+    return abs(res.volume - mv) / mv < tol
+
+
+def try_single_primitive(
+    vertices: np.ndarray, faces: np.ndarray, rel_tol: float = 0.02, vol_tol: float = 0.05
+) -> Optional[SolidResult]:
     """Deterministically test whether the whole mesh is a single analytic primitive
     (sphere / cylinder / cone) and, if so, return its watertight solid. Beyond a low
     size-relative RMS residual, a candidate must pass a SHAPE gate (angular coverage for
     cylinder/cone; distinct-normal count for sphere) so a box — whose corners lie on a
-    circumscribed circle/sphere — is NOT misread as a primitive. Returns None if nothing
-    qualifies; the caller falls back to the planar/faceted path. Result must be a valid solid."""
+    circumscribed circle/sphere — is NOT misread as a primitive, AND a VOLUME gate so a partial
+    primitive (oblique-cut / flat-sided cylinder) isn't rebuilt as a full one. Returns None if
+    nothing qualifies; the caller falls back to the planar/faceted path. Must be a valid solid."""
     mesh = trimesh.Trimesh(vertices=np.asarray(vertices, dtype=float),
                            faces=np.asarray(faces, dtype=np.int64), process=False)
     fn = np.asarray(mesh.face_normals, dtype=float)
@@ -161,7 +179,11 @@ def try_single_primitive(vertices: np.ndarray, faces: np.ndarray, rel_tol: float
     except Exception:  # noqa: BLE001
         pass
 
-    good = [(name, err, res) for name, err, res in candidates if err < rel_tol and res.is_solid]
+    good = [
+        (name, err, res)
+        for name, err, res in candidates
+        if err < rel_tol and res.is_solid and _volume_ok(mesh, res, vol_tol)
+    ]
     if not good:
         return None
     good.sort(key=lambda c: c[1])  # smallest relative residual wins (deterministic)
