@@ -5,6 +5,7 @@ import os
 import numpy as np
 import trimesh
 
+from app.fitted import _solid_volume, fitted_shape
 from app.freeform import (
     face_max_point_error,
     freeform_capped_solid,
@@ -125,11 +126,22 @@ def test_auto_falls_through_to_freeform_fitted_for_domed_box():
 
 
 def test_fitted_volume_preserved_with_freeform():
-    # Freeform approximates, so the enhanced solid is volume-guarded; verify it stays close to
-    # the source mesh (a gross drift would have rebuilt faceted-only).
+    # Freeform is the only APPROXIMATE path, so volume-match is the load-bearing check: drive
+    # fitted_shape directly and compare the freeform-capped solid's volume to the source mesh
+    # (the pipeline's volume guard would have rebuilt faceted-only on a gross drift).
     m = trimesh.load(os.path.join(FIX, "domed_box.glb"), process=False)
     m = m.to_geometry() if isinstance(m, trimesh.Scene) else m
-    res = reconstruct(_glb("domed_box.glb"), method="fitted")
-    # Re-read the solid's volume via a STEP round-trip is overkill here; the pipeline already
-    # volume-guards, so a solid result means it passed. Assert the solid is the freeform one.
-    assert res.report.is_solid and res.report.freeform_faces > 0
+    res = fitted_shape(np.asarray(m.vertices), np.asarray(m.faces, dtype=np.int64))
+    assert res.is_solid and res.freeform_faces > 0
+    mesh_vol = abs(float(m.volume))
+    assert abs(_solid_volume(res.shape) - mesh_vol) / mesh_vol < 0.05
+
+
+def test_fitted_falls_back_to_faceted_for_a_closed_region():
+    # A closed curved region (a whole sphere) has NO boundary loop, so it can't be one filled
+    # patch — freeform must NOT engage, and the result is a valid faceted solid (the honest,
+    # fundamental fallback). method="fitted" bypasses the sphere PRIMITIVE detector on purpose.
+    m = trimesh.creation.icosphere(subdivisions=2, radius=0.02)
+    res = fitted_shape(np.asarray(m.vertices), np.asarray(m.faces, dtype=np.int64))
+    assert res.freeform_faces == 0  # no boundary loop → no freeform attempted
+    assert res.is_solid and res.is_valid  # faceted fallback is still a valid watertight solid
