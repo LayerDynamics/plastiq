@@ -122,8 +122,10 @@ automatic reconstruction, not an implementation gap.
   capped cylinders → one analytic revolved solid, volume-validated).
 - **R6.4b-iii/iv (done, bounded)** — mixed parts via **CSG booleans** (`csg.py` — InverseCSG
   paradigm): axis-aligned box, fuse cylindrical bosses, cut cylindrical through-holes
-  (`BRepAlgoAPI_Fuse`/`Cut`, OCCT computes shared edges), volume-validated. Non-axis-aligned
-  bases, non-cylindrical features, and arbitrary nested CSG trees remain future (SPEC-7).
+  (`BRepAlgoAPI_Fuse`/`Cut`, OCCT computes shared edges), volume-validated. The base box may
+  be axis-aligned **or arbitrarily rotated** (an oriented frame is derived from the part's own
+  planar normals), and multiple features are supported. Non-cylindrical features and arbitrary
+  nested CSG trees remain future (SPEC-7).
 - **R6.5 (done, standalone)** — freeform faces via `BRepOffsetAPI_MakeFilling` (`freeform.py`).
   Builds + validates standalone; sewing a freeform face into a solid needs the topology tail,
   so closed organic blobs still keep the valid faceted solid (see the honest caveat).

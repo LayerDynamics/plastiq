@@ -90,11 +90,15 @@ Deterministic (NFR-2); never drops geometry (faceted fallback, NFR-1).
   faceted solid (already valid).
 - **Done when:** freeform faces build + validate; no regression; honest scope noted.
 
-### R6.4b-iv — General CSG (additive bosses, multi-primitive) — ✅ shipped (bosses)
-- Done: `app/csg.py` now does box (∪ bosses) (− holes) — base box from the dominant planar
-  faces (boss top doesn't inflate it), bosses `Fuse` then holes `Cut`, volume-validated. A
-  box-with-boss → 9-face solid (`tests/test_csg.py`). Remaining future: non-axis-aligned
-  bases, non-cylindrical features, nested/repeated trees.
+### R6.4b-iv — General CSG (additive bosses, multi-primitive, rotated base) — ✅ shipped
+- Done: `app/csg.py` does box (∪ bosses) (− holes) — base box from the dominant planar faces
+  (boss top doesn't inflate it), bosses `Fuse` then holes `Cut`, volume-validated. A
+  box-with-boss → 9-face solid; a box with two through-holes (multi-feature) → volume-matching
+  `csg` solid. The base may be **axis-aligned or arbitrarily rotated**: when no face is
+  world-axis-aligned, an oriented orthonormal frame is derived from the part's own dominant
+  planar-face normals (`_oriented_frame` — area-sorted normal clustering, deterministic) and
+  the box is built in that frame (a 33°-rotated box-with-hole reconstructs; `tests/test_csg.py`).
+  Remaining future: non-cylindrical features, nested/repeated trees.
 - (original task, for the remaining future scope:)
 - **Test-first:** a box-with-cylindrical-boss GLB → `BRepAlgoAPI_Fuse(box, cylinder)` → valid
   solid, volume = box + boss; then a part with both a hole and a boss; assert volume match.
