@@ -12,19 +12,16 @@ import { useCadStore } from "../store/store.js";
 import { useProjectsStore } from "../persistence/projectsStore.js";
 import { buildProvider } from "./providers/registry.js";
 import { toProviderSettings, type AiSettings } from "./settings.js";
-import { buildAgentTools } from "./tools/toolDefs.js";
 import { runGeneration } from "./runGeneration.js";
 import { reconstructMesh, stepToImportDocument } from "./reconstruct.js";
 import { buildMeshGenDeps, meshGenConfigured } from "./meshGenDeps.js";
+import { buildTurnTools, buildCreateMeshDeps, buildSeam, type TurnToolsDeps } from "./agentTurn.js";
+import { PaidJobConfirmModal, type PendingConfirm } from "./PaidJobConfirmModal.js";
 import { planAttachmentRoute, type AttachmentRoute } from "./visionRoute.js";
 import { UsageMeter, type UsageSnapshot } from "./usage.js";
-import type { BuildProbe, ApplyDocument } from "./tools/buildPart.js";
-import type { MeshProbe } from "./tools/inspectGeometry.js";
-import { createMesh, type CreateMeshDeps, type PaidJobInfo } from "./tools/createMesh.js";
+import { createMesh } from "./tools/createMesh.js";
 import type { GenImage } from "./meshgen/types.js";
-import type { CadDocument } from "../store/types.js";
 import type { ContentPart } from "./providers/types.js";
-import type { TransferMesh } from "../worker/protocol.js";
 
 /** An image the user attached to a prompt, with a stable id so the creative img3d route
  * (create_mesh) can reference it via resolveImage. */
@@ -50,8 +47,6 @@ interface Line {
   text: string;
   isError?: boolean;
 }
-
-type BuildSeam = (doc: CadDocument) => Promise<TransferMesh | null>;
 
 /** Compact neutral first-run chooser (decision 17 / FR-5a) — local Ollama (no key,
  * offline) or a BYO Anthropic key. Persists via the aiStore. */
@@ -193,14 +188,6 @@ function MeshConvertSection(): React.JSX.Element {
   );
 }
 
-/** A pending paid-job confirmation (FR-18a) bridged from the create_mesh handler's
- * async `confirm` gate to a React modal: the handler awaits `resolve`, the modal's
- * buttons call it. Used instead of window.confirm (testable; no blocking browser modal). */
-interface PendingConfirm {
-  info: PaidJobInfo;
-  resolve: (approved: boolean) => void;
-}
-
 /** Compact affordance to set the creative mesh-gen (fal) API key (FR-15). The key is
  * stored in settings.apiKeys["fal"] and sent only to fal (or a configured proxy). A
  * DIRECT browser→fal call needs fal CORS — the proxy seam (meshGenBaseURL) is the
@@ -248,46 +235,6 @@ function CreativeKeyField(): React.JSX.Element {
   );
 }
 
-/** The paid-job confirm dialog (FR-18a), shown when a create_mesh call awaits approval.
- * Resolves the bridged promise true/false; not a blocking browser modal. */
-function PaidJobConfirmModal({
-  info,
-  onResolve,
-}: {
-  info: PaidJobInfo;
-  onResolve: (approved: boolean) => void;
-}): React.JSX.Element {
-  const { mode, providerId, billableCalls } = info;
-  return (
-    <div data-testid="paid-confirm" className="rounded border border-[#7a5a2a] bg-[#1c1608] p-2 text-[11px] text-[#ecd]">
-      <p className="mb-1 font-semibold text-[#fda]">Confirm paid generation</p>
-      <p className="mb-2 text-[#cba]">
-        This runs a billable cloud job: <span className="text-[#fec]">{mode}</span> via{" "}
-        <span className="text-[#fec]">{providerId}</span> ({billableCalls} billable call
-        {billableCalls === 1 ? "" : "s"}). Your provider account is charged.
-      </p>
-      <div className="flex gap-2">
-        <button
-          type="button"
-          data-testid="paid-confirm-yes"
-          onClick={() => onResolve(true)}
-          className="rounded border border-[#3a5a7a] bg-[#14253a] px-2 py-1 text-[#bfe] hover:bg-[#1a2f48]"
-        >
-          Confirm &amp; run
-        </button>
-        <button
-          type="button"
-          data-testid="paid-confirm-no"
-          onClick={() => onResolve(false)}
-          className="rounded border border-[#7a3a3a] bg-[#2a1414] px-2 py-1 text-[#fbb] hover:bg-[#341a1a]"
-        >
-          Cancel
-        </button>
-      </div>
-    </div>
-  );
-}
-
 export function GenerationPanel(): React.JSX.Element {
   const settings = useAiStore((s) => s.settings);
   const activeMeshDoc = useProjectsStore((s) => s.activeMeshDoc);
@@ -319,33 +266,29 @@ export function GenerationPanel(): React.JSX.Element {
     const attached = attachment;
     if (!text && !attached) return;
 
-    const build = (globalThis as { __plastiqBuild?: BuildSeam }).__plastiqBuild;
-    if (!build) {
+    if (!buildSeam()) {
       append({ kind: "error", text: "The geometry viewport isn’t ready yet — try again in a moment.", isError: true });
       return;
     }
 
-    const probe: BuildProbe = async (doc) => {
-      try {
-        return (await build(doc)) ? { ok: true } : { ok: false, error: "the document produced no geometry or a feature failed to build" };
-      } catch (e) {
-        return { ok: false, error: e instanceof Error ? e.message : String(e) };
-      }
-    };
-    const meshProbe: MeshProbe = (doc) => build(doc);
-    const apply: ApplyDocument = (doc) => useCadStore.getState().loadDocument(doc);
-
     const controller = new AbortController();
     const meter = new UsageMeter();
-
-    // Creative path (FR-15/FR-18a): wire create_mesh from the fal providers + a
-    // promise-bridged confirm modal. The model can always reach the tool; without a fal
-    // key or proxy it fails with a clean error (meshGenConfigured surfaces an honest hint).
-    const providerDeps = buildMeshGenDeps(current);
     createdMeshIdRef.current = null;
-    const createMeshDeps: CreateMeshDeps = {
-      ...providerDeps,
-      // The attached image is the img3d input — resolve it by id for create_mesh (FR-10a).
+
+    // Shared agent-turn deps (build_part/inspect + create_mesh) — the SAME wiring the
+    // command palette uses, so both entry points stay in lockstep. The attached image (if
+    // any) is the img3d creative input, resolved by id (FR-10a). The model can always reach
+    // create_mesh; without a fal key/proxy it fails cleanly (meshGenConfigured hints).
+    const turnDeps: TurnToolsDeps = {
+      settings: current,
+      confirm: (info) => new Promise<boolean>((resolve) => setPaidConfirm({ info, resolve })),
+      recordPaidJob: () => {
+        meter.addPaidJob();
+        setUsage(meter.snapshot());
+      },
+      onMeshCreated: (id) => {
+        createdMeshIdRef.current = id;
+      },
       ...(attached
         ? {
             resolveImage: async (id: string) => {
@@ -354,24 +297,13 @@ export function GenerationPanel(): React.JSX.Element {
             },
           }
         : {}),
-      confirm: (info) => new Promise<boolean>((resolve) => setPaidConfirm({ info, resolve })),
-      persist: async (doc) => {
-        const id = await useProjectsStore.getState().createMeshProject(doc);
-        createdMeshIdRef.current = id;
-        return id;
-      },
-      recordPaidJob: () => {
-        meter.addPaidJob();
-        setUsage(meter.snapshot());
-      },
       signal: controller.signal,
     };
-    const tools = buildAgentTools({
-      buildPart: { probe, apply },
-      probe: meshProbe,
-      currentDoc: () => useCadStore.getState().toDocument(),
-      createMesh: createMeshDeps,
-    });
+    const tools = buildTurnTools(turnDeps);
+    if (!tools) {
+      append({ kind: "error", text: "The geometry viewport isn’t ready yet — try again in a moment.", isError: true });
+      return;
+    }
 
     const provider = buildProvider(toProviderSettings(current));
     const ai = useAiStore.getState();
@@ -413,7 +345,7 @@ export function GenerationPanel(): React.JSX.Element {
         // attached image + the user-selected 3D-gen provider, gated by the paid confirm.
         append({ kind: "tool", text: `→ create_mesh(img3d via ${meshProviderId})` });
         void ai.appendTrace({ kind: "tool-call", name: "create_mesh", detail: `img3d via ${meshProviderId}` });
-        const r = await createMesh({ ...directCreative, providerId: meshProviderId }, createMeshDeps);
+        const r = await createMesh({ ...directCreative, providerId: meshProviderId }, buildCreateMeshDeps(turnDeps));
         append({ kind: r.status === "error" ? "error" : "status", text: r.message, isError: r.status === "error" });
         void ai.appendTrace({ kind: "tool-result", name: "create_mesh", detail: r.message, isError: r.status === "error" });
       } else {

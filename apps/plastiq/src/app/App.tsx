@@ -11,6 +11,7 @@ import { FeatureTree } from "./FeatureTree.js";
 import { AssemblyTree } from "./AssemblyTree.js";
 import { PropertiesPanel } from "./PropertiesPanel.js";
 import { GenerationPanel } from "../ai/GenerationPanel.js";
+import { CommandPalette } from "../ai/CommandPalette.js";
 import { Viewport } from "../three/index.js";
 import { Sketcher } from "../sketch/Sketcher.js";
 import { Welcome } from "./Welcome.js";
@@ -63,13 +64,24 @@ const MODE_KEYS: Record<string, SelectionMode> = {
   "4": "body",
 };
 
-/** Global viewport shortcuts (FR-9): Esc clears selection; 1–4 switch mode. */
-function useEditorShortcuts(): void {
+/** Global viewport shortcuts (FR-9): Esc clears selection; 1–4 switch mode; ⌘/Ctrl-K
+ * opens the command palette (FR-19). `onCommandPalette` is held in a ref so the keydown
+ * listener stays subscribed once (the callback identity may change per render). */
+function useEditorShortcuts(onCommandPalette: () => void): void {
+  const paletteRef = useRef(onCommandPalette);
+  paletteRef.current = onCommandPalette;
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
       const t = e.target as HTMLElement | null;
       const typing =
         t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable);
+      // Command palette (FR-19): ⌘/Ctrl-K opens it from anywhere — even while typing in a
+      // field — so it's a universal entry point. It owns the key; nothing else runs.
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        paletteRef.current();
+        return;
+      }
       const store = useCadStore.getState();
       // While a sketch is open it owns its own undo/redo, Esc and number keys —
       // these global viewport shortcuts must NOT also fire (else Esc double-acts,
@@ -154,7 +166,8 @@ function Splitter({ onResize }: { onResize: (dx: number) => void }): React.JSX.E
 }
 
 export function App(): React.JSX.Element {
-  useEditorShortcuts();
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  useEditorShortcuts(() => setPaletteOpen(true));
   const [leftW, setLeftW] = useState(260);
   const [rightW, setRightW] = useState(280);
   const [leftOpen, setLeftOpen] = useState(true);
@@ -174,6 +187,8 @@ export function App(): React.JSX.Element {
 
   return (
     <div className="grid h-full grid-cols-1 grid-rows-[auto_1fr_auto] bg-[#0b0d12] text-[#cfe]">
+      {/* Command palette (FR-19) — a global ⌘/Ctrl-K overlay; renders nothing when closed. */}
+      <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} />
       {/* A SLIM top strip (global controls + workspace switcher only) + the recovery
           banner share the `auto` row, so the `1fr` row stays the viewport. The actual
           workspace TOOLS live in the left sidebar (WorkspacePanel) — not a top bar. */}
