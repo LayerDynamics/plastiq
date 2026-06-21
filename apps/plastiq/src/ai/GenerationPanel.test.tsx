@@ -54,3 +54,54 @@ describe("GenerationPanel — creative mesh-gen key is reachable", () => {
     expect(screen.getByTestId("creative-key").textContent).toContain("✓ configured");
   });
 });
+
+describe("GenerationPanel — image attach + route toggle (FR-10a/FR-10b)", () => {
+  const attachImage = async (name = "ref.png"): Promise<void> => {
+    const file = new File([new Uint8Array([1, 2, 3])], name, { type: "image/png" });
+    await act(async () => {
+      fireEvent.change(screen.getByTestId("attach-input"), { target: { files: [file] } });
+    });
+    await waitFor(() => expect(screen.getByTestId("attach-name")).toBeTruthy());
+  };
+
+  it("attaching an image reveals the route toggle; the creative route reveals a provider picker", async () => {
+    render(<GenerationPanel />);
+    // No image yet → no route toggle.
+    expect(screen.queryByTestId("attach-route")).toBeNull();
+
+    await attachImage();
+    expect(screen.getByTestId("attach-name").textContent).toContain("ref.png");
+    expect(screen.getByTestId("attach-route-parametric")).toBeTruthy();
+    expect(screen.getByTestId("attach-route-creative")).toBeTruthy();
+    // Parametric is the default → no 3D-gen provider picker yet.
+    expect(screen.queryByTestId("attach-mesh-provider")).toBeNull();
+
+    fireEvent.click(screen.getByTestId("attach-route-creative"));
+    // Creative image→3D needs a 3D-gen provider — the picker appears (img3d-capable only).
+    const picker = screen.getByTestId("attach-mesh-provider") as HTMLSelectElement;
+    expect(picker).toBeTruthy();
+    expect(picker.querySelectorAll("option").length).toBeGreaterThan(0);
+  });
+
+  it("clearing an attachment removes the route toggle", async () => {
+    render(<GenerationPanel />);
+    await attachImage();
+    fireEvent.click(screen.getByTestId("attach-clear"));
+    await waitFor(() => expect(screen.queryByTestId("attach-route")).toBeNull());
+  });
+
+  it("a parametric image on a non-vision model is DISABLED with a message, not silently dropped", async () => {
+    // qwen2.5 over openai-compatible is not vision-capable (supportsVision=false).
+    (globalThis as { __plastiqBuild?: () => Promise<null> }).__plastiqBuild = () => Promise.resolve(null);
+    render(<GenerationPanel />);
+    await attachImage();
+    // Keep the default parametric route, then run.
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("generation-send"));
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId("generation-transcript").textContent).toContain("can’t see images");
+    });
+    delete (globalThis as { __plastiqBuild?: unknown }).__plastiqBuild;
+  });
+});

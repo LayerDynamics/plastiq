@@ -6,7 +6,7 @@
 // neutral first-run chooser (FR-5a) lets the user pick a provider so the panel is
 // self-sufficient. Conversation + trace persist per project via the aiStore (R5.1).
 
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import { useAiStore } from "./aiStore.js";
 import { useCadStore } from "../store/store.js";
 import { useProjectsStore } from "../persistence/projectsStore.js";
@@ -16,12 +16,33 @@ import { buildAgentTools } from "./tools/toolDefs.js";
 import { runGeneration } from "./runGeneration.js";
 import { reconstructMesh, stepToImportDocument } from "./reconstruct.js";
 import { buildMeshGenDeps, meshGenConfigured } from "./meshGenDeps.js";
+import { planAttachmentRoute, type AttachmentRoute } from "./visionRoute.js";
 import { UsageMeter, type UsageSnapshot } from "./usage.js";
 import type { BuildProbe, ApplyDocument } from "./tools/buildPart.js";
 import type { MeshProbe } from "./tools/inspectGeometry.js";
-import type { CreateMeshDeps, PaidJobInfo } from "./tools/createMesh.js";
+import { createMesh, type CreateMeshDeps, type PaidJobInfo } from "./tools/createMesh.js";
+import type { GenImage } from "./meshgen/types.js";
 import type { CadDocument } from "../store/types.js";
+import type { ContentPart } from "./providers/types.js";
 import type { TransferMesh } from "../worker/protocol.js";
+
+/** An image the user attached to a prompt, with a stable id so the creative img3d route
+ * (create_mesh) can reference it via resolveImage. */
+interface Attachment {
+  image: GenImage;
+  id: string;
+  name: string;
+}
+
+/** Read a user-selected image File into the GenImage (base64) the providers consume. */
+async function fileToGenImage(file: File): Promise<GenImage> {
+  const buf = await file.arrayBuffer();
+  const bytes = new Uint8Array(buf);
+  let binary = "";
+  const CHUNK = 0x8000;
+  for (let i = 0; i < bytes.length; i += CHUNK) binary += String.fromCharCode(...bytes.subarray(i, i + CHUNK));
+  return { mediaType: file.type || "image/png", data: btoa(binary) };
+}
 
 /** A line in the visible transcript (assistant text, a tool step, or a status). */
 interface Line {
@@ -275,7 +296,16 @@ export function GenerationPanel(): React.JSX.Element {
   const [running, setRunning] = useState(false);
   const [usage, setUsage] = useState<UsageSnapshot | null>(null);
   const [paidConfirm, setPaidConfirm] = useState<PendingConfirm | null>(null);
+  // Image attachment + its route (FR-10a/FR-10b): a parametric vision reference, or the
+  // creative image→3D path. `meshProviderId` is the 3D-gen provider for the creative route.
+  const [attachment, setAttachment] = useState<Attachment | null>(null);
+  const [attachRoute, setAttachRoute] = useState<AttachmentRoute>("parametric");
+  const [meshProviderId, setMeshProviderId] = useState("fal:tripo");
   const abortRef = useRef<AbortController | null>(null);
+  /** Monotonic id source for attachments (Date.now/Math.random are banned in some
+   * contexts; a counter is deterministic and unique within a session). */
+  const attachSeq = useRef(0);
+  const meshProviders = useMemo(() => (settings ? buildMeshGenDeps(settings).providers : []), [settings]);
   /** Set by create_mesh's persist dep when a mesh document is generated mid-run; the
    * panel opens it AFTER the agent loop so a success never swaps the UI mid-generation. */
   const createdMeshIdRef = useRef<string | null>(null);
@@ -286,7 +316,8 @@ export function GenerationPanel(): React.JSX.Element {
     const current = useAiStore.getState().settings;
     if (!current || running) return;
     const text = prompt.trim();
-    if (!text) return;
+    const attached = attachment;
+    if (!text && !attached) return;
 
     const build = (globalThis as { __plastiqBuild?: BuildSeam }).__plastiqBuild;
     if (!build) {
@@ -314,6 +345,15 @@ export function GenerationPanel(): React.JSX.Element {
     createdMeshIdRef.current = null;
     const createMeshDeps: CreateMeshDeps = {
       ...providerDeps,
+      // The attached image is the img3d input — resolve it by id for create_mesh (FR-10a).
+      ...(attached
+        ? {
+            resolveImage: async (id: string) => {
+              if (id === attached.id) return attached.image;
+              throw new Error(`no attached image with id '${id}'`);
+            },
+          }
+        : {}),
       confirm: (info) => new Promise<boolean>((resolve) => setPaidConfirm({ info, resolve })),
       persist: async (doc) => {
         const id = await useProjectsStore.getState().createMeshProject(doc);
@@ -338,41 +378,73 @@ export function GenerationPanel(): React.JSX.Element {
     const history = ai.conversation.messages;
     const currentDoc = useCadStore.getState().toDocument();
 
+    // Route an attached image (FR-10a/FR-10b): a parametric vision reference, the creative
+    // image→3D path, or disabled when the model can't see and the user chose parametric.
+    let agentInput: string | ContentPart[] = text;
+    let directCreative: { mode: "img3d"; imageId: string; prompt?: string } | null = null;
+    if (attached) {
+      const plan = planAttachmentRoute({
+        route: attachRoute,
+        prompt: text,
+        image: attached.image,
+        imageId: attached.id,
+        supportsVision: provider.supportsVision,
+      });
+      if (plan.kind === "disabled") {
+        append({ kind: "error", text: plan.reason, isError: true });
+        return; // before setRunning — no run started
+      }
+      if (plan.kind === "parametric") agentInput = plan.userContent;
+      else directCreative = plan.createMeshInput;
+    }
+
     abortRef.current = controller;
     setRunning(true);
-    append({ kind: "text", text: `> ${text}` });
-    void ai.appendMessage({ role: "user", content: text });
+    const routeTag = attached ? ` [${attachRoute === "creative" ? "→3D" : "vision"}: ${attached.name}]` : "";
+    append({ kind: "text", text: `> ${text || "(image)"}${routeTag}` });
+    void ai.appendMessage({ role: "user", content: text || "(image attached)" });
     setPrompt("");
+    setAttachment(null);
 
     let assistantText = "";
     try {
-      await runGeneration({
-        provider,
-        input: text,
-        history,
-        currentDoc,
-        tools,
-        signal: controller.signal,
-        onEvent: (e) => {
-          if (e.type === "text") {
-            assistantText += e.text;
-            append({ kind: "text", text: e.text });
-          } else if (e.type === "tool-call") {
-            const detail = JSON.stringify(e.args).slice(0, 200);
-            append({ kind: "tool", text: `→ ${e.name}(${detail})` });
-            void ai.appendTrace({ kind: "tool-call", name: e.name, detail });
-          } else if (e.type === "tool-result") {
-            append({ kind: "tool", text: `← ${e.name}: ${e.result.slice(0, 200)}`, isError: e.isError });
-            void ai.appendTrace({ kind: "tool-result", name: e.name, detail: e.result.slice(0, 200), isError: e.isError });
-          } else if (e.type === "usage") {
-            meter.addTokens({ inputTokens: e.inputTokens, outputTokens: e.outputTokens });
-            setUsage(meter.snapshot());
-          } else if (e.type === "status") {
-            append({ kind: "status", text: `[${e.finish} · ${e.steps} step${e.steps === 1 ? "" : "s"}]` });
-          }
-        },
-      });
-      if (assistantText.trim()) void ai.appendMessage({ role: "assistant", content: assistantText });
+      if (directCreative) {
+        // Creative image→3D runs the create_mesh pipeline directly (no LLM needed): the
+        // attached image + the user-selected 3D-gen provider, gated by the paid confirm.
+        append({ kind: "tool", text: `→ create_mesh(img3d via ${meshProviderId})` });
+        void ai.appendTrace({ kind: "tool-call", name: "create_mesh", detail: `img3d via ${meshProviderId}` });
+        const r = await createMesh({ ...directCreative, providerId: meshProviderId }, createMeshDeps);
+        append({ kind: r.status === "error" ? "error" : "status", text: r.message, isError: r.status === "error" });
+        void ai.appendTrace({ kind: "tool-result", name: "create_mesh", detail: r.message, isError: r.status === "error" });
+      } else {
+        await runGeneration({
+          provider,
+          input: agentInput,
+          history,
+          currentDoc,
+          tools,
+          signal: controller.signal,
+          onEvent: (e) => {
+            if (e.type === "text") {
+              assistantText += e.text;
+              append({ kind: "text", text: e.text });
+            } else if (e.type === "tool-call") {
+              const detail = JSON.stringify(e.args).slice(0, 200);
+              append({ kind: "tool", text: `→ ${e.name}(${detail})` });
+              void ai.appendTrace({ kind: "tool-call", name: e.name, detail });
+            } else if (e.type === "tool-result") {
+              append({ kind: "tool", text: `← ${e.name}: ${e.result.slice(0, 200)}`, isError: e.isError });
+              void ai.appendTrace({ kind: "tool-result", name: e.name, detail: e.result.slice(0, 200), isError: e.isError });
+            } else if (e.type === "usage") {
+              meter.addTokens({ inputTokens: e.inputTokens, outputTokens: e.outputTokens });
+              setUsage(meter.snapshot());
+            } else if (e.type === "status") {
+              append({ kind: "status", text: `[${e.finish} · ${e.steps} step${e.steps === 1 ? "" : "s"}]` });
+            }
+          },
+        });
+        if (assistantText.trim()) void ai.appendMessage({ role: "assistant", content: assistantText });
+      }
       // If create_mesh produced a mesh document this run, open it now (AFTER the loop)
       // so the panel switches to the convert-to-CAD view without yanking a live run.
       const newMeshId = createdMeshIdRef.current;
@@ -387,9 +459,16 @@ export function GenerationPanel(): React.JSX.Element {
       setRunning(false);
       abortRef.current = null;
     }
-  }, [prompt, running, append]);
+  }, [prompt, running, append, attachment, attachRoute, meshProviderId]);
 
   const cancel = useCallback((): void => abortRef.current?.abort(), []);
+
+  const onAttachFile = useCallback(async (file: File | undefined): Promise<void> => {
+    if (!file) return;
+    const image = await fileToGenImage(file);
+    attachSeq.current += 1;
+    setAttachment({ image, id: `att-${attachSeq.current}`, name: file.name });
+  }, []);
 
   return (
     <div data-testid="generation-panel" className="flex flex-col gap-2 text-xs">
@@ -420,12 +499,76 @@ export function GenerationPanel(): React.JSX.Element {
             disabled={running}
             className="w-full resize-none rounded border border-[#2a3444] bg-[#0b0d12] px-2 py-1 text-[#cfe] placeholder:text-[#566] disabled:opacity-60"
           />
+          {/* Image attach + route (FR-10a/FR-10b): a parametric vision reference (needs a
+              vision-capable model) or the creative image→3D path (picks a 3D-gen provider). */}
+          <div data-testid="attach-row" className="flex flex-wrap items-center gap-2 text-[10px] text-[#9ab]">
+            <label className="cursor-pointer rounded border border-[#2a3444] bg-[#10141c] px-2 py-1 hover:bg-[#16202c]">
+              <input
+                data-testid="attach-input"
+                type="file"
+                accept="image/*"
+                className="hidden"
+                disabled={running}
+                onChange={(e) => void onAttachFile(e.target.files?.[0])}
+              />
+              {attachment ? "Replace image" : "Attach image"}
+            </label>
+            {attachment && (
+              <>
+                <span data-testid="attach-name" className="max-w-[10rem] truncate text-[#cde]">
+                  {attachment.name}
+                </span>
+                <button
+                  type="button"
+                  data-testid="attach-clear"
+                  onClick={() => setAttachment(null)}
+                  className="rounded border border-[#7a3a3a] bg-[#2a1414] px-1.5 py-0.5 text-[#fbb] hover:bg-[#341a1a]"
+                >
+                  ✕
+                </button>
+                <div data-testid="attach-route" className="ml-1 flex overflow-hidden rounded border border-[#2a3444]">
+                  <button
+                    type="button"
+                    data-testid="attach-route-parametric"
+                    onClick={() => setAttachRoute("parametric")}
+                    className={`px-2 py-0.5 ${attachRoute === "parametric" ? "bg-[#14253a] text-[#bfe]" : "bg-[#10141c] text-[#789]"}`}
+                  >
+                    Reference (parametric)
+                  </button>
+                  <button
+                    type="button"
+                    data-testid="attach-route-creative"
+                    onClick={() => setAttachRoute("creative")}
+                    className={`px-2 py-0.5 ${attachRoute === "creative" ? "bg-[#14253a] text-[#bfe]" : "bg-[#10141c] text-[#789]"}`}
+                  >
+                    Generate mesh (image→3D)
+                  </button>
+                </div>
+                {attachRoute === "creative" && (
+                  <select
+                    data-testid="attach-mesh-provider"
+                    value={meshProviderId}
+                    onChange={(e) => setMeshProviderId(e.target.value)}
+                    className="rounded border border-[#2a3444] bg-[#0b0d12] px-1 py-0.5 text-[#cfe]"
+                  >
+                    {meshProviders
+                      .filter((p) => p.supports.img3d)
+                      .map((p) => (
+                        <option key={p.id} value={p.id}>
+                          {p.label}
+                        </option>
+                      ))}
+                  </select>
+                )}
+              </>
+            )}
+          </div>
           <div className="flex items-center gap-2">
             <button
               type="button"
               data-testid="generation-send"
               onClick={() => void run()}
-              disabled={running || !prompt.trim()}
+              disabled={running || (!prompt.trim() && !attachment)}
               className="rounded border border-[#3a5a7a] bg-[#14253a] px-2 py-1 text-[#bfe] hover:bg-[#1a2f48] disabled:opacity-40"
             >
               {running ? "Generating…" : "Generate"}
