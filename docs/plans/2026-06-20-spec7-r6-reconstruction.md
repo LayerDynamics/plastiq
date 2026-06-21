@@ -126,10 +126,17 @@ Deterministic (NFR-2); never drops geometry (faceted fallback, NFR-1).
   seam. Honest label: this is the model-free reconstruction E2E; it is NOT the AI E2E.
 - **Done when:** green locally with the service up; skips cleanly without it.
 
-### R6.8 — Deploy — deferred (decision D-6, local-only for now)
-- Dockerfile + `environment.yml` exist. When deploying: prebuild the conda image, push to a
-  registry, run on Railway (≈2–3 GB image, under the ~4 GB cap), set the app's
-  `reconstructBaseURL`. `/health` exists (`main.py:50`). Cloudflare Workers can't host it.
+### R6.8 — Deploy-readiness — ✅ local-only verified (hosted deploy deferred, decision D-6)
+- The Dockerfile + `environment.yml` build and **run locally, verified**: `docker build -t
+  plastiq-reconstruct services/reconstruct` then `docker run -p 8000:8000 …` → `/health` ok
+  and a real GLB reconstructs end-to-end through the containerized service (cylinder fixture
+  → `method:"cylinder"`, watertight solid). `/health` is at `main.py`.
+- **Image size: ≈4.7 GB** (conda + OCCT/pythonOCC + the scientific stack). This is the
+  honest figure and it **exceeds the ~4 GB cap** earlier assumed for a Railway image — so a
+  hosted deploy is not a drop-in: it needs slimming first (multi-stage copy of just the
+  conda env, prune build tooling, consider a slimmer OCCT). `mamba clean -afy` already runs.
+- Cloudflare Workers can't host a native container regardless. When deploying: slim the
+  image, push to a registry, run the container, set the app's `reconstructBaseURL`.
 
 ## Milestone exit criteria
 

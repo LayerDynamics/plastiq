@@ -86,10 +86,16 @@ docker build -t plastiq-reconstruct services/reconstruct
 docker run -p 8000:8000 plastiq-reconstruct
 ```
 
-The image builds the conda env from `environment.yml` on `condaforge/miniforge3`. Deploy
-target is self-hosted Docker (Railway / Cloudflare tooling is available in this repo when
-chosen). The browser reaches it by base URL — same BYO/self-host spirit as the AI proxy
-seam, so no provider key leaves the user's control.
+The image builds the conda env from `environment.yml` on `condaforge/miniforge3`. **Verified
+locally:** it builds, `/health` returns ok, and a real GLB reconstructs end-to-end through
+the running container. The browser reaches it by base URL (set the app's
+`reconstructBaseURL`) — same BYO/self-host spirit as the AI proxy seam, so no provider key
+leaves the user's control.
+
+The image is **≈4.7 GB** (conda + OCCT/pythonOCC + numpy/scipy/trimesh). That is fine for
+local Docker but **exceeds the ~4 GB cap** of some hosted runners — a hosted deploy needs
+slimming first (multi-stage copy of just the conda env, prune build tooling). A hosted
+deploy is descoped for now (SPEC-7 decision D-6); local Docker is the supported mode.
 
 ## Honest caveat
 
