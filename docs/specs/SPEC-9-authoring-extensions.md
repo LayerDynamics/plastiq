@@ -50,11 +50,26 @@ a name to distinct geometry is a future multi-part-library milestone (the format
 **Tests:** `apps/plastiq/src/assembly/assy.test.ts` (parse/realize/nesting/rotation/BOM/round-trip) +
 `BomPanel.test.tsx`.
 
-## §planning-ir — agent decomposition-graph planning-IR (M5 · pending)
+## §planning-ir — agent decomposition-graph planning-IR (M5 · shipped)
 
-See `docs/adr/0005-agent-planning-ir.md` (to be written): the AI agent emits a hierarchical
-decomposition plan before `build_part` tool calls. Independent design (Graph-CAD is inspiration only;
-no license).
+**ADR:** [`docs/adr/0005-agent-planning-ir.md`](../adr/0005-agent-planning-ir.md) · **Source idea:**
+Graph-CAD (NO license → independent design)
+
+An optional **`plan_part`** tool: a no-side-effect step where the agent commits to a decomposition
+graph (schema-validated) *before* `build_part`, cutting long-horizon error on complex multi-part
+objects.
+
+- **Planning IR (`apps/plastiq/src/ai/planning.ts`):** `node = { id, part, parent? }` (hierarchy) +
+  `relation = { from, to, kind }`, `kind ∈ { aligned, attached, coaxial, offset, pattern, symmetric,
+  contains }`. **`validatePlan`** enforces schema + referential integrity (parent/relation endpoints
+  exist) + acyclic hierarchy.
+- **`plan_part` tool** (`tools/toolDefs.ts`): validates via `validatePlan`, records the plan via the
+  injected `onPlan` dep, returns `summarizePlan` (or the error so the model fixes the structure). No
+  geometry side effects. Listed first; the prompt (`ai/prompt.ts`) tells the agent to call it first
+  **for complex objects only** — a simple part skips it. Bounded by the existing step cap (12).
+- **Tests:** `apps/plastiq/src/ai/planning.unit.test.ts` (validation: refs, cycles, dup ids, bad
+  kinds) + `tools/toolDefs.unit.test.ts` (def present, dispatch, and a `runAgent` orchestration test:
+  plan → build → answer).
 
 ## §voxel — ray-pick voxel-editing mode (M10 · pending)
 

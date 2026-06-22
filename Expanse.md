@@ -397,7 +397,7 @@ Ranked by **(value × confidence) ÷ effort**, license-clean first.
 **Design-inspiration (ideas, not code to integrate):**
 - **partcad** — ✅ **SHIPPED** (M4): declarative `.assy` description + `realizeAssembly` + **auto-BOM** (`apps/plastiq/src/assembly/assy.ts` + `BomPanel.tsx`; own dependency-free JSON schema, not partcad's YAML/Python). SPEC-9 §assembly + ADR 0004; 11 tests. (Git-versioned CAD packages + multi-part geometry library remain future work.)
 - **forgent3d** — **warm-OCP rebuild-daemon** pattern (MIT). ⚠️ *Evaluated → not applicable* (M3, [`docs/adr/0003`](docs/adr/0003-warm-ocp-pool.md)): the daemon solves cold-import for a per-rebuild CLI; `services/reconstruct` is a long-running server with module-level OCC imports, so OCC is already warm for the process lifetime and there is no per-request cold-import to remove. Kept as an agent↔geometry verify-loop reference only.
-- **Graph-CAD** — **decomposition-graph-as-planning-IR** → have the AI agent emit a hierarchical constraint graph before `build_part` tool calls (no license → idea only).
+- **Graph-CAD** — ✅ **SHIPPED** (M5): **decomposition-graph planning-IR** — a `plan_part` tool the agent calls first for complex objects (validated nodes+relations graph via `ai/planning.ts`, recorded for the trace) before `build_part`. Own schema (Graph-CAD has no license → idea only). SPEC-9 §planning-ir + ADR 0005; 13 tests incl. a `runAgent` plan→build→answer orchestration.
 - **CADmium** — note **`truck`** (pure-Rust WASM B-rep kernel) as a future smaller-WASM alternative to OCCT (separate repo; check its license first).
 - **voxel-editor** — ray-pick/work-plane-selection UX, only if voxel mode ever enters scope (Apache-2.0).
 

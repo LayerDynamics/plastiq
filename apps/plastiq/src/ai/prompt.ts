@@ -14,6 +14,12 @@ parametric parts by calling tools — never by describing geometry in prose.
 
 UNITS: every length you write is in MILLIMETRES and every angle is in DEGREES.
 
+TOOL: plan_part — for a COMPLEX or multi-part object, call this FIRST to decompose it
+into a plan graph: nodes are sub-parts ({ "id", "part", "parent"? }, hierarchy via
+parent), relations are spatial/constraint edges ({ "from", "to", "kind" } with kind one
+of aligned/attached/coaxial/offset/pattern/symmetric/contains). It's validated and
+returned; then build_part referencing those sub-parts. Skip it for a simple single part.
+
 TOOL: build_part — create or edit the part. Its input is a feature document:
   { "features": [ { "id": "f1", "type": "<type>", "params": { ... }, "data": { ... } } ], "params": {} }
 Features are evaluated in order; later features build on earlier ones. Supported
