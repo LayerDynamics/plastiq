@@ -3,8 +3,14 @@ input mesh.
 
 Ported (Apache-2.0) from StepForge's `reward/step_to_pointcloud.py` (adaptive-deflection
 `BRepMesh_IncrementalMesh` tessellation → area-weighted barycentric surface sampling) and
-`reward/scd_reward.py` (bidirectional Chamfer via `scipy.spatial.cKDTree`, normalized by the
-input's RMS radius). See `docs/adr/0001-scd-fidelity-metric.md`.
+`reward/scd_reward.py` (bidirectional Chamfer, normalized by the input's RMS radius). See
+`docs/adr/0001-scd-fidelity-metric.md`.
+
+The metric MATH runs in **MLX** (`mlx.core`, Apple Silicon): area-weighted barycentric sampling
+(categorical + uniform with explicit keys) and the bidirectional Chamfer (a brute-force pairwise
+distance matrix → per-point min — MLX has no kd-tree, but a few-thousand-point matrix is trivial on
+the GPU). OCC tessellation (pythonOCC) still produces the raw triangles; everything numerical after
+that is MLX. Deterministic by seed.
 
 Two deviations from StepForge, both deliberate:
   • **No alignment.** StepForge runs FPFH+RANSAC+ICP (`reward/alignment.py`, the only open3d user)
@@ -21,6 +27,7 @@ volume gate (a single scalar that two different shapes can share).
 
 from __future__ import annotations
 
+import mlx.core as mx
 import numpy as np
 import trimesh
 from OCC.Core.Bnd import Bnd_Box
@@ -31,7 +38,6 @@ from OCC.Core.TopAbs import TopAbs_FACE
 from OCC.Core.TopExp import TopExp_Explorer
 from OCC.Core.TopLoc import TopLoc_Location
 from OCC.Core.TopoDS import TopoDS_Shape, topods
-from scipy.spatial import cKDTree
 
 # Default sample size — matches StepForge's reward default; dense enough that two samples of the
 # same surface give a near-zero Chamfer, cheap enough for a per-reconstruction gate.
@@ -95,39 +101,37 @@ def _tessellate_shape(shape: TopoDS_Shape) -> tuple[np.ndarray, np.ndarray]:
     return np.concatenate(all_tris, axis=0), np.concatenate(all_areas, axis=0)
 
 
-def _sample_triangles(tris: np.ndarray, areas: np.ndarray, n_points: int, seed: int) -> np.ndarray:
-    """Area-weighted barycentric surface sampling (StepForge W3). Seeded → deterministic.
+def _sample_triangles(tris: np.ndarray, areas: np.ndarray, n_points: int, seed: int) -> mx.array:
+    """Area-weighted barycentric surface sampling (StepForge W3) in MLX. Seeded (explicit key) →
+    deterministic.
 
-    Choose triangles with probability ∝ area, then a uniform point inside each via the reflected
-    barycentric (u, v) trick. Non-finite samples (from degenerate faces) are dropped."""
+    Choose triangles with probability ∝ area (categorical), then a uniform point inside each via the
+    reflected barycentric (u, v) trick. Returns an `(n, 3)` MLX array. Degenerate (zero-area) faces are
+    already excluded upstream (`_tessellate_shape`), so every chosen triangle is finite."""
     if len(tris) == 0:
-        return np.empty((0, 3))
-    p = areas / areas.sum()
-    rng = np.random.default_rng(int(seed) & 0xFFFFFFFF)
-    choices = rng.choice(len(tris), size=n_points, p=p)
-    u = rng.random(n_points)
-    v = rng.random(n_points)
+        return mx.zeros((0, 3))
+    tris_mx = mx.array(np.asarray(tris, dtype=np.float32))  # (T, 3, 3)
+    areas_mx = mx.array(np.asarray(areas, dtype=np.float32))
+    probs = areas_mx / mx.sum(areas_mx)
+    keys = mx.random.split(mx.random.key(int(seed) & 0xFFFFFFFF), 3)
+    choices = mx.random.categorical(mx.log(probs), num_samples=n_points, key=keys[0])  # (n,)
+    u = mx.random.uniform(shape=(n_points,), key=keys[1])
+    v = mx.random.uniform(shape=(n_points,), key=keys[2])
     flip = (u + v) > 1
-    u[flip] = 1 - u[flip]
-    v[flip] = 1 - v[flip]
-    t = tris[choices]
-    pts = t[:, 0] + u[:, None] * (t[:, 1] - t[:, 0]) + v[:, None] * (t[:, 2] - t[:, 0])
-    finite = np.isfinite(pts).all(axis=1)
-    return pts[finite]
+    u = mx.where(flip, 1 - u, u)
+    v = mx.where(flip, 1 - v, v)
+    t = mx.take(tris_mx, choices, axis=0)  # (n, 3, 3)
+    return t[:, 0, :] + u[:, None] * (t[:, 1, :] - t[:, 0, :]) + v[:, None] * (t[:, 2, :] - t[:, 0, :])
 
 
-def sample_shape_surface(
-    shape: TopoDS_Shape, n_points: int = DEFAULT_N_POINTS, seed: int = 0
-) -> np.ndarray:
-    """Sample `n_points` points uniformly over the surface area of an OCC shape. Deterministic."""
+def sample_shape_surface(shape: TopoDS_Shape, n_points: int = DEFAULT_N_POINTS, seed: int = 0) -> mx.array:
+    """Sample `n_points` points uniformly over the surface area of an OCC shape (MLX). Deterministic."""
     tris, areas = _tessellate_shape(shape)
     return _sample_triangles(tris, areas, n_points, seed)
 
 
-def sample_mesh_surface(
-    mesh: trimesh.Trimesh, n_points: int = DEFAULT_N_POINTS, seed: int = 0
-) -> np.ndarray:
-    """Sample `n_points` points uniformly over a triangle mesh's surface area. Deterministic.
+def sample_mesh_surface(mesh: trimesh.Trimesh, n_points: int = DEFAULT_N_POINTS, seed: int = 0) -> mx.array:
+    """Sample `n_points` points uniformly over a triangle mesh's surface area (MLX). Deterministic.
 
     Uses the same area-weighted barycentric sampler as `sample_shape_surface` so the two clouds in
     `surface_fidelity` are produced identically (only the geometry differs)."""
@@ -136,33 +140,38 @@ def sample_mesh_surface(
     return _sample_triangles(tris, areas, n_points, seed)
 
 
-def chamfer_distance(p: np.ndarray, q: np.ndarray, *, bidirectional: bool = True) -> float:
-    """Bidirectional Chamfer (StepForge Eq. 1): mean squared nearest-neighbour distance each way.
+def chamfer_distance(p, q, *, bidirectional: bool = True) -> float:
+    """Bidirectional Chamfer (StepForge Eq. 1) in MLX: mean squared nearest-neighbour distance each
+    way, via a brute-force pairwise distance matrix (no kd-tree).
 
     CD(P,Q) = mean_{p∈P} min_{q∈Q} ||p-q||² + mean_{q∈Q} min_{p∈P} ||p-q||²."""
-    if len(p) == 0 or len(q) == 0:
+    p = p if isinstance(p, mx.array) else mx.array(np.asarray(p, dtype=np.float32))
+    q = q if isinstance(q, mx.array) else mx.array(np.asarray(q, dtype=np.float32))
+    if p.shape[0] == 0 or q.shape[0] == 0:
         return float("inf")
-    d_pq = cKDTree(q).query(p)[0]
+    d2 = mx.sum((p[:, None, :] - q[None, :, :]) ** 2, axis=-1)  # (|P|, |Q|)
+    d_pq = mx.mean(mx.min(d2, axis=1))
     if not bidirectional:
-        return float(np.mean(d_pq ** 2))
-    d_qp = cKDTree(p).query(q)[0]
-    return float(np.mean(d_pq ** 2) + np.mean(d_qp ** 2))
+        return float(d_pq.item())
+    d_qp = mx.mean(mx.min(d2, axis=0))
+    return float((d_pq + d_qp).item())
 
 
-def scaled_chamfer(pred: np.ndarray, gt: np.ndarray, *, bidirectional: bool = True) -> float:
-    """Scaled Chamfer Distance (StepForge Eq. 2), alignment dropped (same frame).
+def scaled_chamfer(pred, gt, *, bidirectional: bool = True) -> float:
+    """Scaled Chamfer Distance (StepForge Eq. 2) in MLX, alignment dropped (same frame).
 
     SCD = CD(pred, gt) / scale², scale = RMS distance of `gt` from its centroid. Dimensionless,
     translation/rotation/scale-robust. Returns inf if `gt` is degenerate (zero scale)."""
-    pred = np.asarray(pred, dtype=np.float64)
-    gt = np.asarray(gt, dtype=np.float64)
-    if len(pred) == 0 or len(gt) == 0:
+    pred = pred if isinstance(pred, mx.array) else mx.array(np.asarray(pred, dtype=np.float32))
+    gt = gt if isinstance(gt, mx.array) else mx.array(np.asarray(gt, dtype=np.float32))
+    if pred.shape[0] == 0 or gt.shape[0] == 0:
         return float("inf")
-    gt_centered = gt - gt.mean(axis=0)
-    scale = float(np.sqrt(np.mean(np.sum(gt_centered ** 2, axis=1))))
+    centroid = mx.mean(gt, axis=0)
+    gt_centered = gt - centroid
+    scale = float(mx.sqrt(mx.mean(mx.sum(gt_centered ** 2, axis=1))).item())
     if scale < 1e-8:
         return float("inf")
-    pred_centered = pred - gt.mean(axis=0)  # same shift preserves the relative pose
+    pred_centered = pred - centroid  # same shift preserves the relative pose
     return chamfer_distance(pred_centered, gt_centered, bidirectional=bidirectional) / (scale ** 2)
 
 

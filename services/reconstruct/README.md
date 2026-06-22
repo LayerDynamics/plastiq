@@ -76,7 +76,10 @@ structural fingerprint — see [`docs/adr/0002`](../../docs/adr/0002-brepnet-cle
 > `app/fidelity.py` (the SCD metric) is ported (**Apache-2.0**) from
 > [StepForge](https://github.com/) `reward/{step_to_pointcloud,scd_reward}.py`; the pose-alignment
 > stage (FPFH/RANSAC/ICP, the only open3d user) is omitted because the reconstructed B-rep is built
-> from the input mesh — same frame. See [`docs/adr/0001-scd-fidelity-metric.md`](../../docs/adr/0001-scd-fidelity-metric.md).
+> from the input mesh — same frame. The metric math (sampling + bidirectional Chamfer) and the M2c
+> recognition (dihedral angles + normal spread) run in **MLX** (`mlx.core`, Apple Silicon; pip dep),
+> with OCCT/trimesh for geometry and a Python union-find for connected components.
+> See [`docs/adr/0001`](../../docs/adr/0001-scd-fidelity-metric.md) / [`0002`](../../docs/adr/0002-brepnet-cleanroom-traversal.md).
 
 ## Run locally
 

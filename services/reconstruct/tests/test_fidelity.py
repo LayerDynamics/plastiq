@@ -50,26 +50,27 @@ def test_sampler_is_deterministic():
 
 
 def test_sampled_points_lie_on_the_surface():
-    pts = sample_shape_surface(_box_shape(), n_points=2000, seed=1)
-    # Every point on a [0,L]×[0,W]×[0,H] box has at least one coordinate at a face plane.
-    on_x = np.isclose(pts[:, 0], 0, atol=1e-9) | np.isclose(pts[:, 0], L, atol=1e-9)
-    on_y = np.isclose(pts[:, 1], 0, atol=1e-9) | np.isclose(pts[:, 1], W, atol=1e-9)
-    on_z = np.isclose(pts[:, 2], 0, atol=1e-9) | np.isclose(pts[:, 2], H, atol=1e-9)
+    pts = np.asarray(sample_shape_surface(_box_shape(), n_points=2000, seed=1))  # MLX → numpy
+    # Every point on a [0,L]×[0,W]×[0,H] box has at least one coordinate at a face plane. atol is
+    # float32-scale (MLX) — the box is ~0.03, so 1e-5 absolute is well below the geometry.
+    on_x = np.isclose(pts[:, 0], 0, atol=1e-5) | np.isclose(pts[:, 0], L, atol=1e-5)
+    on_y = np.isclose(pts[:, 1], 0, atol=1e-5) | np.isclose(pts[:, 1], W, atol=1e-5)
+    on_z = np.isclose(pts[:, 2], 0, atol=1e-5) | np.isclose(pts[:, 2], H, atol=1e-5)
     assert np.all(on_x | on_y | on_z)
     # …and inside the box bounds.
-    assert pts.min(axis=0).min() > -1e-9
-    assert np.all(pts.max(axis=0) <= np.array([L, W, H]) + 1e-9)
+    assert pts.min(axis=0).min() > -1e-5
+    assert np.all(pts.max(axis=0) <= np.array([L, W, H]) + 1e-5)
 
 
 def test_sampling_is_area_weighted():
     # A 10:1 slab — the two end caps (z=0,z=H of a 0.10×0.01×0.01 box... here use 0.10×0.01)
     dx, dy, dz = 0.100, 0.010, 0.010
-    pts = sample_shape_surface(_box_shape(dx=dx, dy=dy, dz=dz), n_points=4000, seed=3)
+    pts = np.asarray(sample_shape_surface(_box_shape(dx=dx, dy=dy, dz=dz), n_points=4000, seed=3))
     # The two dy×dz end caps (area dy*dz each) are tiny vs the long faces. Their combined
     # area fraction = 2*(dy*dz) / total. total = 2(dx*dy + dy*dz + dx*dz).
     total = 2 * (dx * dy + dy * dz + dx * dz)
     end_frac_true = 2 * (dy * dz) / total
-    on_end = np.isclose(pts[:, 0], 0, atol=1e-9) | np.isclose(pts[:, 0], dx, atol=1e-9)
+    on_end = np.isclose(pts[:, 0], 0, atol=1e-5) | np.isclose(pts[:, 0], dx, atol=1e-5)
     end_frac = on_end.mean()
     assert end_frac < 3 * end_frac_true  # area-weighted, NOT per-face-uniform (which would be ~1/3)
     assert abs(end_frac - end_frac_true) < 0.05  # tracks the true area fraction

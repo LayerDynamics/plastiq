@@ -45,9 +45,12 @@ T2 reconstruction feature-recognition.
   (tangent-connected *curved* faces — the blends), `convexEdges` / `concaveEdges`. Added to the
   `Selector` union + `resolveSelector`, wired into the editor's selection actions.
 - **T2 recognition:** the same tangent-adjacency idea, computed mesh-side in
-  `services/reconstruct/app/recognition.py` (trimesh face adjacency + dihedral angle →
-  connected-components over smooth joins). It groups the mesh into tangent-connected regions and
-  flags which are curved; the region count (`tangent_regions`) is reported on `ReconstructionReport`
+  `services/reconstruct/app/recognition.py`. The numerical math — the **dihedral angle between adjacent
+  face normals and the per-region normal spread — runs in MLX** (`mlx.core`, Apple Silicon); the
+  combinatorial parts stay where they belong (trimesh extracts which triangles share an edge; connected
+  components is a Python union-find — MLX is a tensor framework, not a graph library). It groups the
+  mesh into tangent-connected regions and flags which are curved; the region count (`tangent_regions`)
+  is reported on `ReconstructionReport`
   as a structural fingerprint (box → 6, cylinder → 3, organic blob → many) for honest UX, and the
   grouping is available to steer fitting. (Hole/boss detection stays with the existing CSG route, not
   this recogniser — distinguishing a hole from a boss from raw mesh regions is not reliable.)

@@ -21,16 +21,22 @@ Port StepForge's **deterministic surface sampler** and **Scaled Chamfer Distance
 - **Provenance / license:** StepForge is **Apache-2.0** (`ref/StepForge/LICENSE`). We port the *math*
   of `reward/step_to_pointcloud.py` (adaptive-deflection `BRepMesh_IncrementalMesh` tessellation →
   area-weighted barycentric surface sampling, seeded for determinism) and `reward/scd_reward.py`
-  (`chamfer_distance` via `scipy.spatial.cKDTree`; `scaled_chamfer_distance` = CD ÷ GT-RMS-radius²).
-  Attribution recorded here and in `services/reconstruct/README.md`. The StepForge **LLM/RL path is
-  not used** (it carries Llama/Text2CAD encumbrances and is irrelevant here).
+  (`chamfer_distance`; `scaled_chamfer_distance` = CD ÷ GT-RMS-radius²). Attribution recorded here and
+  in `services/reconstruct/README.md`. The StepForge **LLM/RL path is not used** (it carries
+  Llama/Text2CAD encumbrances and is irrelevant here).
+- **The metric MATH runs in MLX** (`mlx.core`, Apple Silicon — see memory `mlx-m4max-ml-milestones`):
+  area-weighted barycentric sampling (categorical + uniform with explicit keys) and the bidirectional
+  Chamfer as a **brute-force pairwise distance matrix → per-point min** (MLX has no kd-tree, so we
+  replace StepForge's `scipy.spatial.cKDTree` — a few-thousand-point matrix is trivial on the GPU).
+  OCCT/trimesh still produce the raw triangles; everything numerical after that is MLX. (MLX added to
+  `environment.yml` as a pip dep.)
 - **Drop the alignment stage.** StepForge runs FPFH+RANSAC+ICP (`reward/alignment.py`, the only part
   needing **open3d**) because it compares an LLM-generated STEP against ground truth in an *arbitrary*
   pose. **Our reconstructed B-rep is built directly from the input mesh — same coordinate frame** — so
-  alignment is unnecessary. We therefore add **no open3d dependency**; the metric runs on the existing
-  `numpy + scipy + pythonocc-core + trimesh` stack (verified `environment.yml`).
-- **Determinism (NFR-2).** Sampling is seeded from a stable hash of the input geometry, so the same
-  mesh always yields the same `surface_deviation`. No global RNG use.
+  alignment is unnecessary. We add **no open3d dependency**.
+- **Determinism (NFR-2).** Sampling is seeded (an explicit MLX key from a stable hash of the input
+  geometry), so the same mesh always yields the same `surface_deviation`. No global RNG use; MLX with a
+  fixed key is reproducible.
 - **Metric definition.** `surface_deviation` = `CD(P_recon, P_mesh) / scale²`, where `CD` is the
   bidirectional mean-squared nearest-neighbour distance and `scale` is the RMS distance of the input
   mesh's sampled points from their centroid (dimensionless; matches the SCD paper Eq. 1–2). A
