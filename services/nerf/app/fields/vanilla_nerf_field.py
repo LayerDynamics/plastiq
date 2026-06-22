@@ -10,7 +10,7 @@ from __future__ import annotations
 import mlx.core as mx
 import mlx.nn as nn
 
-from ..field_components.encodings import FrequencyEncoding
+from ..field_components.encodings import FrequencyEncoding, HashGridEncoding
 from ..field_components.field_heads import DensityHead, RGBHead
 from ..field_components.mlp import MLP
 from ..utils.config import FieldConfig
@@ -20,9 +20,14 @@ class NeRFField(nn.Module):
     def __init__(self, config: FieldConfig, seed: int = 0):
         super().__init__()
         mx.random.seed(seed)  # deterministic init (NFR-1)
-        self.pos_enc = FrequencyEncoding(config.n_frequencies)
+        if config.use_hashgrid:
+            self.pos_enc = HashGridEncoding(aabb=config.aabb, seed=seed)
+            pos_dim = self.pos_enc.output_dim  # property (N7)
+        else:
+            self.pos_enc = FrequencyEncoding(config.n_frequencies)
+            pos_dim = self.pos_enc.output_dim(3)
         self.dir_enc = FrequencyEncoding(4)
-        self.trunk = MLP(self.pos_enc.output_dim(3), config.hidden, config.hidden, config.layers)
+        self.trunk = MLP(pos_dim, config.hidden, config.hidden, config.layers)
         self.density_head = DensityHead(config.hidden)
         rgb_hidden = max(16, config.hidden // 2)
         self.rgb_trunk = MLP(config.hidden + self.dir_enc.output_dim(3), rgb_hidden, rgb_hidden, 2)

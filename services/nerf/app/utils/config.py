@@ -15,6 +15,7 @@ class FieldConfig:
     hidden: int = 128
     layers: int = 4
     use_hashgrid: bool = False  # N7: swap frequency → multiresolution hash grid
+    aabb: tuple[float, float] = (-1.5, 1.5)  # scene bounds the hash grid normalizes into
 
 
 @dataclass
