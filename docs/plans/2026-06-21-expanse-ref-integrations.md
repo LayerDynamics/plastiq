@@ -62,16 +62,22 @@ license, the clean-room/attribution decision, and the provenance of the implemen
 
 ## Honest prerequisites (surfaced, not hidden)
 
+> **TARGET HARDWARE + FRAMEWORK (user directive, 2026-06-22): Apple M4 Max — write all neural models
+> and training loops in MLX** (`mlx.core` / `mlx.nn`, Apple Silicon native), **NOT CUDA / tiny-cuda-nn
+> / PyTorch3D / PyTorch-MPS.** The upstream repos (nerfstudio/sdfstudio, DLR-RM shape-completion) are
+> CUDA-only and will not run on Apple Silicon — so M7/M8 use **self-contained, clean MLX
+> implementations** of the model + training, trainable on the M4 Max, rather than porting those repos.
+> This makes the milestones genuinely buildable-and-trainable here (no GPU/CUDA block).
+
 - **M8 (shape-completion)** ships **no pretrained weights** (`ref/shape-completion/docs/reproduction.md:5`).
-  "Full build" therefore includes **training on ShapeNet** — needs **multi-GPU + CUDA + the ShapeNet
-  dataset (license acceptance)** and days of compute the local box may not have. The milestone is
-  written to deliver a *working trained service*; if GPU/dataset access is unavailable, its gate task
-  blocks and we ship the service skeleton + a documented "bring your own checkpoint" path rather than
-  a fake result.
-- **M7 (photogrammetry)** needs an **NVIDIA GPU + COLMAP** for capture→pose→train. Same honesty: the
-  import + service-contract half runs anywhere; the actual NeRF/SDF training half needs the GPU box.
-- These two are sequenced **last among the build items** precisely because their confidence is
-  gated on infrastructure we must confirm.
+  "Full build" therefore includes **training in MLX on the M4 Max** (a self-contained occupancy/
+  completion network + loop), on ShapeNet-style data. Deliver a *working trainable service*; if the
+  dataset is unavailable, ship the MLX model + training loop + a tiny demo dataset + a documented
+  "point it at ShapeNet" path — never a fake result.
+- **M7 (photogrammetry)** needs **COLMAP** (poses) + an MLX NeRF/SDF field for the training half; the
+  import + service-contract half runs anywhere. Written in MLX for the M4 Max, not CUDA nerfstudio.
+- These two are sequenced **last among the build items**; with MLX on the M4 Max they are no longer
+  infra-blocked, only larger.
 
 ---
 
@@ -209,25 +215,21 @@ the camera/normal math that M7's capture pipeline needs, plus a standalone mesh 
       math (numpy) → green. (Used by M7 capture; standalone-tested here.)
 - [ ] **M6.3 — Docs.** Folded into `SPEC-8`/`SPEC-… capture`; update `Expanse.md` rec #5.
 
-## M7 — Photogrammetry capture (nerfstudio / sdfstudio) → mesh import · T2 self-hosted · Apache-2.0 · NET-NEW
+## M7 — MLX neural-SDF capture (points/depth → mesh) · T2 self-hosted · Apache-2.0 · ✅ SHIPPED
 
-**Honest prerequisite: NVIDIA GPU + COLMAP for the training half.** Built as a *self-hosted capture
-service* + an import path; SDF (sdfstudio) preferred for watertight output that feeds reconstruct.
+**Re-scoped on the M4 Max (MLX directive):** not blocked on a GPU. The CUDA nerfstudio/sdfstudio
+won't run on Apple Silicon, so M7 is a **self-contained MLX neural-SDF** surface reconstruction
+trained on the M4 Max — the *surface-reconstruction half* (oriented point cloud → mesh). The
+photos→points step (SfM/MVS) stays COLMAP's job (ADR 0007); no full multi-view radiance field needed.
 
-- [ ] **M7.0 — ADR + service contract.** `docs/adr/0007-photogrammetry-capture.md`; a new sibling
-      service `services/capture/` (FastAPI submit→poll, mirroring reconstruct's shape) — contract first.
-- [ ] **M7.1 — TDD: import path (no GPU).** Failing `mesh/importPly`/glb test (a NeRF/SDF-exported PLY
-      mesh imports as a `MeshDoc`, then routes into the existing reconstruct→B-rep path) → implement the
-      PLY import + handoff → green. *This half runs anywhere.*
-- [ ] **M7.2 — TDD: capture-service contract.** Failing service test (submit posed-images job → poll →
-      returns a mesh URL; mocked trainer) → implement `services/capture/app/*` wrapping
-      `ns-process-data`/`ns-train`/`ns-extract-mesh` (sdfstudio) behind the API → green.
-- [ ] **M7.3 — GPU integration (gated).** With a GPU box: a real photos→SDF→watertight-mesh run on a
-      fixture object, asserted watertight, fed to reconstruct. **If no GPU is available, this task
-      blocks**; we ship M7.1–M7.2 + a documented "run sdfstudio yourself, import the PLY" workflow and
-      mark the GPU task explicitly pending (no fake pass).
-- [ ] **M7.4 — Docs.** `docs/specs/SPEC-10-capture-and-completion.md` (capture half); honest
-      organic-vs-mechanical caveat; update `Expanse.md` rec #4 + README.
+- [x] **M7.0 — ADR + service contract.** `docs/adr/0007`; `services/capture/` (FastAPI submit→poll).
+- [x] **M7.1 — Import path.** The capture service emits a standard **GLB** → Plastiq's existing
+      `MeshDoc` import → existing "Convert to CAD" reconstruct. No new JS (external-capture workflow).
+- [x] **M7.2 — MLX SDF + service.** `app/sdf_mlx.py` (IGR Softplus SDF, geometric init, eikonal via
+      `mx.grad`, marching cubes), `app/pipeline.py`, `app/main.py` (submit→poll), `environment.yml`.
+- [x] **M7.3 — Trained here (M4 Max).** Real MLX training asserted on a sphere (~6 s) — correct mesh,
+      correct sign, deterministic. 13 pytest (geometry/sdf/pipeline/jobs); API test gated on fastapi+mlx.
+- [x] **M7.4 — Docs.** `SPEC-10` §capture, `services/capture/README.md`, `Expanse.md` rec #4.
 
 ## M8 — shape-completion "Complete Scan / Fill Gaps" · T2 GPU service · MIT · NET-NEW
 
