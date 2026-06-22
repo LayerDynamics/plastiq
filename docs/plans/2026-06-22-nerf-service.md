@@ -155,7 +155,8 @@ GLB→MeshDoc patterns the **capture service** (`services/capture/`, M7/M8) esta
       rays → trains VolSDF (default; `nerf` density optional) → marching-cubes → GLB; images decoded from
       base64 PNG/JPEG (PIL); MLX work dispatched off the event loop. Health/status/result + 400 validation.
       `tests/test_pipeline.py` (2, real train→export E2E, no HTTP) + `tests/test_api.py` (3, gated
-      fastapi+mlx, **run for real** — full submit→poll→GLB over the ASGI app via httpx). **42/42 green.**
+      fastapi+mlx, **run for real** — full submit→poll→GLB over the ASGI app via httpx). **43/43 green**
+      (incl. a `method="nerf"` density-path E2E test added when that path's field/model bug was fixed).
 - Fixed a VolSDF NaN: `mx.where` evaluates both branches, so an unclamped `exp(s/β)` overflowed on the
   unselected branch (0·inf → NaN gradient) → training diverged at sharp β. Clamped exp args to ≤0
   (selected branch unchanged) + default β 0.1→0.2; regression test `test_volsdf_density_finite_for_large_sdf`.
@@ -180,7 +181,7 @@ GLB→MeshDoc patterns the **capture service** (`services/capture/`, M7/M8) esta
 
 ## N12 — Docs reconciliation ✅
 - [x] **N12.1** Reconciled to shipped state: `SPEC-11` §5 wire contract + §6 status (N0–N12, the
-      `plastiq-nerf` env created and 42 tests pass there); `services/nerf/README.md` (corrected the
+      `plastiq-nerf` env created and 43 tests pass there); `services/nerf/README.md` (corrected the
       `/train` body `model?`→`method?`/`grid_res?` + the full result fields, added the `@plastiq/nerf`
       browser-client section, `VolSDFModel` naming); `Expanse.md` D1/D2 cards + the §0 summary item →
       **BUILT as own MLX service** (the original external-handoff recommendation was reversed), and a new
