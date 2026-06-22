@@ -61,6 +61,8 @@ async def submit_capture(body: CaptureBody) -> JobView:
     nrm = np.asarray(body.normals, dtype=np.float32)
     if pts.ndim != 2 or pts.shape[1] != 3 or pts.shape != nrm.shape:
         raise HTTPException(status_code=400, detail="points and normals must both be Nx3 and the same length")
+    if not np.isfinite(pts).all() or not np.isfinite(nrm).all():
+        raise HTTPException(status_code=400, detail="points and normals must contain only finite values")
     if len(pts) < 16:
         raise HTTPException(status_code=400, detail="need at least 16 points")
 
