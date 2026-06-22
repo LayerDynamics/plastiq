@@ -33,6 +33,8 @@ export interface RunGenerationOptions {
   /** Offer the creative path (adds the create_mesh guidance + tool, already wired). */
   creative?: boolean;
   maxSteps?: number;
+  /** Force this tool on the first turn (CB6.2) — pushes weak models to build_part. */
+  firstTool?: string;
   signal?: AbortSignal;
   onEvent?: (e: AgentEvent) => void;
 }
@@ -47,6 +49,7 @@ export function runGeneration(opts: RunGenerationOptions): Promise<RunAgentResul
     messages,
     tools: opts.tools,
     ...(opts.maxSteps != null ? { maxSteps: opts.maxSteps } : {}),
+    ...(opts.firstTool ? { firstTool: opts.firstTool } : {}),
     ...(opts.signal ? { signal: opts.signal } : {}),
     ...(opts.onEvent ? { onEvent: opts.onEvent } : {}),
   });

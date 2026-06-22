@@ -1,0 +1,123 @@
+// CB2.3 — the headless generation chain produces a real STEP, with no model and no
+// network. A scripted ChatProvider emits a build_part tool-call (a 10×20×30 box in
+// mm) then the answer_user finalizer; we assert the agent drives the Node geometry
+// seam to a valid, re-importable STEP solid. This is the CI proof that the
+// extraction (browser agent -> Node) is wired correctly end-to-end.
+
+import { describe, expect, it } from "vitest";
+import { initOcct, importStep } from "@plastiq/cad";
+import type {
+  ChatProvider,
+  ChatStreamRequest,
+  StreamEvent,
+} from "../ai/providers/types.js";
+import { generatePart } from "./generate.js";
+import { seedFromStep, createHeadlessSession } from "./nodeBuild.js";
+
+/** A deterministic provider: turn 1 calls build_part with `doc`, turn 2 finalizes. */
+function scriptedProvider(doc: unknown, finalMessage = "Built it."): ChatProvider {
+  let turn = 0;
+  return {
+    id: "openai-compatible",
+    model: "scripted",
+    supportsVision: false,
+    supportsTools: true,
+    async *stream(_req: ChatStreamRequest): AsyncIterable<StreamEvent> {
+      turn += 1;
+      if (turn === 1) {
+        yield { type: "tool-call", call: { id: "c1", name: "build_part", arguments: { document: doc } } };
+        yield { type: "done", finishReason: "tool-calls" };
+      } else {
+        yield { type: "tool-call", call: { id: "c2", name: "answer_user", arguments: { message: finalMessage } } };
+        yield { type: "done", finishReason: "tool-calls" };
+      }
+    },
+  };
+}
+
+const BOX_DOC = {
+  features: [{ id: "b1", type: "box", params: { dx: 10, dy: 20, dz: 30 } }],
+  params: {},
+};
+
+describe("headless generatePart", () => {
+  it("drives the agent to a valid, re-importable STEP solid", async () => {
+    const result = await generatePart({
+      provider: scriptedProvider(BOX_DOC),
+      input: "Make a 10×20×30 mm box.",
+      maxSteps: 4,
+    });
+
+    expect(result.finish).toBe("answer");
+    expect(result.hasGeometry).toBe(true);
+    expect(result.applied).toBe(true); // build_part applied
+    expect(result.step).toBeTruthy();
+    expect(result.step).toContain("ISO-10303"); // STEP file signature
+    expect(result.doc.features.map((f) => f.type)).toContain("box");
+
+    // Round-trip: the exported STEP re-imports to a real solid with the box's volume
+    // (10mm·20mm·30mm = 6000 mm³ = 6e-6 m³), proving it is genuine B-rep, not text.
+    const oc = await initOcct();
+    const solid = importStep(oc, result.step!);
+    try {
+      expect(solid.volume()).toBeGreaterThan(0);
+      expect(solid.volume()).toBeCloseTo(6e-6, 7);
+    } finally {
+      solid.delete();
+    }
+  });
+
+  it("reports hasGeometry:false when the agent builds nothing", async () => {
+    // A provider that only finalizes, never building — the honest 'missing' case.
+    const provider: ChatProvider = {
+      id: "openai-compatible",
+      model: "scripted-empty",
+      supportsVision: false,
+      supportsTools: true,
+      async *stream(): AsyncIterable<StreamEvent> {
+        yield { type: "tool-call", call: { id: "c1", name: "answer_user", arguments: { message: "nope" } } };
+        yield { type: "done", finishReason: "tool-calls" };
+      },
+    };
+    const result = await generatePart({ provider, input: "do nothing", maxSteps: 2 });
+    expect(result.hasGeometry).toBe(false);
+    expect(result.applied).toBe(false); // build_part never applied
+    expect(result.step).toBeNull();
+  });
+
+  it("applied:false for a no-op edit (seed re-exported unchanged)", async () => {
+    // A provider that only answers — for an editing seed, the input solid is still
+    // exported (a valid candidate), but applied must be false so the no-op is visible.
+    const provider: ChatProvider = {
+      id: "openai-compatible",
+      model: "scripted-noop",
+      supportsVision: false,
+      supportsTools: true,
+      async *stream(): AsyncIterable<StreamEvent> {
+        yield { type: "tool-call", call: { id: "c1", name: "answer_user", arguments: { message: "no change" } } };
+        yield { type: "done", finishReason: "tool-calls" };
+      },
+    };
+    const built = await generatePart({ provider: scriptedProvider(BOX_DOC), input: "box", maxSteps: 4 });
+    const result = await generatePart({ provider, input: "remove the groove", seed: seedFromStep(built.step!), maxSteps: 2 });
+    expect(result.applied).toBe(false);   // model changed nothing
+    expect(result.hasGeometry).toBe(true); // but the seed solid is still a valid candidate
+    expect(result.step).toContain("ISO-10303");
+  });
+
+  it("seedFromStep yields an importStep document a session can export", async () => {
+    // Build a box, export it, then seed a new session from that STEP (the editing
+    // entry point) and confirm the seed round-trips to the same solid.
+    const first = await createHeadlessSession();
+    const built = await generatePart({ provider: scriptedProvider(BOX_DOC), input: "box", maxSteps: 4 });
+    expect(built.step).toBeTruthy();
+
+    const seeded = seedFromStep(built.step!);
+    expect(seeded.features[0]!.type).toBe("importStep");
+
+    const session = await createHeadlessSession(seeded);
+    const step = session.toStep();
+    expect(step).toContain("ISO-10303");
+    void first;
+  });
+});

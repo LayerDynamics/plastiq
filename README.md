@@ -70,6 +70,21 @@ pnpm -r run typecheck                     # type-check every package + the app
 A [`justfile`](justfile) wraps the common recipes (`just test`, `just e2e`,
 `just build`, …).
 
+## Benchmarking (CADGenBench)
+
+The AI generation path is evaluated against
+[**CADGenBench**](https://huggingface.co/spaces/HuggingAI4Engineering/CADGenBench)
+(*description → 3D STEP*) via a local harness in
+[`benchmark/harness/`](benchmark/harness/). It runs Plastiq's generation agent
+**headlessly** ([`apps/plastiq/src/headless/`](apps/plastiq/src/headless/),
+`plastiq-gen`: text/image → `CadDocument` → `exportStep`) against a local
+OpenAI-compatible model, validates the candidates with the benchmark's own
+CAD-validity gate, and packages a leaderboard submission. The scorer runs in a
+dedicated `cadgenbench` Python 3.12 env; ground-truth scoring is the leaderboard
+Space's (the GT is private). Local/manual — not part of push-CI. See
+[`benchmark/harness/README.md`](benchmark/harness/README.md) and the plan
+[`docs/plans/2026-06-22-cadgenbench-integration.md`](docs/plans/2026-06-22-cadgenbench-integration.md).
+
 ## Bundle size / the OCCT trim
 
 The shipped OCCT wasm is a **custom trimmed build** of `opencascade.js` containing

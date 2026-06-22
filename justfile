@@ -38,3 +38,29 @@ dev:
 cad-occt:
     docker run --rm -v "{{justfile_directory()}}/packages/cad:/src" -u "$(id -u):$(id -g)" \
         donalffons/opencascade.js:2.0.0-beta.b5ff984 occt.build.yml
+
+# --- CADGenBench harness (local/manual — NOT push-CI) -------------------------
+# Evaluates our parametric AI generation against the CADGenBench benchmark. Needs
+# the `cadgenbench` py3.12 env, the mounted inputs bucket, and a local model. Full
+# guide: benchmark/harness/README.md. Setup: see that README's "Setup (once)".
+
+# Mount the input fixtures bucket at ./local (once per session).
+bench-mount:
+    hf-mount start bucket LayerDynamics/cadgenbench-data-bucket ./local
+
+# Prove the upstream CAD-Score scorer runs + discriminates on the bundled GT fixtures.
+bench-fixtures:
+    mamba run -n cadgenbench python -m cadbench_harness score-fixtures
+
+# Serve a local OpenAI-compatible model. Usage: just bench-serve mlx-vlm <model> [port]
+bench-serve backend model port="8080":
+    ./benchmark/harness/serve-model.sh {{backend}} {{model}} {{port}}
+
+# Generate candidates over the fixtures + validate. Usage: just bench-run myrun <model>
+bench-run name model:
+    mamba run -n cadgenbench python -m cadbench_harness run {{name}} --model {{model}} --base-url http://localhost:8080/v1 --vision
+    mamba run -n cadgenbench python -m cadbench_harness validate {{name}}
+
+# Harness unit tests (offline).
+bench-test:
+    mamba run -n cadgenbench python -m pytest benchmark/harness/tests -q -m "not slow"

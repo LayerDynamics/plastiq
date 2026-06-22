@@ -111,6 +111,47 @@ export interface AgentToolDeps {
   onPlan?: (plan: PlanGraph) => void;
 }
 
+/**
+ * Re-inject the original STEP text into any `importStep` feature the model
+ * re-emitted without it.
+ *
+ * Edit-mode shows the model the current document with each imported body's STEP
+ * **digested** (raw STEP omitted to keep the prompt small — see
+ * `ai/editContext.ts`). When the model then re-emits "the WHOLE updated document",
+ * its `importStep` features carry the digest, not the STEP text — which fails the
+ * `data.step` schema gate and is unrepairable (the model never had the bytes).
+ * Here we match each such feature to the live document by feature id and restore
+ * its real `data.step`, so an edit of an imported solid round-trips. A feature the
+ * model supplied with its own STEP, or one with no id match, is left untouched.
+ */
+export function reconcileImportSteps(document: unknown, currentDoc: CadDocument): unknown {
+  if (!document || typeof document !== "object") return document;
+  const doc = document as { features?: unknown };
+  if (!Array.isArray(doc.features)) return document;
+
+  const stepById = new Map<string, string>();
+  for (const f of currentDoc.features) {
+    if (f.type === "importStep") {
+      const s = f.data?.["step"];
+      if (typeof s === "string" && s.length > 0) stepById.set(f.id, s);
+    }
+  }
+  if (stepById.size === 0) return document;
+
+  const features = doc.features.map((f) => {
+    if (!f || typeof f !== "object") return f;
+    const feat = f as { id?: unknown; type?: unknown; data?: Record<string, unknown> };
+    if (feat.type !== "importStep") return f;
+    const supplied = feat.data?.["step"];
+    if (typeof supplied === "string" && supplied.length > 0) return f; // model gave a STEP
+    const id = typeof feat.id === "string" ? feat.id : undefined;
+    const original = id ? stepById.get(id) : undefined;
+    if (original === undefined) return f; // no match → let the schema reject it
+    return { ...feat, data: { ...feat.data, step: original } };
+  });
+  return { ...doc, features };
+}
+
 /** Wire the agent's tools (defs + handlers) from the injected dependencies. The
  * handlers return a string for the model (isError feeds a correction back). */
 export function buildAgentTools(deps: AgentToolDeps): AgentTools {
@@ -124,7 +165,9 @@ export function buildAgentTools(deps: AgentToolDeps): AgentTools {
       return { result: summarizePlan(v.plan), isError: false };
     },
     build_part: async (args) => {
-      const document = (args as { document?: unknown }).document;
+      // Restore the STEP bytes for any imported body the model re-emitted from its
+      // (digested) edit context, so an edit of an imported solid validates.
+      const document = reconcileImportSteps((args as { document?: unknown }).document, deps.currentDoc());
       const r = await buildPart(document, deps.buildPart);
       return {
         result: r.status === "ok" ? r.message : `${r.message}${r.errors ? ` Errors: ${r.errors}` : ""}`,

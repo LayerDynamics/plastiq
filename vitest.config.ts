@@ -48,6 +48,10 @@ export default defineConfig({
         "apps/*/src/viewport/SceneController.ts",
         "apps/*/src/worker/geometry.worker.ts",
         "apps/*/src/persistence/idb.ts",
+        // Headless generation CLI entry — pure argv + filesystem IO + process.exit;
+        // the logic it drives (headless/nodeBuild, headless/generate) is unit-tested
+        // (headless/generate.test.ts). Same rationale as the worker entry above.
+        "apps/*/src/headless/cli.ts",
         // r3f viewport runtime that needs a real WebGL context (e2e-only), same
         // rationale as SceneController: GPU-id render-target picking + the colour
         // constants. Pure-logic three/ modules (e.g. sketch-camera math) stay IN.

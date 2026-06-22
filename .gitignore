@@ -21,3 +21,7 @@ test-results/
 # NOTE: packages/sim/src/pkg/ is NOT ignored — the @plastiq/sim WASM is a
 # frozen prebuilt artifact and MUST be committed (it is not rebuilt in this repo).
 ref/
+benchmark/cadgenbench
+
+# hf-mount mountpoint for the CADGenBench data bucket (LayerDynamics/cadgenbench-data-bucket)
+local/

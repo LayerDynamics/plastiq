@@ -57,11 +57,19 @@ export type StreamEvent =
   | { type: "done"; finishReason: "stop" | "tool-calls" | "length" | "error" }
   | { type: "error"; error: string };
 
+/** How the model is allowed/forced to use tools this turn. `{ tool }` forces that
+ * specific function; `"required"` forces *some* tool; `"auto"` (default) lets the
+ * model choose; `"none"` forbids tools. Used to push weak models off prose-only
+ * answers onto `build_part` (FR-5b / CB6.2). */
+export type ToolChoice = "auto" | "required" | "none" | { tool: string };
+
 export interface ChatStreamRequest {
   /** System prompt (the parametric/creative prompt from R2.4). */
   system: string;
   messages: ChatMessage[];
   tools: ToolDef[];
+  /** Optional per-turn tool-use constraint (default: provider's auto). */
+  toolChoice?: ToolChoice;
   signal?: AbortSignal;
 }
 

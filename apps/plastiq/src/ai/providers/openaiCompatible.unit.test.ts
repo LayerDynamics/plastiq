@@ -6,6 +6,7 @@ import { describe, it, expect } from "vitest";
 import {
   toOpenAIMessages,
   toOpenAITools,
+  toOpenAIToolChoice,
   initStreamState,
   reduceChunk,
   finalizeStream,
@@ -49,6 +50,17 @@ describe("R1.2 request mapping", () => {
   it("maps a ToolDef to an OpenAI function tool", () => {
     const tools = toOpenAITools([{ name: "f", description: "d", parameters: { type: "object" } }]);
     expect(tools[0]).toEqual({ type: "function", function: { name: "f", description: "d", parameters: { type: "object" } } });
+  });
+
+  it("maps tool-choice (CB6.2): auto omits, required/none pass through, {tool} forces a function", () => {
+    expect(toOpenAIToolChoice(undefined)).toBeUndefined();
+    expect(toOpenAIToolChoice("auto")).toBeUndefined();
+    expect(toOpenAIToolChoice("required")).toBe("required");
+    expect(toOpenAIToolChoice("none")).toBe("none");
+    expect(toOpenAIToolChoice({ tool: "build_part" })).toEqual({
+      type: "function",
+      function: { name: "build_part" },
+    });
   });
 });
 

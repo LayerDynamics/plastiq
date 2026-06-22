@@ -1,8 +1,10 @@
 // SPEC-6 R2.4 — the tool surface (§7.1) defs + AgentTools dispatch wiring.
 
 import { describe, expect, it, vi } from "vitest";
-import { ANSWER_USER, buildAgentTools, toolDefs, type AgentToolDeps } from "./toolDefs.js";
+import { ANSWER_USER, buildAgentTools, reconcileImportSteps, toolDefs, type AgentToolDeps } from "./toolDefs.js";
 import { runAgent, type AgentTools } from "../agentRunner.js";
+import { authoringDocumentSchema } from "./schema.js";
+import { editContext } from "../editContext.js";
 import type { ChatProvider, StreamEvent } from "../providers/types.js";
 import type { CadDocument } from "../../store/types.js";
 import type { MeshView } from "./inspectGeometry.js";
@@ -49,6 +51,51 @@ describe("toolDefs (SPEC-6 §7.1)", () => {
     const params = buildPart.parameters as { required: string[]; properties: { document: object } };
     expect(params.required).toContain("document");
     expect(params.properties.document).toBeTypeOf("object");
+  });
+});
+
+describe("reconcileImportSteps (edit round-trip for imported solids)", () => {
+  const STEP_TEXT =
+    "ISO-10303-21;\nHEADER;\n#1=ADVANCED_FACE();\n#2=MANIFOLD_SOLID_BREP();\nENDSEC;\n";
+  const importDoc: CadDocument = {
+    features: [{ id: "import", type: "importStep", data: { step: STEP_TEXT } }],
+    params: {},
+  };
+
+  it("restores STEP bytes the digest dropped, matched by feature id", () => {
+    const digested = {
+      features: [{ id: "import", type: "importStep", data: { importedSolid: { bytes: 1, faces: 1, solids: 1 } } }],
+      params: {},
+    };
+    const out = reconcileImportSteps(digested, importDoc) as {
+      features: { data: { step?: string } }[];
+    };
+    expect(out.features[0]!.data.step).toBe(STEP_TEXT);
+    expect(authoringDocumentSchema.safeParse(out).success).toBe(true);
+  });
+
+  it("editContext's digested doc fails the schema, but round-trips after reconcile", () => {
+    // This is the exact failure the digest introduced: the model echoes back the
+    // digested importStep (no `step`), which the schema rejects — until reconcile.
+    const ctx = editContext(importDoc)!;
+    const json = ctx.slice(ctx.indexOf("{"), ctx.lastIndexOf("}") + 1);
+    const reemitted = JSON.parse(json);
+    expect(authoringDocumentSchema.safeParse(reemitted).success).toBe(false);
+    const reconciled = reconcileImportSteps(reemitted, importDoc);
+    expect(authoringDocumentSchema.safeParse(reconciled).success).toBe(true);
+  });
+
+  it("leaves a model-supplied STEP and unmatched ids untouched", () => {
+    const supplied = {
+      features: [{ id: "x", type: "importStep", data: { step: "ISO-10303-21;own" } }],
+      params: {},
+    };
+    expect(reconcileImportSteps(supplied, importDoc)).toEqual(supplied);
+  });
+
+  it("is a no-op when the current doc has no imported bodies", () => {
+    const same = { features: [{ id: "f1", type: "box", params: { dx: 10 } }], params: {} };
+    expect(reconcileImportSteps(same, emptyDoc)).toBe(same);
   });
 });
 
