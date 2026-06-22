@@ -24,13 +24,24 @@ from .base_surface_model import BaseSurfaceModel
 
 
 class VolSDFModel(BaseSurfaceModel):
-    def __init__(self, config: NerfConfig, *, laplace_beta: float = 0.1, lam_eikonal: float = 0.1, seed: int = 0):
+    def __init__(self, config: NerfConfig, *, laplace_beta: float = 0.2, lam_eikonal: float = 0.1, seed: int = 0):
+        # β=0.2 is the stable/trainable default; smaller β gives a sharper surface but needs more
+        # iterations (VolSDF anneals β large→small). Pass a smaller value explicitly when annealing.
         super().__init__(config, lam_eikonal=lam_eikonal, seed=seed)
         self.laplace_beta = laplace_beta
 
     def sdf_to_density(self, sdf: mx.array) -> mx.array:
-        """VolSDF Laplace-CDF transform: signed distance `(...,1)` → density `(...,1)`."""
+        """VolSDF Laplace-CDF transform: signed distance `(...,1)` → density `(...,1)`.
+
+        Both `mx.where` branches are evaluated, so the exp arguments are clamped to ≤ 0 to stop the
+        UNSELECTED branch overflowing to inf for large |sdf| (which would poison gradients with 0·inf
+        → NaN). On the selected branch the clamp is a no-op (the arg is already ≤ 0), so values are
+        exact: ½·exp(s/β) outside, 1 − ½·exp(−s/β) inside, ×α with α = 1/β."""
         beta = self.laplace_beta
         s = -sdf
-        psi = mx.where(s <= 0, 0.5 * mx.exp(s / beta), 1.0 - 0.5 * mx.exp(-s / beta))
+        psi = mx.where(
+            s <= 0,
+            0.5 * mx.exp(mx.minimum(s / beta, 0.0)),
+            1.0 - 0.5 * mx.exp(mx.minimum(-s / beta, 0.0)),
+        )
         return psi / beta  # α·Ψ with α = 1/β

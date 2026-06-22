@@ -86,6 +86,19 @@ def test_volsdf_density_transform():
     assert d[0] > d[1] > d[2], f"density must fall inside→surface→outside: {d}"
 
 
+def test_volsdf_density_finite_for_large_sdf():
+    """Regression: at a sharp β, large |sdf| must not produce inf/NaN. `mx.where` evaluates BOTH
+    branches, so an unclamped `exp(s/β)` overflowed on the unselected branch and 0·inf poisoned the
+    gradient with NaN — which diverged training. The clamped transform stays finite in value AND
+    gradient across a wide range of signed distances."""
+    model = VolSDFModel(NerfConfig(field=FieldConfig(hidden=32, layers=3)), laplace_beta=0.1, seed=0)
+    sdf = mx.array([[-5.0], [-1.0], [0.0], [1.0], [5.0]])
+    dens = model.sdf_to_density(sdf)
+    assert np.all(np.isfinite(np.asarray(dens))), f"density not finite: {np.asarray(dens).reshape(-1)}"
+    g = mx.grad(lambda s: model.sdf_to_density(s).sum())(sdf)
+    assert np.all(np.isfinite(np.asarray(g))), f"density gradient not finite: {np.asarray(g).reshape(-1)}"
+
+
 def test_volsdf_training_improves_psnr_and_extracts_mesh():
     imgs, poses, intr, _ = make_synthetic_dataset(n_views=6, h=20, w=20)
     train_o, train_d, train_t = _rays_for_views([0, 1, 2, 3, 4], imgs, poses, intr)

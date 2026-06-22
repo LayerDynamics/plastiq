@@ -145,12 +145,20 @@ GLB→MeshDoc patterns the **capture service** (`services/capture/`, M7/M8) esta
       `process=False`, mirrors capture `to_glb`) + `pointcloud_to_glb` (trimesh Scene). Tests: both
       round-trip back through trimesh preserving vertex/face/point counts. 5/5 exporter tests green.
 
-## N10 — FastAPI service (submit→poll)
-- [ ] **N10.1 — TDD job contract** (`engine/jobs.py` — mirror capture `jobs.py`): submit→poll state
-      machine; live test (no fastapi).
-- [ ] **N10.2 — TDD service** (`app/main.py`): `POST /train { transforms_json, images }` → poll →
-      `{ glb_base64, … }` (train field → export mesh). Health + status + result. API test gated on
-      fastapi+mlx (mirrors capture `test_api.py`).
+## N10 — FastAPI service (submit→poll) ✅
+- [x] **N10.1 — job contract** (`engine/jobs.py`, mirrors capture `jobs.py`): `JobStore`/`JobState`
+      submit→poll state machine. `tests/test_jobs.py` (3, asyncio-only) — runs to completion with result,
+      captures the error string on failure, unknown id → None.
+- [x] **N10.2 — service** (`app/main.py` + `engine/pipeline.py`): `POST /train {transforms_json, images,
+      iters?, method?, grid_res?}` → poll → `{glb_base64, vertices, faces, psnr, method, iters}` (SPEC-11
+      §5 contract, the `@plastiq/nerf` client's server). `engine/pipeline.train_and_export` parses poses →
+      rays → trains VolSDF (default; `nerf` density optional) → marching-cubes → GLB; images decoded from
+      base64 PNG/JPEG (PIL); MLX work dispatched off the event loop. Health/status/result + 400 validation.
+      `tests/test_pipeline.py` (2, real train→export E2E, no HTTP) + `tests/test_api.py` (3, gated
+      fastapi+mlx, **run for real** — full submit→poll→GLB over the ASGI app via httpx). **42/42 green.**
+- Fixed a VolSDF NaN: `mx.where` evaluates both branches, so an unclamped `exp(s/β)` overflowed on the
+  unselected branch (0·inf → NaN gradient) → training diverged at sharp β. Clamped exp args to ≤0
+  (selected branch unchanged) + default β 0.1→0.2; regression test `test_volsdf_density_finite_for_large_sdf`.
 
 ## N11 — `@plastiq/nerf` workspace package + app wiring (REACHABLE — not a tested island) ⭐
 **The TS/browser side is its OWN workspace package `packages/nerf` (`@plastiq/nerf`), a sibling of
