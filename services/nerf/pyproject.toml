@@ -1,0 +1,16 @@
+[project]
+name = "plastiq-nerf"
+version = "0.1.0"
+description = "Modular MLX NeRF / radiance-field service for Plastiq (Apple Silicon / M4 Max)"
+requires-python = ">=3.11"
+
+# Runtime deps are managed by environment.yml (pythonocc-free; MLX is pip on conda-forge base).
+# This file is for tooling config + editable installs of the `app` package.
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 110
+target-version = "py311"
