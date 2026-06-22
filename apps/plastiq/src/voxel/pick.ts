@@ -43,7 +43,7 @@ export function rayVoxelHit(grid: VoxelGrid, origin: V3, dir: V3, maxSteps = 102
     const outX = (x < 0 && stepX <= 0) || (x >= grid.dims[0] && stepX >= 0);
     const outY = (y < 0 && stepY <= 0) || (y >= grid.dims[1] && stepY >= 0);
     const outZ = (z < 0 && stepZ <= 0) || (z >= grid.dims[2] && stepZ >= 0);
-    if (outX && outY && outZ) return null;
+    if (outX || outY || outZ) return null;
 
     if (tMaxX <= tMaxY && tMaxX <= tMaxZ) {
       x += stepX;
