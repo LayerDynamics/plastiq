@@ -71,7 +71,22 @@ objects.
   kinds) + `tools/toolDefs.unit.test.ts` (def present, dispatch, and a `runAgent` orchestration test:
   plan → build → answer).
 
-## §voxel — ray-pick voxel-editing mode (M10 · pending)
+## §voxel — ray-pick voxel-editing core (M10 · core shipped; UI mode deferred)
 
-See `docs/adr/0010-voxel-mode.md` (to be written): an opt-in dense-occupancy editing mode (voxel-editor
-idea, Apache-2.0), gated like `MeshDoc`, exporting voxels→mesh into the reconstruct path.
+**ADR:** [`docs/adr/0010-voxel-mode.md`](../adr/0010-voxel-mode.md) · **Source idea:** voxel-editor (Apache-2.0; own TS)
+
+The liftable voxel-editor algorithms, built + tested (`apps/plastiq/src/voxel/`):
+
+- **`grid.ts` — `VoxelGrid`:** dense occupancy (typed array) with `addBox`/`eraseBox`; **`visibleCells`**
+  (6-neighbour surface cull — `visible() = occupiedNeighbours != 6`); **`toMesh`** (exposed voxel
+  faces → triangle mesh); `toIndices` (compact persistence).
+- **`pick.ts` — ray-pick:** `rayVoxelHit` (Amanatides–Woo DDA → first occupied cell + entered-face
+  normal, so a click adds `cell+normal` or erases `cell`); `rayWorkPlaneCell` (ray ∩ work-plane → cell).
+- **`doc.ts` + `VoxelDoc` (store/types.ts):** grid ↔ compact doc, and `voxelDocToMesh` → the existing
+  reconstruct (mesh→B-rep) path. Pure TS, deterministic. **14 tests.**
+
+**Honest scope (ADR 0010):** the full three.js voxel rendering + mouse-driven editing UI + mode-shell
+wiring is **deferred** — a large UI surface for a low-priority new product direction. `VoxelDoc` is
+defined with converters but is **not yet a member of `PersistedDoc`**; it joins the persisted union +
+`projectsStore` open/persist switch when the mode is wired. The algorithms (the review's actual finding)
++ the document model + the mesh handoff are concrete now.

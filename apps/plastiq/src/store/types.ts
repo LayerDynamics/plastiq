@@ -60,6 +60,23 @@ export interface MeshDoc {
   source: MeshSource;
 }
 
+/** An opt-in voxel-sculpt document (M10). A dense occupancy grid persisted compactly as the linear
+ * indices of its occupied cells; the grid is re-derived on load (voxel/doc.ts). Like a MeshDoc it is
+ * a non-parametric mode (B-rep ops don't apply); its surface mesh feeds reconstruct (mesh→B-rep).
+ *
+ * NOTE: not yet a member of `PersistedDoc` — it joins the persisted union (and the open/persist
+ * switch in projectsStore) when the voxel editing MODE is wired (docs/adr/0010 defers that). The type
+ * + grid converters (voxel/doc.ts) exist now so the document model and mesh handoff are concrete. */
+export interface VoxelDoc {
+  readonly kind: "voxel";
+  name?: string;
+  dims: [number, number, number];
+  voxelSize: number;
+  origin: [number, number, number];
+  /** Occupied cell linear indices, `(z·ny + y)·nx + x`. */
+  cells: number[];
+}
+
 /** A persisted document: a parametric CadDocument or a generated MeshDoc. A
  * CadDocument carries no `kind` (back-compat: an absent `kind` ⇒ parametric). */
 export type PersistedDoc = CadDocument | MeshDoc;
@@ -67,6 +84,11 @@ export type PersistedDoc = CadDocument | MeshDoc;
 /** Discriminate a persisted document as a mesh document. */
 export function isMeshDoc(doc: PersistedDoc): doc is MeshDoc {
   return (doc as Partial<MeshDoc>).kind === "mesh";
+}
+
+/** Discriminate any value as a voxel document. */
+export function isVoxelDoc(doc: unknown): doc is VoxelDoc {
+  return typeof doc === "object" && doc !== null && (doc as Partial<VoxelDoc>).kind === "voxel";
 }
 
 /** Which kind of sub-entity the 3D viewport selects. */

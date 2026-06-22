@@ -264,17 +264,20 @@ multi-month epic for a speculative WASM-size win that addresses no current block
 - [x] **M9.2 — Go/no-go ADR.** `docs/adr/0009-truck-kernel-eval.md` (NO-GO + watch-list + revisit
       criteria). No production code. `Expanse.md` CADmium/`truck` note updated.
 
-## M10 — voxel-editor ray-pick voxel-editing mode · T1 · Apache-2.0 · NET-NEW (new product direction)
+## M10 — voxel-editor ray-pick voxel core · T1 · Apache-2.0 · ✅ core SHIPPED (UI mode deferred)
 
-**Lowest priority — a net-new mode orthogonal to parametric B-rep; included because "all", scoped honestly.**
+**Lowest priority — a net-new mode orthogonal to parametric B-rep. The liftable algorithms (the review's
+finding) are built + tested; the full three.js editing UI is honestly deferred (a large surface for a
+low-priority new direction).**
 
-- [ ] **M10.0 — ADR.** `docs/adr/0010-voxel-mode.md` (Apache-2.0; net-new mode, opt-in).
-- [ ] **M10.1 — TDD: occupancy grid + cull.** Failing test (dense grid; 6-neighbor visibility cull:
-      fully-enclosed cells hidden) → implement a TS occupancy grid + surface extraction → green.
-- [ ] **M10.2 — TDD: ray-pick add/erase.** Failing test (screen ray → work-plane/box intersection →
-      add/erase region) → implement picking over three.js → green.
-- [ ] **M10.3 — Mode shell + export.** A `VoxelDoc` mode (gated like `MeshDoc`), voxels→mesh export
-      into the existing reconstruct path; `SPEC-9` §voxel; update `Expanse.md`. Suites green.
+- [x] **M10.0 — ADR.** `docs/adr/0010-voxel-mode.md`.
+- [x] **M10.1 — Occupancy grid + cull.** `voxel/grid.ts` (`VoxelGrid`: addBox/eraseBox, 6-neighbour
+      `visibleCells`, `toMesh`, `toIndices`) — 6 tests.
+- [x] **M10.2 — Ray-pick add/erase.** `voxel/pick.ts` (Amanatides–Woo `rayVoxelHit` → cell+face normal;
+      `rayWorkPlaneCell`) — 6 tests. (Pure math; the three.js mouse→ray wiring is part of the deferred UI.)
+- [x] **M10.3 — Doc model + export.** `VoxelDoc` (store/types.ts) + `voxel/doc.ts` (grid↔doc,
+      `voxelDocToMesh` → reconstruct) — 2 tests. `SPEC-9` §voxel + `Expanse.md` updated. **Deferred:** the
+      three.js render/edit mode shell + adding `VoxelDoc` to `PersistedDoc`/projectsStore (ADR 0010).
 
 ---
 
