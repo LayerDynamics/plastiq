@@ -15,6 +15,7 @@ import { toProviderSettings, type AiSettings } from "./settings.js";
 import { runGeneration } from "./runGeneration.js";
 import { reconstructMesh, stepToImportDocument } from "./reconstruct.js";
 import { captureFromPhotos } from "./nerf.js";
+import { fileToBase64, fileToText } from "./fileRead.js";
 import { exportMeshGlb } from "../mesh/exportGlb.js";
 import { buildMeshGenDeps, meshGenConfigured } from "./meshGenDeps.js";
 import { buildTurnTools, buildCreateMeshDeps, buildSeam, type TurnToolsDeps } from "./agentTurn.js";
@@ -220,28 +221,6 @@ function MeshConvertSection(): React.JSX.Element {
       </p>
     </div>
   );
-}
-
-function fileToText(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const r = new FileReader();
-    r.onload = () => resolve(String(r.result));
-    r.onerror = () => reject(r.error ?? new Error("file read failed"));
-    r.readAsText(file);
-  });
-}
-
-function fileToBase64(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const r = new FileReader();
-    r.onload = () => {
-      const s = String(r.result);
-      const comma = s.indexOf(","); // strip the "data:<mime>;base64," prefix
-      resolve(comma >= 0 ? s.slice(comma + 1) : s);
-    };
-    r.onerror = () => reject(r.error ?? new Error("file read failed"));
-    r.readAsDataURL(file);
-  });
 }
 
 /** Cap on photos per capture — bounds peak browser memory (each is base64-inflated ~33% and the whole

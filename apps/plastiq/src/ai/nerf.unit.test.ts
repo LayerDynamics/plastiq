@@ -9,11 +9,22 @@ function jsonResponse(body: unknown, ok = true, status = 200): Response {
   return { ok, status, json: async () => body } as unknown as Response;
 }
 
-/** submit → status(running) → status(completed) → result, returning the given wire result. */
-function scriptedFetch(result: unknown): typeof fetch {
+/** submit → status(running) → status(completed) → result, recording every URL + the submit body so a
+ * test can assert the actual HTTP contract (path shape, snake_case body). */
+function scriptedFetch(result: unknown): {
+  fetchImpl: typeof fetch;
+  calls: string[];
+  submitBody: () => Record<string, unknown> | undefined;
+} {
+  const calls: string[] = [];
+  let body: Record<string, unknown> | undefined;
   let statusHits = 0;
-  return (async (url: string) => {
-    if (url.endsWith("/train")) return jsonResponse({ id: "job-1", state: "queued" });
+  const fetchImpl = (async (url: string, init?: RequestInit) => {
+    calls.push(url);
+    if (url.endsWith("/train")) {
+      body = init?.body ? (JSON.parse(init.body as string) as Record<string, unknown>) : undefined;
+      return jsonResponse({ id: "job-1", state: "queued" });
+    }
     if (url.endsWith("/status")) {
       statusHits += 1;
       return jsonResponse({ id: "job-1", state: statusHits > 1 ? "completed" : "running" });
@@ -21,6 +32,7 @@ function scriptedFetch(result: unknown): typeof fetch {
     if (url.endsWith("/result")) return jsonResponse(result);
     throw new Error(`unexpected url ${url}`);
   }) as unknown as typeof fetch;
+  return { fetchImpl, calls, submitBody: () => body };
 }
 
 describe("nerfResultToMeshDoc", () => {
@@ -40,6 +52,7 @@ describe("captureFromPhotos", () => {
     let persisted: MeshDoc | null = null;
     const states: string[] = [];
 
+    const { fetchImpl, calls, submitBody } = scriptedFetch(wire);
     const res = await captureFromPhotos(
       { transformsJson: '{"frames":[]}', images: ["aGk="] },
       {
@@ -48,7 +61,7 @@ describe("captureFromPhotos", () => {
           return "mesh-1";
         },
       },
-      { fetchImpl: scriptedFetch(wire), delay: async () => {}, onState: (s) => states.push(s) },
+      { fetchImpl, delay: async () => {}, onState: (s) => states.push(s) },
       "Captured mesh",
     );
 
@@ -60,6 +73,13 @@ describe("captureFromPhotos", () => {
     expect((persisted as unknown as MeshDoc).glb).toBe("R0xCYWFh");
     expect((persisted as unknown as MeshDoc).source.mode).toBe("photos3d");
     expect(states).toContain("completed");
+
+    // the actual HTTP contract: /jobs/{id}/ poll path shape + snake_case submit body
+    expect(calls).toContain("http://localhost:8002/jobs/job-1/status");
+    expect(calls).toContain("http://localhost:8002/jobs/job-1/result");
+    const body = submitBody();
+    expect(body?.transforms_json).toBe('{"frames":[]}');
+    expect(body?.images).toEqual(["aGk="]);
   });
 
   it("propagates a failed training job as a throw (nothing persisted)", async () => {

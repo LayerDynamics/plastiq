@@ -57,7 +57,7 @@ export interface NerfOptions {
   pollIntervalMs?: number;
   /** Max poll attempts before timing out (default 600 ≈ 20 min at 2s — training is slow). */
   maxPolls?: number;
-  /** Poll backoff (tests inject an instant resolver). */
+  /** Per-poll delay (a constant `pollIntervalMs`, not a backoff; tests inject an instant resolver). */
   delay?: (ms: number) => Promise<void>;
   /** Job-state callback for UI progress (`"queued" | "running" | …`). */
   onState?: (state: string) => void;
