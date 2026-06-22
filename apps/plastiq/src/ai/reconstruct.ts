@@ -19,6 +19,11 @@ export interface ReconstructReport {
   freeform_faces?: number;
   /** Per-triangle fallback faces that survived (FR-8). Absent on older servers. */
   faceted_faces?: number;
+  /** Scaled Chamfer Distance of the built B-rep vs the input mesh — a pose/scale-robust surface
+   * fidelity score (lower = closer). Advisory (M1; docs/adr/0001). Absent on older servers. */
+  surface_deviation?: number;
+  /** Advisory tolerance for `surface_deviation`. Absent on older servers. */
+  fidelity_tol?: number;
   is_solid: boolean;
   is_valid: boolean;
   method: string;

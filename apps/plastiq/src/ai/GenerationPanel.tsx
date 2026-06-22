@@ -143,13 +143,21 @@ function MeshConvertSection(): React.JSX.Element {
       });
       const name = doc.name ?? "Reconstructed mesh";
       useCadStore.getState().loadDocument(stepToImportDocument(result.step, name));
+      // M1: surface a pose/scale-robust fidelity readout (SCD) when the server reports it —
+      // honest NFR-4 UX: "good" if the reconstructed surface tracks the mesh, "coarse" otherwise.
+      const dev = result.report.surface_deviation;
+      const tol = result.report.fidelity_tol ?? 0.01;
+      const fidelity =
+        typeof dev === "number" && Number.isFinite(dev)
+          ? `, fidelity ${dev <= tol ? "good" : "coarse"} (Δ${dev.toFixed(4)})`
+          : "";
       // Switch out of mesh mode: the viewport now renders the new B-rep part as a fresh
       // untitled parametric document (the original mesh project is left untouched).
       useProjectsStore.setState({
         activeMeshDoc: null,
         currentId: null,
         currentName: name,
-        status: `converted to CAD — ${result.report.faces_built} face${result.report.faces_built === 1 ? "" : "s"}${result.report.is_solid ? ", solid" : ", shell"}`,
+        status: `converted to CAD — ${result.report.faces_built} face${result.report.faces_built === 1 ? "" : "s"}${result.report.is_solid ? ", solid" : ", shell"}${fidelity}`,
       });
       setStatus(null);
     } catch (e) {

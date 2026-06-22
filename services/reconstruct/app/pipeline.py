@@ -18,11 +18,15 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from typing import Optional
 
+import numpy as np
+import trimesh
+
 from .cleanup import clean_mesh
 from .csg import reconstruct_csg
 from .curved_faces import classify_faces
 from .detect import try_single_primitive
 from .faceted import faceted_shape
+from .fidelity import FIDELITY_TOL, surface_fidelity
 from .fitted import fitted_shape
 from .meshio import load_mesh
 from .occ_step import shape_to_step
@@ -43,6 +47,10 @@ class ReconstructionReport:
     curved_faces: int = 0  # analytic non-planar faces (cylinder/sphere/cone/revolution) — FR-9
     freeform_faces: int = 0  # curved regions collapsed into freeform faces (R6.5), method="fitted"
     faceted_faces: int = 0  # per-triangle fallback faces that survived (FR-8 fallback) — FR-9
+    # M1: Scaled Chamfer Distance of the built B-rep vs the cleaned input mesh — a pose/scale-robust
+    # SURFACE fidelity score that complements the volume gate (docs/adr/0001). Lower = closer.
+    surface_deviation: float = 0.0
+    fidelity_tol: float = FIDELITY_TOL
 
 
 @dataclass
@@ -70,9 +78,26 @@ def reconstruct(
         vertices, faces = clean_mesh(vertices, faces)
     used = len(faces)
 
+    # M1: the cleaned mesh is the ground truth every built shape is scored against (SCD).
+    cleaned_mesh = trimesh.Trimesh(
+        vertices=np.asarray(vertices, dtype=float),
+        faces=np.asarray(faces, dtype=np.int64),
+        process=False,
+    )
+
+    def deviation(shape) -> float:
+        """Scaled Chamfer Distance of `shape` vs the cleaned input mesh (M1; docs/adr/0001)."""
+        return surface_fidelity(shape, cleaned_mesh)
+
     if method == "auto":
         # 1) whole mesh is one analytic primitive (cleanest result for cylinder/sphere/cone)
         prim = try_single_primitive(vertices, faces)
+        # M1.5: `surface_deviation` (SCD) is reported as an ADVISORY surface-fidelity number, not
+        # an acceptance gate. Evidence (docs/adr/0001): a hard SCD ≤ tol gate over-rejected the
+        # legitimately-coarse-but-correct oblique cut-cylinder (SCD 0.020 vs tol 0.01, yet volume
+        # err only 1.5%, watertight). The existing volume + per-region-RMS + shape-coverage gates
+        # already reject wrong primitives, so SCD ships report-only (and as the freeform gate later).
+        prim_dev = deviation(prim.shape) if prim is not None else None
         if prim is not None:
             planar, curved, freeform = classify_faces(prim.shape)
             report = ReconstructionReport(
@@ -86,10 +111,12 @@ def reconstruct(
                 primitive=prim.primitive,
                 curved_faces=curved,
                 freeform_faces=freeform,
+                surface_deviation=prim_dev,
             )
             return ReconstructionResult(step=shape_to_step(prim.shape), report=report)
         # 2) a multi-segment solid of revolution (stepped shaft, chamfered/capped cylinder)
         rev = reconstruct_revolution(vertices, faces)
+        rev_dev = deviation(rev.shape) if rev is not None else None
         if rev is not None:
             planar, curved, freeform = classify_faces(rev.shape)
             report = ReconstructionReport(
@@ -103,10 +130,12 @@ def reconstruct(
                 primitive="revolution",
                 curved_faces=curved,
                 freeform_faces=freeform,
+                surface_deviation=rev_dev,
             )
             return ReconstructionResult(step=shape_to_step(rev.shape), report=report)
         # 3) a box with cylindrical through-holes (CSG: box − cylinders)
         csg = reconstruct_csg(vertices, faces)
+        csg_dev = deviation(csg.shape) if csg is not None else None
         if csg is not None:
             planar, curved, freeform = classify_faces(csg.shape)
             report = ReconstructionReport(
@@ -120,6 +149,7 @@ def reconstruct(
                 primitive="csg",
                 curved_faces=curved,
                 freeform_faces=freeform,
+                surface_deviation=csg_dev,
             )
             return ReconstructionResult(step=shape_to_step(csg.shape), report=report)
         # 4) a cylinder trimmed by a non-perpendicular / axis-parallel plane (oblique cap, etc.)
@@ -128,6 +158,7 @@ def reconstruct(
         #    self-validated by volume, faceted fallback otherwise. An oblique-cut cylinder has
         #    2 caps (not 3 orthogonal box planes), so CSG rejects it and this route fires.
         cutcyl = reconstruct_cut_cylinder(vertices, faces)
+        cutcyl_dev = deviation(cutcyl.shape) if cutcyl is not None else None
         if cutcyl is not None:
             planar, curved, freeform = classify_faces(cutcyl.shape)
             report = ReconstructionReport(
@@ -141,6 +172,7 @@ def reconstruct(
                 primitive="cut_cylinder",
                 curved_faces=curved,
                 freeform_faces=freeform,
+                surface_deviation=cutcyl_dev,
             )
             return ReconstructionResult(step=shape_to_step(cutcyl.shape), report=report)
         method = "fitted"  # not a primitive / revolution / CSG / cut-cylinder → fall through
@@ -156,6 +188,7 @@ def reconstruct(
             is_valid=result.is_valid,
             method="faceted",
             faceted_faces=result.faces_built,  # every face is a per-triangle fallback
+            surface_deviation=deviation(result.shape),
         )
         shape = result.shape
     elif method == "fitted":
@@ -170,6 +203,7 @@ def reconstruct(
             method="fitted",
             freeform_faces=fitted.freeform_faces,
             faceted_faces=fitted.triangle_faces,  # leftover regions kept per-triangle (FR-8)
+            surface_deviation=deviation(fitted.shape),
         )
         shape = fitted.shape
     else:
