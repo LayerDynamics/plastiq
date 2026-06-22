@@ -40,3 +40,12 @@ Revisit criteria: if Plastiq ever hand-rolls SfM (instead of COLMAP/MLX), port t
 - New `services/capture/app/geometry.py` (numpy; no OCC, no torch) + tests — also seeds the M7 capture
   service directory. Deterministic.
 - `Expanse.md` kornia item updated; the SfM-solver deferral recorded here and in M7's ADR.
+
+## Wiring status (accuracy note)
+
+`geometry.py` is a **standalone utility, not yet called by the capture service.** M7's `/capture`
+endpoint takes an *already-oriented* point cloud (`points` + `normals`) as input, so it does not invoke
+`depth_to_normals`. `geometry.py` is the depth-map → points/normals front-end for a **depth-scan**
+ingestion path (a phone/LiDAR depth frame + intrinsics → `unproject_depth`/`depth_to_normals` → the
+oriented cloud `/capture` consumes); that ingestion endpoint is the wiring step that makes it live.
+Built + tested now; reachable from the running service when the depth-ingestion path is added.
