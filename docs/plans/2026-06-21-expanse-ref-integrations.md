@@ -250,18 +250,19 @@ reconstruct — holds), not a third `services/complete/`.
 - [x] **M8.4 — Docs.** `SPEC-10` §completion; class-dependence + non-determinism caveats (why it's
       a *separate* service from reconstruct); update `Expanse.md` rec #3 + README.
 
-## M9 — `truck` alt-WASM-kernel evaluation spike · T1 research · license-gated · SPECULATIVE
+## M9 — `truck` alt-WASM-kernel evaluation spike · T1 research · ✅ DONE (go/no-go: NO-GO)
 
-**Scope is honestly a feasibility spike + prototype, not an OCCT replacement** (that is its own epic).
+**Outcome:** license gate **passes** (verified `truck`@`c84318b8dec` is **Apache-2.0** by fetching its
+LICENSE), but the recommendation is **NO-GO now**. `truck` lacks dress-ups (fillet/chamfer/shell/draft),
+a sketch constraint solver, assemblies, IGES/glTF, and persistent tagging — all of which `@plastiq/cad`
+ships and tests; CADmium-on-truck is inactive/pre-MVP (direct maturity signal). Replacement is a
+multi-month epic for a speculative WASM-size win that addresses no current blocker.
 
-- [ ] **M9.0 — License gate (hard stop).** Confirm `truck`'s actual license (separate repo from
-      CADmium/Elastic-2.0). **If non-permissive, stop here and record the finding** in
-      `docs/adr/0009-truck-kernel-eval.md`. CADmium's own code stays unusable (hosted-service clause).
-- [ ] **M9.1 — Prototype (if license clears).** A throwaway branch: compile a minimal `truck`
-      WASM build, extrude one profile, measure WASM size vs our trimmed OCCT (~5.6 MB gz) and feature
-      coverage gaps.
-- [ ] **M9.2 — Go/no-go ADR.** Record size/coverage/risk vs OCCT; recommendation. No production code
-      this milestone. Update `Expanse.md`.
+- [x] **M9.0 — License gate.** PASSES — Apache-2.0, verified from the upstream LICENSE.
+- [x] **M9.1 — Prototype.** Deferred: a WASM-size measurement would not change a no-go already settled
+      by coverage/maturity. (Recorded in ADR 0009 as part of the *future* re-evaluation criteria.)
+- [x] **M9.2 — Go/no-go ADR.** `docs/adr/0009-truck-kernel-eval.md` (NO-GO + watch-list + revisit
+      criteria). No production code. `Expanse.md` CADmium/`truck` note updated.
 
 ## M10 — voxel-editor ray-pick voxel-editing mode · T1 · Apache-2.0 · NET-NEW (new product direction)
 
