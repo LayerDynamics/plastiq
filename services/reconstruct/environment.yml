@@ -17,3 +17,8 @@ dependencies:
   - python-multipart
   - httpx
   - pytest
+  - pip
+  - pip:
+      # The fidelity (SCD) + recognition metric math runs in MLX on Apple Silicon (M1/M2c). MLX is
+      # pip-only; deterministic by seed, so NFR-2 holds. Geometry still comes from OCCT/trimesh.
+      - mlx

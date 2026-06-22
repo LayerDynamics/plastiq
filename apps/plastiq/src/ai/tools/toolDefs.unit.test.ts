@@ -2,6 +2,8 @@
 
 import { describe, expect, it, vi } from "vitest";
 import { ANSWER_USER, buildAgentTools, toolDefs, type AgentToolDeps } from "./toolDefs.js";
+import { runAgent, type AgentTools } from "../agentRunner.js";
+import type { ChatProvider, StreamEvent } from "../providers/types.js";
 import type { CadDocument } from "../../store/types.js";
 import type { MeshView } from "./inspectGeometry.js";
 
@@ -23,9 +25,15 @@ function deps(over: Partial<AgentToolDeps> = {}): AgentToolDeps {
 }
 
 describe("toolDefs (SPEC-6 §7.1)", () => {
-  it("offers build_part, inspect_geometry, and answer_user by default (no create_mesh)", () => {
+  it("offers plan_part, build_part, inspect_geometry, and answer_user by default (no create_mesh)", () => {
     const names = toolDefs({ creative: false }).map((d) => d.name);
-    expect(names).toEqual(["build_part", "inspect_geometry", ANSWER_USER]);
+    expect(names).toEqual(["plan_part", "build_part", "inspect_geometry", ANSWER_USER]);
+  });
+
+  it("plan_part (M5) declares a decomposition-graph schema", () => {
+    const plan = toolDefs({ creative: false }).find((d) => d.name === "plan_part")!;
+    expect(plan).toBeDefined();
+    expect(plan.parameters).toBeTypeOf("object");
   });
 
   it("adds create_mesh only in creative mode, with the §7.1 input enum", () => {
@@ -87,6 +95,25 @@ describe("buildAgentTools dispatch", () => {
     expect(res.isError).toBe(false);
   });
 
+  it("plan_part validates a decomposition graph and records it (M5)", async () => {
+    const onPlan = vi.fn();
+    const tools = buildAgentTools(deps({ onPlan }));
+    const res = await tools.handlers["plan_part"]!({
+      nodes: [{ id: "body", part: "housing" }, { id: "lid", part: "lid", parent: "body" }],
+      relations: [{ from: "lid", to: "body", kind: "attached" }],
+    });
+    expect(res.isError).toBe(false);
+    expect(res.result).toMatch(/plan accepted/i);
+    expect(onPlan).toHaveBeenCalledOnce();
+  });
+
+  it("plan_part returns isError on a malformed plan (so the model fixes it)", async () => {
+    const tools = buildAgentTools(deps());
+    const res = await tools.handlers["plan_part"]!({ nodes: [{ id: "a", part: "a", parent: "ghost" }] });
+    expect(res.isError).toBe(true);
+    expect(res.result).toMatch(/rejected/i);
+  });
+
   it("create_mesh is wired only when its deps are supplied", async () => {
     const without = buildAgentTools(deps());
     expect(without.handlers["create_mesh"]).toBeUndefined();
@@ -109,5 +136,41 @@ describe("buildAgentTools dispatch", () => {
     // A declined/invalid job surfaces as a tool result, not a throw.
     const res = await withCreative.handlers["create_mesh"]!({ mode: "text3d", prompt: "x", providerId: "nope" });
     expect(res.isError).toBe(true);
+  });
+});
+
+/** A ChatProvider that yields a scripted StreamEvent[] per stream() call (drives the loop). */
+class ScriptedProvider implements ChatProvider {
+  readonly id = "openai-compatible" as const;
+  readonly model = "fake";
+  readonly supportsVision = false;
+  readonly supportsTools = true;
+  private i = 0;
+  constructor(private readonly scripts: StreamEvent[][]) {}
+  async *stream(): AsyncIterable<StreamEvent> {
+    const script = this.scripts[Math.min(this.i, this.scripts.length - 1)] ?? [];
+    this.i += 1;
+    for (const ev of script) yield ev;
+  }
+}
+const call = (id: string, name: string, args: unknown): StreamEvent => ({ type: "tool-call", call: { id, name, arguments: args } });
+const done = (): StreamEvent => ({ type: "done", finishReason: "tool-calls" });
+
+describe("plan-conditioned execution (M5.3)", () => {
+  it("the agent plans first, then builds referencing the plan, then answers", async () => {
+    const apply = vi.fn();
+    const onPlan = vi.fn();
+    const tools: AgentTools = buildAgentTools(
+      deps({ buildPart: { probe: async () => ({ ok: true }), apply }, onPlan }),
+    );
+    const provider = new ScriptedProvider([
+      [call("p1", "plan_part", { nodes: [{ id: "box", part: "the body" }, { id: "hole", part: "a hole", parent: "box" }] }), done()],
+      [call("b1", "build_part", { document: cubeDoc }), done()],
+      [call("a1", ANSWER_USER, { message: "built per plan" }), done()],
+    ]);
+    const res = await runAgent({ provider, system: "s", messages: [{ role: "user", content: "make a box with a hole" }], tools });
+    expect(onPlan).toHaveBeenCalledOnce(); // the agent committed a validated plan first
+    expect(apply).toHaveBeenCalledOnce(); // then built the part
+    expect(res.finish).toBe("answer");
   });
 });

@@ -13,6 +13,7 @@
   "dependencies": {
     "@anthropic-ai/sdk": "^0.105.0",
     "@plastiq/cad": "workspace:*",
+    "@plastiq/nerf": "workspace:*",
     "@plastiq/sim": "workspace:*",
     "@react-three/drei": "^10.7.7",
     "@react-three/fiber": "^9.6.1",

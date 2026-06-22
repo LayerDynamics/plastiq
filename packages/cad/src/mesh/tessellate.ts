@@ -140,6 +140,12 @@ export function tessellateTagged(
   }
   fexp.delete();
 
+  // Centroid → face-group id, so an edge can record which two faces it joins (M2: the
+  // dihedral-convexity test needs the adjacent faces' centroids). The face centroid is computed
+  // by the SAME `faceCentroid` as `faceGroups`, so the key matches exactly. (ADR-0002.)
+  const centroidToFaceId = new Map<string, number>();
+  for (const g of faceGroups) centroidToFaceId.set(g.centroid.join(","), g.faceId);
+
   // --- Edges: world polylines + two adjacent-face normals (EdgeRef signature).
   const edges: TaggedEdge[] = [];
   const edgeFaceMap = new oc.TopTools_IndexedDataMapOfShapeListOfShape_1();
@@ -155,6 +161,19 @@ export function tessellateTagged(
       // it borders the already-counted missing face. Fabricating a normal here is
       // exactly the silent-corruption this avoids.
       const [na, nb] = adjacentFaceNormals(oc, faceList);
+      // The two adjacent faces' ids, same order as [na, nb] (First/Last, matching
+      // adjacentFaceNormals). Resolved by centroid, which is byte-identical to the face group's.
+      const fA = oc.TopoDS.Face_1(faceList.First_1());
+      const cA = faceCentroid(oc, fA);
+      fA.delete();
+      let cB = cA;
+      if (faceList.Size() >= 2) {
+        const fB = oc.TopoDS.Face_1(faceList.Last_1());
+        cB = faceCentroid(oc, fB);
+        fB.delete();
+      }
+      const idA = centroidToFaceId.get(cA.join(",")) ?? -1;
+      const idB = centroidToFaceId.get(cB.join(",")) ?? -1;
       const positions = discretizeEdge(oc, edge, deflection);
       const mid = edgeMidpoint(oc, edge);
       edges.push({
@@ -164,6 +183,7 @@ export function tessellateTagged(
           [na[0], na[1], na[2]],
           [nb[0], nb[1], nb[2]],
         ],
+        faceIds: [idA, idB],
         midpoint: [mid[0], mid[1], mid[2]],
       });
     } catch {

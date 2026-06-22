@@ -14,6 +14,7 @@ import { buildProvider } from "./providers/registry.js";
 import { toProviderSettings, type AiSettings } from "./settings.js";
 import { runGeneration } from "./runGeneration.js";
 import { reconstructMesh, stepToImportDocument } from "./reconstruct.js";
+import { captureFromPhotos } from "./nerf.js";
 import { exportMeshGlb } from "../mesh/exportGlb.js";
 import { buildMeshGenDeps, meshGenConfigured } from "./meshGenDeps.js";
 import { buildTurnTools, buildCreateMeshDeps, buildSeam, type TurnToolsDeps } from "./agentTurn.js";
@@ -143,13 +144,21 @@ function MeshConvertSection(): React.JSX.Element {
       });
       const name = doc.name ?? "Reconstructed mesh";
       useCadStore.getState().loadDocument(stepToImportDocument(result.step, name));
+      // M1: surface a pose/scale-robust fidelity readout (SCD) when the server reports it —
+      // honest NFR-4 UX: "good" if the reconstructed surface tracks the mesh, "coarse" otherwise.
+      const dev = result.report.surface_deviation;
+      const tol = result.report.fidelity_tol ?? 0.01;
+      const fidelity =
+        typeof dev === "number" && Number.isFinite(dev)
+          ? `, fidelity ${dev <= tol ? "good" : "coarse"} (Δ${dev.toFixed(4)})`
+          : "";
       // Switch out of mesh mode: the viewport now renders the new B-rep part as a fresh
       // untitled parametric document (the original mesh project is left untouched).
       useProjectsStore.setState({
         activeMeshDoc: null,
         currentId: null,
         currentName: name,
-        status: `converted to CAD — ${result.report.faces_built} face${result.report.faces_built === 1 ? "" : "s"}${result.report.is_solid ? ", solid" : ", shell"}`,
+        status: `converted to CAD — ${result.report.faces_built} face${result.report.faces_built === 1 ? "" : "s"}${result.report.is_solid ? ", solid" : ", shell"}${fidelity}`,
       });
       setStatus(null);
     } catch (e) {
@@ -209,6 +218,131 @@ function MeshConvertSection(): React.JSX.Element {
       <p className="text-[10px] text-[#678]">
         Organic shapes reconstruct as dense surfaces; mechanical shapes (flats, holes) convert best.
       </p>
+    </div>
+  );
+}
+
+function fileToText(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(String(r.result));
+    r.onerror = () => reject(r.error ?? new Error("file read failed"));
+    r.readAsText(file);
+  });
+}
+
+function fileToBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => {
+      const s = String(r.result);
+      const comma = s.indexOf(","); // strip the "data:<mime>;base64," prefix
+      resolve(comma >= 0 ? s.slice(comma + 1) : s);
+    };
+    r.onerror = () => reject(r.error ?? new Error("file read failed"));
+    r.readAsDataURL(file);
+  });
+}
+
+/** SPEC-11 N11.3 — capture a mesh from posed photos via the @plastiq/nerf service. The user picks a
+ * transforms.json (camera poses) + the images it describes; trainNerf fits an MLX surface server-side
+ * and returns a GLB, which is persisted as a MeshDoc. createMeshProject opens it, so the panel then
+ * shows MeshConvertSection — i.e. the captured mesh flows straight into the existing "Convert to CAD"
+ * (mesh → B-rep) path. The nerf base URL comes from settings (nerfBaseURL). */
+function NerfCaptureSection(): React.JSX.Element {
+  const [transformsJson, setTransformsJson] = useState<string | null>(null);
+  const [transformsName, setTransformsName] = useState<string | null>(null);
+  const [images, setImages] = useState<string[]>([]);
+  const [busy, setBusy] = useState(false);
+  const [status, setStatus] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const onTransforms = useCallback(async (f?: File): Promise<void> => {
+    if (!f) return;
+    setError(null);
+    setTransformsJson(await fileToText(f));
+    setTransformsName(f.name);
+  }, []);
+
+  const onImages = useCallback(async (files: FileList | null): Promise<void> => {
+    if (!files || files.length === 0) return;
+    setError(null);
+    setImages(await Promise.all(Array.from(files).map(fileToBase64)));
+  }, []);
+
+  const capture = useCallback(async (): Promise<void> => {
+    if (!transformsJson || images.length === 0 || busy) return;
+    setBusy(true);
+    setError(null);
+    setStatus("submitting…");
+    try {
+      const baseURL = useAiStore.getState().settings?.nerfBaseURL;
+      await captureFromPhotos(
+        { transformsJson, images },
+        { persist: (doc) => useProjectsStore.getState().createMeshProject(doc) },
+        { ...(baseURL ? { baseURL } : {}), onState: (s) => setStatus(s) },
+        "Captured mesh",
+      );
+      // createMeshProject opens the mesh doc → this panel switches to MeshConvertSection.
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }, [transformsJson, images, busy]);
+
+  return (
+    <div data-testid="nerf-capture" className="flex flex-col gap-1 rounded border border-[#1b2230] bg-black/20 p-2">
+      <div className="text-[10px] text-[#9ab]">Capture from photos (NeRF → mesh → CAD)</div>
+      <div className="flex flex-wrap items-center gap-2 text-[10px] text-[#9ab]">
+        <label className="cursor-pointer rounded border border-[#2a3444] bg-[#10141c] px-2 py-1 hover:bg-[#16202c]">
+          <input
+            data-testid="nerf-transforms-input"
+            type="file"
+            accept=".json,application/json"
+            className="hidden"
+            disabled={busy}
+            onChange={(e) => void onTransforms(e.target.files?.[0])}
+          />
+          {transformsName ? "Replace transforms.json" : "transforms.json"}
+        </label>
+        {transformsName && (
+          <span data-testid="nerf-transforms-name" className="max-w-[9rem] truncate text-[#cde]">
+            {transformsName}
+          </span>
+        )}
+        <label className="cursor-pointer rounded border border-[#2a3444] bg-[#10141c] px-2 py-1 hover:bg-[#16202c]">
+          <input
+            data-testid="nerf-images-input"
+            type="file"
+            accept="image/*"
+            multiple
+            className="hidden"
+            disabled={busy}
+            onChange={(e) => void onImages(e.target.files)}
+          />
+          {images.length > 0 ? `${images.length} image${images.length === 1 ? "" : "s"}` : "Images"}
+        </label>
+        <button
+          type="button"
+          data-testid="nerf-capture-btn"
+          onClick={() => void capture()}
+          disabled={busy || !transformsJson || images.length === 0}
+          className="rounded border border-[#3a5a7a] bg-[#14253a] px-2 py-1 text-[#bfe] hover:bg-[#1a2f48] disabled:opacity-40"
+        >
+          {busy ? "Capturing…" : "Capture"}
+        </button>
+      </div>
+      {status && (
+        <div data-testid="nerf-status" className="text-[10px] text-[#789]">
+          {status}
+        </div>
+      )}
+      {error && (
+        <div data-testid="nerf-error" className="text-[10px] text-[#fb9]">
+          {error}
+        </div>
+      )}
     </div>
   );
 }
@@ -569,6 +703,7 @@ export function GenerationPanel(): React.JSX.Element {
               ))}
             </div>
           )}
+          <NerfCaptureSection />
           <CreativeKeyField />
           {/* Full provider/model/base-URL/key configuration (FR-4/FR-5/FR-5b) — collapsed
               by default so the prompt stays the focus; the first-run chooser only sets the

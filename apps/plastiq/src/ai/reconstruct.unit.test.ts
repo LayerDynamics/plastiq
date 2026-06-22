@@ -59,6 +59,17 @@ describe("reconstructMesh (SPEC-6 R6.6)", () => {
     expect(calls[0]).toBe("http://localhost:8000/reconstruct");
   });
 
+  it("preserves the surface_deviation / fidelity_tol fidelity fields (M1)", async () => {
+    const result: ReconstructResult = {
+      step: "ISO-10303-21;\nDATA;\nENDSEC;\nEND-ISO-10303-21;",
+      report: { ...REPORT, surface_deviation: 0.0041, fidelity_tol: 0.01 },
+    };
+    const { fetchImpl } = scriptedFetch({ runningPolls: 1, result });
+    const res = await reconstructMesh("x", { fetchImpl, delay: async () => {} });
+    expect(res.report.surface_deviation).toBeCloseTo(0.0041);
+    expect(res.report.fidelity_tol).toBe(0.01);
+  });
+
   it("throws with the backend detail on a failed job", async () => {
     const fetchImpl = (async (url: string) => {
       if (url.endsWith("/reconstruct")) return jsonResponse({ id: "j", state: "queued" });

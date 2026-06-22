@@ -12,6 +12,7 @@ import type { Occt } from "../oc/init.js";
 import type { Solid } from "../solid/solid.js";
 import type { FaceRef, EdgeRef } from "../mesh/tagged.js";
 import { tessellateTagged } from "../mesh/tessellate.js";
+import { edgeConvexity, filletFaces, growTangentFaces } from "./topology.js";
 
 type V3 = [number, number, number];
 
@@ -23,7 +24,15 @@ export type Selector =
   | { kind: "largestPlanarFace" }
   | { kind: "faceByNormal"; normal: [number, number, number]; tol?: number }
   | { kind: "edgesParallelTo"; axis: [number, number, number]; tol?: number }
-  | { kind: "verticalEdges"; tol?: number };
+  | { kind: "verticalEdges"; tol?: number }
+  // M2 (clean-room B-rep traversal, docs/adr/0002):
+  /** All faces tangent-connected (across smooth/G1 edges) to the seed face. */
+  | { kind: "tangentFaces"; seed: FaceRef }
+  /** The fillet/blend faces — curved faces that join a neighbour tangentially. */
+  | { kind: "filletChain" }
+  /** Edges classified convex / concave by the dihedral of their two adjacent faces. */
+  | { kind: "convexEdges" }
+  | { kind: "concaveEdges" };
 
 export interface SelectorResult {
   faces: FaceRef[];
@@ -80,7 +89,11 @@ function edgeDir(positions: number[]): V3 | null {
  * the same selector always picks the same entity across rebuilds.
  */
 export function resolveSelector(oc: Occt, solid: Solid, selector: Selector): SelectorResult {
-  const mesh = tessellateTagged(oc, solid);
+  // A finer angular deflection than the render default (0.5 rad ≈ 28°) so that on curved faces the
+  // boundary triangle's normal converges to the true surface tangent at an edge — without it the
+  // dihedral convexity test (M2) mis-reads tangent fillet joins as sharp. 0.1 rad ≈ 5.7° keeps the
+  // nearest-triangle normal within ~3° of the edge tangent, inside the 5° smooth gate.
+  const mesh = tessellateTagged(oc, solid, { angularDeflection: 0.1 });
   const faceRef = (g: { normal: V3; centroid: V3 }): FaceRef => ({ normal: g.normal, centroid: g.centroid });
   const edgeRef = (e: { faceNormals: readonly [V3, V3]; midpoint: V3 }): EdgeRef => ({ faceNormals: e.faceNormals, midpoint: e.midpoint });
   const groups = mesh.faceGroups as ReadonlyArray<{ normal: V3; centroid: V3; start: number; count: number }>;
@@ -142,6 +155,39 @@ export function resolveSelector(oc: Occt, solid: Solid, selector: Selector): Sel
       return { faces: [], edges: out };
     }
 
+    case "tangentFaces": {
+      // Resolve the seed FaceRef to a face group, then grow across smooth (tangent) edges.
+      // The seed came from a face group of (a rebuild of) this solid, so match by centroid when
+      // present (exact), else by the best normal alignment.
+      const seed = selector.seed;
+      const sn = unit(seed.normal as V3);
+      let bestId = -1;
+      let bestKey = -Infinity;
+      for (const g of mesh.faceGroups) {
+        const key = seed.centroid
+          ? -len(sub(g.centroid, seed.centroid as V3))
+          : dot(unit(g.normal), sn);
+        if (key > bestKey) {
+          bestKey = key;
+          bestId = g.faceId;
+        }
+      }
+      if (bestId < 0) return none;
+      const grown = growTangentFaces(mesh, bestId);
+      return { faces: mesh.faceGroups.filter((g) => grown.has(g.faceId)).map(faceRef), edges: [] };
+    }
+
+    case "filletChain": {
+      const fills = filletFaces(mesh);
+      return { faces: mesh.faceGroups.filter((g) => fills.has(g.faceId)).map(faceRef), edges: [] };
+    }
+
+    case "convexEdges":
+    case "concaveEdges": {
+      const want = selector.kind === "convexEdges" ? "convex" : "concave";
+      return { faces: [], edges: mesh.edges.filter((e) => edgeConvexity(mesh, e) === want).map(edgeRef) };
+    }
+
     default:
       return none;
   }
@@ -159,6 +205,10 @@ export function isSelector(v: unknown): v is Selector {
     kind === "largestPlanarFace" ||
     kind === "faceByNormal" ||
     kind === "edgesParallelTo" ||
-    kind === "verticalEdges"
+    kind === "verticalEdges" ||
+    kind === "tangentFaces" ||
+    kind === "filletChain" ||
+    kind === "convexEdges" ||
+    kind === "concaveEdges"
   );
 }

@@ -1,0 +1,22 @@
+# Conda env for the Plastiq capture service. MLX is Apple-Silicon-only (pip), the rest are
+# conda-forge. Source of truth for the runtime env (local). The MLX neural-SDF surface
+# reconstruction trains on Apple Silicon (the M4 Max) — see docs/adr/0007.
+#   mamba env create -f environment.yml   # then: mamba run -n plastiq-capture ...
+name: plastiq-capture
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11
+  - numpy
+  - scipy
+  - trimesh
+  - scikit-image   # marching_cubes for the SDF zero level-set
+  - fastapi
+  - uvicorn
+  - pydantic
+  - python-multipart
+  - httpx
+  - pytest
+  - pip
+  - pip:
+      - mlx        # Apple Silicon neural-network framework (conda-forge has no mlx)

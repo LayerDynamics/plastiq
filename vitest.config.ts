@@ -35,6 +35,7 @@ export default defineConfig({
         // NOT a blanket **/index.ts: io/, math/, unit/, and persistence/ index
         // files hold real, tested functions and must stay measured.
         "packages/sim/src/index.ts",
+        "packages/nerf/src/index.ts",
         "packages/cad/src/index.ts",
         "packages/cad/src/action/index.ts",
         "packages/cad/src/lower/index.ts",

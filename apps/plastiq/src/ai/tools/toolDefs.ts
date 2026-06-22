@@ -10,6 +10,7 @@ import { authoringDocumentSchema } from "./schema.js";
 import { buildPart, type BuildPartDeps } from "./buildPart.js";
 import { inspectGeometry, type MeshProbe } from "./inspectGeometry.js";
 import { createMesh, type CreateMeshDeps } from "./createMesh.js";
+import { planSchema, summarizePlan, validatePlan, type PlanGraph } from "../planning.js";
 import type { ToolDef, JsonSchema } from "../providers/types.js";
 import type { AgentTools, ToolHandler } from "../agentRunner.js";
 import type { CadDocument } from "../../store/types.js";
@@ -29,9 +30,24 @@ function authoringJsonSchema(): JsonSchema {
   }
 }
 
+/** JSON Schema for the M5 planning IR (decomposition graph), from the single zod source. */
+function planJsonSchema(): JsonSchema {
+  try {
+    return z.toJSONSchema(planSchema) as JsonSchema;
+  } catch {
+    return { type: "object", description: "A decomposition graph: { nodes:[{id,part,parent?}], relations:[{from,to,kind}] }." };
+  }
+}
+
 /** The model-facing tool definitions. `creative` adds create_mesh (the paid 3D path). */
 export function toolDefs(opts: { creative: boolean }): ToolDef[] {
   const defs: ToolDef[] = [
+    {
+      name: "plan_part",
+      description:
+        "For a COMPLEX or multi-part object, FIRST decompose it into a plan graph before building: nodes are sub-parts ({ id, part, parent? }, hierarchy via parent), relations are spatial/constraint edges ({ from, to, kind } with kind aligned|attached|coaxial|offset|pattern|symmetric|contains). The browser validates structure (referential integrity, acyclic) and returns it; then call build_part referencing the node ids. Skip this for a simple single part.",
+      parameters: planJsonSchema(),
+    },
     {
       name: "build_part",
       description:
@@ -91,12 +107,22 @@ export interface AgentToolDeps {
   currentDoc: () => CadDocument;
   /** create_mesh deps — when present, the creative tool is offered + wired. */
   createMesh?: CreateMeshDeps;
+  /** M5: called when the agent commits a (validated) decomposition plan, so the trace/UX can show it. */
+  onPlan?: (plan: PlanGraph) => void;
 }
 
 /** Wire the agent's tools (defs + handlers) from the injected dependencies. The
  * handlers return a string for the model (isError feeds a correction back). */
 export function buildAgentTools(deps: AgentToolDeps): AgentTools {
   const handlers: Record<string, ToolHandler> = {
+    plan_part: async (args) => {
+      // No geometry side effects — validate the decomposition graph and record it. A malformed plan
+      // returns its error so the model fixes the structure before building (M5; docs/adr/0005).
+      const v = validatePlan(args);
+      if (!v.ok) return { result: `Plan rejected: ${v.error}`, isError: true };
+      deps.onPlan?.(v.plan);
+      return { result: summarizePlan(v.plan), isError: false };
+    },
     build_part: async (args) => {
       const document = (args as { document?: unknown }).document;
       const r = await buildPart(document, deps.buildPart);

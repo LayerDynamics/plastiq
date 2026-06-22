@@ -1,0 +1,22 @@
+# Conda env for the Plastiq NeRF service. MLX is Apple-Silicon-only (pip), the rest are conda-forge.
+# Mirrors services/capture/environment.yml. The radiance/SDF fields train on Apple Silicon (the M4
+# Max) — see docs/adr/0011 + SPEC-11.
+#   mamba env create -f environment.yml   # then: mamba run -n plastiq-nerf ...
+name: plastiq-nerf
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11
+  - numpy
+  - trimesh
+  - scikit-image   # marching_cubes for the density/SDF level-set
+  - pillow         # image I/O for posed views
+  - fastapi
+  - uvicorn
+  - pydantic
+  - python-multipart
+  - httpx
+  - pytest
+  - pip
+  - pip:
+      - mlx        # Apple Silicon neural-network framework (conda-forge has no mlx)
