@@ -78,7 +78,11 @@ def train_and_export(
     if method == "neus":
         verts, faces = extract_sdf_mesh(model.field, bound=grid_bound, res=grid_res)
     else:
-        verts, faces = extract_density_mesh(model, bound=grid_bound, res=grid_res)
+        # the NeRFField (density, rgb) = field(positions, directions) — not the model wrapper. The
+        # density iso uses extract_density_mesh's fixed default level; a NeRF density field has no
+        # guaranteed scale, so for arbitrary scenes this threshold may need tuning (neus is the robust
+        # default). The unit-scaled synthetic scene crosses it.
+        verts, faces = extract_density_mesh(model.field, bound=grid_bound, res=grid_res)
 
     glb = mesh_to_glb(verts, faces)
     return {
