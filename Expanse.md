@@ -34,9 +34,11 @@ finds are few and concrete:
    only — CC-BY-NC-SA — NET-NEW).
 3. **DLR-RM `shape-completion`** → **T2** "complete my partial scan into a watertight mesh"
    (MIT, modern, NET-NEW capability — but ships no weights; a real GPU/training lift).
-4. **nerfstudio / sdfstudio photogrammetry** → documented **external-tool→import** capture workflow
-   (real-object photos → mesh → reconstruct; Apache-2.0; NET-NEW but organic output, weak for
-   mechanical parts).
+4. **nerfstudio / sdfstudio photogrammetry** → ✅ **BUILT as own MLX service** (`services/nerf`, N0–N12;
+   the original "external-tool→import" recommendation was reversed into a first-party build): posed
+   photos → MLX NeRF/VolSDF (trains on the M4 Max) → watertight mesh → reconstruct, wired into the app
+   via the `@plastiq/nerf` package + a "Capture from photos" panel (Apache-2.0 idea only; NET-NEW —
+   organic output, still weak for mechanical parts; SfM stays COLMAP's).
 
 Everything else is design-inspiration (ideas, not code) or a reject. Details below.
 
@@ -274,11 +276,15 @@ Each card: **what it IS** · **license** (load-bearing — a non-commercial/no-l
   Evidence: `nerfstudio/scripts/exporter.py`, `nerfstudio/exporter/`.
 - **Liftable** — **Heavyweight dependency** (Open3D/torch/CUDA + trained field); no liftable snippet.
   The value is the **workflow**, not a function.
-- **Verdict** — **External-tool handoff (T2 stretch), NET-NEW.** The one new thread in this group:
-  **real-object photos/video → mesh**, which the cloud creative path does *not* offer. Best framed as a
-  *documented external capture step* → export PLY → import into reconstruct (it'd hit the
-  faceted/freeform path). Honest caveat: GPU-only, per-scene, organic output → **weak for
-  mechanical/parametric parts.** Too heavy to bundle as a managed provider.
+- **Verdict** — ✅ **BUILT — own MLX service, fully wired** (N0–N12, supersedes the original
+  "external-tool handoff" recommendation below). The one new thread in this group — **real-object
+  photos/video → mesh** — is now `services/nerf/`: a self-contained **MLX** NeRF/VolSDF service (NOT a
+  CUDA nerfstudio port; the upstream is GPU-only) that trains on the **M4 Max**, modeled on
+  nerfstudio's architecture (Apache-2.0, idea only). The originally-recommended framing (a *documented
+  external capture step* → PLY → import) was reversed by the user into a first-party build.
+  Honest caveat stands: per-scene optimization, organic output → **weak for mechanical/parametric
+  parts** (SfM photos→poses still stays COLMAP's job, ingested via `transforms.json`). See the nerf
+  ledger row in §2a, SPEC-11, ADR 0011.
 
 #### D2. sdfstudio — *cleaner (watertight) photogrammetry meshes; stale base*
 
@@ -290,9 +296,12 @@ Each card: **what it IS** · **license** (load-bearing — a non-commercial/no-l
   reconstruct→B-rep better**). NVIDIA-GPU, ~15 min/scene. **Caveat: unmaintained since 2023-09, vendors
   an old nerfstudio** → maintenance liability. Evidence: `scripts/extract_mesh.py`,
   `nerfstudio/utils/marching_cubes.py`.
-- **Verdict** — **External-tool handoff (T2 stretch), NET-NEW (marginal over D1 but real for us:
-  watertight output).** Prefer the SDF *output* if doing photogrammetry; treat the repo itself as a
-  stale reference, not a dependency. Same organic-surface limit for mechanical parts.
+- **Verdict** — ✅ **BUILT — the SDF path is realized in MLX** (the `services/nerf` default model).
+  sdfstudio's VolSDF/NeuS *idea* is now `app/models/neus.py` `VolSDFModel`: an MLX SDF field trained
+  from images via the VolSDF Laplace SDF→density transform + eikonal, marching-cubed to a **watertight
+  zero-level-set mesh** — the cleaner input for reconstruct→B-rep, exactly the reason D2 ranked over D1.
+  The CUDA repo itself stays a stale reference (idea only), not a dependency. Same organic-surface limit
+  for mechanical parts.
 
 #### D3. stable-dreamfusion — *superseded; do not build*
 
@@ -407,6 +416,7 @@ All 10 milestones are **built, strict-TDD'd, and committed** (reconstruct 85 pyt
 | **M6** depth→normals | 🟡 **tested island** | No — `geometry.py` imported only by its test; `/capture` takes normals as input |
 | **M10** voxel core | 🟡 **tested island** | No — `voxel/*` + `VoxelDoc` not imported outside `voxel/`; `VoxelDoc` not in `PersistedDoc` (UI mode deferred, ADR 0010) |
 | **M7** MLX capture · **M8** MLX completion | 🟢 **deployable service** | Partially — real self-hosted FastAPI services that train on the M4 Max; **no browser client calls them yet** (no `capture.ts`; the GLB output feeds the existing MeshDoc→reconstruct path once a client/endpoint is wired) |
+| **N0–N12** MLX NeRF/VolSDF service (`services/nerf`) + `@plastiq/nerf` | ✅ **LIVE — wired** | Yes — the **first** self-hosted ML service with a wired browser client: FastAPI `/train` (posed images → VolSDF/NeRF → GLB, trains on the M4 Max) ← the `@plastiq/nerf` workspace package (`trainNerf`) ← `apps/plastiq/src/ai/nerf.ts` `captureFromPhotos` ← the **"Capture from photos"** panel → `MeshDoc` (`photos3d`) → existing Convert-to-CAD. 42 service pytest (incl. real submit→poll→GLB API) + 6 package vitest + 4 app vitest. SPEC-11 / ADR 0011. |
 | **M3** warm-OCP · **M9** truck | 📝 **decision** | n/a — evidence-based "not built" / "no-go" (ADR 0003 / 0009) |
 
 The remaining wiring (mount the BOM panel; a depth-ingestion endpoint; a `capture.ts` browser client; the voxel mode shell) was **honestly deferred per-milestone** in each ADR — the algorithms/services/docs are real and tested; the last-mile app wiring is the follow-on.

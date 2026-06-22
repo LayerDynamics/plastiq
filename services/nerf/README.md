@@ -16,7 +16,7 @@ app/field_components   positional/hash encodings, MLP, density/RGB heads, activa
 app/generators         ray samplers (uniform, PDF/importance)
 app/model_components    volumetric renderer (RGB/accum/depth), losses (MSE, eikonal)
 app/fields             radiance field (NeRF density+color) + SDF field (NeuS/VolSDF)
-app/models             full models: VanillaNeRF (+hash-grid), NeuS surface model
+app/models             full models: VanillaNeRF (+hash-grid), VolSDFModel surface model (neus.py)
 app/data_processing    transforms.json parser → DataparserOutputs, MLX ray generation
 app/engine             Trainer (MLX Adam + value_and_grad loop), submit→poll jobs
 app/exporters          field → marching-cubes mesh → GLB / point cloud
@@ -27,17 +27,30 @@ app/utils              config, deterministic MLX seeding, math
 
 - **VanillaNeRF** — density+color field, volume rendering (novel-view synthesis); marching-cubes the
   density for a mesh. Frequency encoding, then a multiresolution hash-grid (instant-NGP) upgrade.
-- **NeuS / VolSDF** — an SDF field (watertight zero-level-set mesh, the cleanest input for
-  reconstruct→B-rep), with the eikonal loss.
+- **VolSDF** (`VolSDFModel`, the NeuS/VolSDF family) — an SDF field trained from images via the VolSDF
+  Laplace SDF→density transform + the eikonal loss; its watertight zero-level-set mesh is the cleanest
+  input for reconstruct→B-rep. The **default** `/train` model.
 
-## API (submit → poll, mirrors reconstruct/capture)
+## API (submit → poll, mirrors capture/reconstruct)
+
+The frozen wire contract is [SPEC-11 §5](../../docs/specs/SPEC-11-nerf-service.md); the `@plastiq/nerf`
+browser client is written to it. `method` defaults to `neus` (VolSDF surface — the cleanest mesh for
+reconstruct).
 
 | Method | Path | Body / result |
-|---|---|---|
-| `GET`  | `/health` | `{ status, service }` |
-| `POST` | `/train` | `{ transforms_json, images, model?, iters? }` → `{ id, state }` |
-| `GET`  | `/jobs/{id}/status` | `{ id, state, error? }` |
-| `GET`  | `/jobs/{id}/result` | `{ glb_base64, vertices, faces }` when completed |
+| --- | --- | --- |
+| `GET` | `/health` | `{ status, service }` |
+| `POST` | `/train` | `{ transforms_json, images, iters?, method?, grid_res? }` → `{ id, state }` |
+| `GET` | `/jobs/{id}/status` | `{ id, state, error? }` — `state ∈ {queued, running, completed, failed}` |
+| `GET` | `/jobs/{id}/result` | `{ glb_base64, vertices, faces, psnr, method, iters }` when completed |
+
+## Browser client (`@plastiq/nerf`)
+
+The TS side is its own workspace package [`packages/nerf`](../../packages/nerf) (`@plastiq/nerf`, a
+sibling of `@plastiq/cad`/`@plastiq/sim`): `trainNerf(input, opts)` submits a `/train` job, polls, and
+returns `{ glb, report }`. `apps/plastiq` wires it via `src/ai/nerf.ts` (`captureFromPhotos`) and a
+**"Capture from photos"** panel — the produced GLB becomes a `MeshDoc` (`mode: "photos3d"`) that flows
+into the existing "Convert to CAD" (mesh → B-rep) path. Base URL configured by the `nerfBaseURL` setting.
 
 ## Run locally (Apple Silicon)
 

@@ -178,10 +178,13 @@ GLB→MeshDoc patterns the **capture service** (`services/capture/`, M7/M8) esta
 > Note: the other empty `packages/*` dirs (`data`, `embed`, `recon`, `rl`, `segment`) are the user's
 > future scaffolding — OUT OF SCOPE for this plan unless requested.
 
-## N12 — Docs reconciliation
-- [ ] **N12.1** Finalize `SPEC-11`; `services/nerf/README.md` (architecture, env, the COLMAP/transforms.json
-      front-end caveat, training on the M4 Max); update `Expanse.md` (nerfstudio item → built, with the
-      honest wiring status) + the integration ledger.
+## N12 — Docs reconciliation ✅
+- [x] **N12.1** Reconciled to shipped state: `SPEC-11` §5 wire contract + §6 status (N0–N12, the
+      `plastiq-nerf` env created and 42 tests pass there); `services/nerf/README.md` (corrected the
+      `/train` body `model?`→`method?`/`grid_res?` + the full result fields, added the `@plastiq/nerf`
+      browser-client section, `VolSDFModel` naming); `Expanse.md` D1/D2 cards + the §0 summary item →
+      **BUILT as own MLX service** (the original external-handoff recommendation was reversed), and a new
+      §2a ledger row **N0–N12 → ✅ LIVE/wired** (the first ML service with a wired browser client).
 
 ---
 
