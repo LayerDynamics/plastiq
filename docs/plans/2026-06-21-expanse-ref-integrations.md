@@ -145,20 +145,21 @@ deps (drop the open3d alignment stage; our B-rep is already in the input-mesh fr
 - [ ] **M2c.3 — Docs.** New `docs/specs/SPEC-8-feature-recognition.md` (T1 selectors + T2 hints);
       update `Expanse.md` rec #2 → shipped. Full suites green.
 
-## M3 — forgent3d warm-OCP process pool · T2 perf · MIT · NET-NEW (throughput)
+## M3 — forgent3d warm-OCP process pool · T2 · MIT · ⚠️ NOT BUILT (premise void — see ADR 0003)
 
-**Why third:** removes the ~2.2 s pythonOCC cold-import per request; high confidence, MIT,
-self-contained; also speeds M8/M7 service ergonomics.
+**Outcome (evidence-based, like M1.5):** the cold-import premise does not apply. `services/reconstruct`
+is a long-running FastAPI server with **module-level** OCC imports (`curved_faces.py:19+`, `fidelity.py`,
+`detect.py`, …) pulled in at startup via `main.py:25 → pipeline`; each request reuses warm OCC through
+`to_thread` (`main.py:75`). The ~2.2 s import is a one-time startup cost — there is no per-request
+cold-import to remove. The crash-isolation fallback is StepForge's threat model (parsing *untrusted*
+STEP); we *construct* STEP through a gated pipeline with no observed segfault across 85 tests, and the
+service is local single-user (D-6) so parallelism is moot. Building a `spawn` pool with
+`BrokenProcessPool` recovery would be over-engineering.
 
-- [ ] **M3.0 — ADR.** `docs/adr/0003-warm-ocp-pool.md` (MIT, attribution; pattern, not code copy).
-- [ ] **M3.1 — TDD: warm worker.** Failing `tests/test_pool.py::test_worker_reuses_imported_occ`
-      (two sequential jobs in one worker import OCC once; a malformed-STEP job that SIGSEGVs is
-      isolated and the pool recovers) → implement `app/pool.py`: a `multiprocessing` spawn pool of
-      pre-warmed workers (OCC imported at boot), job dispatch, crash-restart → green.
-- [ ] **M3.2 — TDD: wire `jobs.py`.** Failing test (submit→poll still returns correct STEP, now via
-      the pool) → route `jobs.py` through the pool, preserving the existing API contract → green.
-- [ ] **M3.3 — Bench + docs.** Record cold-start delta in `README.md`; update Docker notes (R6.8).
-      Full pytest green, no API change.
+- [x] **M3.0 — ADR.** `docs/adr/0003-warm-ocp-pool.md` records the finding + the revisit criteria
+      (real OCC crash, or service becomes multi-user/hosted → adopt StepForge's persistent warm pool).
+- [x] **M3.1–M3.3 — NOT BUILT.** No `app/pool.py`; the simple long-running-server + `to_thread` design
+      is correct. Documented, not skipped.
 
 ## M4 — partcad-style declarative `.assy` assembly + auto-BOM · T1 · concept (Apache-2.0) · NET-NEW
 

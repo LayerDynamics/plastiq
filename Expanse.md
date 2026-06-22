@@ -396,7 +396,7 @@ Ranked by **(value × confidence) ÷ effort**, license-clean first.
 
 **Design-inspiration (ideas, not code to integrate):**
 - **partcad** — declarative `.assy` YAML assembly + mating + **auto-BOM** + git-versioned CAD packages → inform Plastiq's assembly layer (Apache-2.0, but adopt the *idea*).
-- **forgent3d** — **warm-OCP rebuild-daemon** pattern → `services/reconstruct` could pool a warm pythonocc process to cut cold-start (MIT). Also an agent↔geometry verify-loop reference.
+- **forgent3d** — **warm-OCP rebuild-daemon** pattern (MIT). ⚠️ *Evaluated → not applicable* (M3, [`docs/adr/0003`](docs/adr/0003-warm-ocp-pool.md)): the daemon solves cold-import for a per-rebuild CLI; `services/reconstruct` is a long-running server with module-level OCC imports, so OCC is already warm for the process lifetime and there is no per-request cold-import to remove. Kept as an agent↔geometry verify-loop reference only.
 - **Graph-CAD** — **decomposition-graph-as-planning-IR** → have the AI agent emit a hierarchical constraint graph before `build_part` tool calls (no license → idea only).
 - **CADmium** — note **`truck`** (pure-Rust WASM B-rep kernel) as a future smaller-WASM alternative to OCCT (separate repo; check its license first).
 - **voxel-editor** — ray-pick/work-plane-selection UX, only if voxel mode ever enters scope (Apache-2.0).
