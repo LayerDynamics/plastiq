@@ -395,7 +395,7 @@ Ranked by **(value × confidence) ÷ effort**, license-clean first.
 | **5** | **Bookmark** kornia `depth_to_normals`/`depth_to_3d` + Nister-5pt/Kannala-Brandt | T2 | **Apache-2.0** | n/a | partial | Only if a depth/SfM front-end is ever built. Not actionable today (reconstruct ingests meshes, not images). |
 
 **Design-inspiration (ideas, not code to integrate):**
-- **partcad** — declarative `.assy` YAML assembly + mating + **auto-BOM** + git-versioned CAD packages → inform Plastiq's assembly layer (Apache-2.0, but adopt the *idea*).
+- **partcad** — ✅ **SHIPPED** (M4): declarative `.assy` description + `realizeAssembly` + **auto-BOM** (`apps/plastiq/src/assembly/assy.ts` + `BomPanel.tsx`; own dependency-free JSON schema, not partcad's YAML/Python). SPEC-9 §assembly + ADR 0004; 11 tests. (Git-versioned CAD packages + multi-part geometry library remain future work.)
 - **forgent3d** — **warm-OCP rebuild-daemon** pattern (MIT). ⚠️ *Evaluated → not applicable* (M3, [`docs/adr/0003`](docs/adr/0003-warm-ocp-pool.md)): the daemon solves cold-import for a per-rebuild CLI; `services/reconstruct` is a long-running server with module-level OCC imports, so OCC is already warm for the process lifetime and there is no per-request cold-import to remove. Kept as an agent↔geometry verify-loop reference only.
 - **Graph-CAD** — **decomposition-graph-as-planning-IR** → have the AI agent emit a hierarchical constraint graph before `build_part` tool calls (no license → idea only).
 - **CADmium** — note **`truck`** (pure-Rust WASM B-rep kernel) as a future smaller-WASM alternative to OCCT (separate repo; check its license first).

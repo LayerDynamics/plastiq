@@ -22,6 +22,9 @@ export interface ComponentInstance {
   id: string;
   /** Display name (e.g. "Part 1"). */
   name: string;
+  /** The part this instance is an occurrence OF — its BOM key (M4). Defaults to `name` when a
+   * `.assy` link gives no override; lets the auto-BOM count occurrences of the same part. */
+  part?: string;
   pose: InstancePose;
   /** Anchored — the solver won't move it (the assembly's ground). */
   fixed?: boolean;
