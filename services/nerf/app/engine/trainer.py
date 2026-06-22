@@ -14,14 +14,14 @@ import mlx.nn as nn
 import mlx.optimizers as optim
 import numpy as np
 
-from ..model_components.losses import mse_loss
 from ..utils.seeding import split_keys
 
 
 class RenderModel(Protocol):
-    """Any model the Trainer can fit: an `nn.Module` that renders a ray batch to RGB."""
+    """Any model the Trainer can fit: an `nn.Module` exposing `render_loss` (the total per-batch loss —
+    photometric MSE for a NeRF, MSE + eikonal for a surface model)."""
 
-    def render_rays(self, origins: mx.array, directions: mx.array, key: mx.array | None = ...) -> mx.array: ...
+    def render_loss(self, origins: mx.array, directions: mx.array, target: mx.array, key: mx.array) -> mx.array: ...
 
 
 class Trainer:
@@ -44,7 +44,7 @@ class Trainer:
         rng = np.random.default_rng(self.seed)
 
         def loss_fn(model: RenderModel, o: mx.array, d: mx.array, gt: mx.array, key: mx.array) -> mx.array:
-            return mse_loss(model.render_rays(o, d, key=key), gt)
+            return model.render_loss(o, d, gt, key)
 
         loss_and_grad = nn.value_and_grad(self.model, loss_fn)
         for i in range(iters):

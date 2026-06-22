@@ -11,6 +11,7 @@ import mlx.nn as nn
 
 from ..fields.vanilla_nerf_field import NeRFField
 from ..generators.ray_samplers import UniformSampler
+from ..model_components.losses import mse_loss
 from ..model_components.renderers import volumetric_render
 from ..utils.config import NerfConfig
 
@@ -30,3 +31,7 @@ class VanillaNeRF(nn.Module):
         dirs = mx.broadcast_to(directions[:, None, :], (r, s, 3)).reshape(-1, 3)
         density, rgb = self.field(positions.reshape(-1, 3), dirs)
         return volumetric_render(density.reshape(r, s), rgb.reshape(r, s, 3), t)["rgb"]
+
+    def render_loss(self, origins: mx.array, directions: mx.array, target: mx.array, key: mx.array) -> mx.array:
+        """Photometric MSE — the Trainer's per-batch objective for a NeRF."""
+        return mse_loss(self.render_rays(origins, directions, key=key), target)
