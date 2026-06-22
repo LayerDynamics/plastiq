@@ -145,12 +145,19 @@ GLB→MeshDoc patterns the **capture service** (`services/capture/`, M7/M8) esta
       `{ glb_base64, … }` (train field → export mesh). Health + status + result. API test gated on
       fastapi+mlx (mirrors capture `test_api.py`).
 
-## N11 — browser client + wiring (REACHABLE from the app — not a tested island) ⭐
-- [ ] **N11.1 — TDD nerf client** (`apps/plastiq/src/ai/nerf.ts`, mirror `reconstruct.ts`): submit→poll a
-      capture/nerf job → the produced GLB → `MeshDoc` (`stepless` mesh doc). Vitest with a scripted fetch.
-- [ ] **N11.2 — Wire into the app.** The nerf GLB → `MeshDoc` → the existing **"Convert to CAD"**
-      reconstruct path; a settings `nerfBaseURL` (like `reconstructBaseURL`). Vitest + typecheck. **This is
-      the integration step** — verify a non-test file imports `nerf.ts` (no orphan).
+## N11 — `@plastiq/nerf` workspace package + app wiring (REACHABLE — not a tested island) ⭐
+**The TS/browser side is its OWN workspace package `packages/nerf` (`@plastiq/nerf`), a sibling of
+`@plastiq/cad` / `@plastiq/sim` — not an app file.** (`packages/nerf` already exists in the workspace,
+empty; the workspace globs `packages/*`.)
+- [ ] **N11.1 — Package scaffold.** `packages/nerf/{package.json (@plastiq/nerf),tsconfig.json,src/index.ts}`
+      mirroring `packages/sim`. Wired into the pnpm workspace + root tsconfig refs as needed.
+- [ ] **N11.2 — TDD nerf client** (`packages/nerf/src/client.ts`, mirror `apps/plastiq/src/ai/reconstruct.ts`):
+      submit→poll a `/train` job → the produced GLB → a `MeshDoc`-shaped result. Vitest with a scripted fetch.
+- [ ] **N11.3 — Wire into the app.** `apps/plastiq` imports `@plastiq/nerf`; the nerf GLB → `MeshDoc` → the
+      existing **"Convert to CAD"** reconstruct path; a settings `nerfBaseURL`. Vitest + typecheck. **The
+      integration step** — verify a non-test app file imports `@plastiq/nerf` (no orphan).
+> Note: the other empty `packages/*` dirs (`data`, `embed`, `recon`, `rl`, `segment`) are the user's
+> future scaffolding — OUT OF SCOPE for this plan unless requested.
 
 ## N12 — Docs reconciliation
 - [ ] **N12.1** Finalize `SPEC-11`; `services/nerf/README.md` (architecture, env, the COLMAP/transforms.json
