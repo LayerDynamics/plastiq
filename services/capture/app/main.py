@@ -81,9 +81,11 @@ async def submit_capture(body: CaptureBody) -> JobView:
 
 class CompleteBody(BaseModel):
     """A PARTIAL point cloud (a scan with holes) to complete into a full mesh (M8)."""
-
-    points: list[list[float]]
-    grid_res: int = 48
+    pts = np.asarray(body.points, dtype=np.float32)
+    if pts.ndim != 2 or pts.shape[1] != 3:
+        raise HTTPException(status_code=400, detail="points must be Nx3")
+    if not np.isfinite(pts).all():
+        raise HTTPException(status_code=400, detail="points must contain only finite values")
 
 
 @functools.lru_cache(maxsize=1)
