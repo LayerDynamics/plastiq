@@ -80,3 +80,59 @@ def test_train_rejects_image_frame_mismatch():
             assert "parallel" in r.json()["detail"]
 
     asyncio.run(run())
+
+
+def test_train_rejects_oversized_grid_res():
+    # grid_res flows into a res^3 grid alloc — an unbounded value is a memory-exhaustion DoS.
+    async def run():
+        imgs, _poses, _intr, transforms = make_synthetic_dataset(n_views=2, h=8, w=8)
+        images = [_b64_png(imgs[i]) for i in range(2)]
+        async with _client() as c:
+            r = await c.post(
+                "/train",
+                json={"transforms_json": json.dumps(transforms), "images": images, "grid_res": 9999},
+            )
+            assert r.status_code == 422  # pydantic Field le=MAX_GRID_RES
+
+    asyncio.run(run())
+
+
+def test_train_rejects_malformed_transforms_json():
+    async def run():
+        async with _client() as c:
+            r = await c.post("/train", json={"transforms_json": "{not valid", "images": []})
+            assert r.status_code == 400
+            assert "valid JSON" in r.json()["detail"]
+
+    asyncio.run(run())
+
+
+def test_train_rejects_too_many_images():
+    # The image-count cap fires at the schema layer, before any decode work.
+    async def run():
+        async with _client() as c:
+            r = await c.post(
+                "/train",
+                json={"transforms_json": json.dumps({"frames": []}), "images": ["x"] * 301},
+            )
+            assert r.status_code == 422  # pydantic max_length=MAX_IMAGES
+
+    asyncio.run(run())
+
+
+def test_delete_removes_a_job():
+    async def run():
+        imgs, _poses, _intr, transforms = make_synthetic_dataset(n_views=6, h=16, w=16)
+        images = [_b64_png(imgs[i]) for i in range(len(imgs))]
+        async with _client() as c:
+            r = await c.post(
+                "/train",
+                json={"transforms_json": json.dumps(transforms), "images": images, "iters": 40, "grid_res": 20},
+            )
+            job_id = r.json()["id"]
+            d = await c.delete(f"/jobs/{job_id}")
+            assert d.status_code == 204
+            # The record is gone (the in-flight worker thread runs to completion but its result is discarded).
+            assert (await c.get(f"/jobs/{job_id}/status")).status_code == 404
+
+    asyncio.run(run())

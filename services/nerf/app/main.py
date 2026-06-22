@@ -21,13 +21,20 @@ import json
 import os
 
 import numpy as np
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException, Response
 from fastapi.middleware.cors import CORSMiddleware
 from PIL import Image
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from .engine.jobs import JobState, JobStore
 from .engine.pipeline import train_and_export
+
+# Input caps — a single unauthenticated /train must not be able to exhaust memory/compute.
+MAX_IMAGES = 300  # posed views per job (matches the browser UI cap)
+MAX_IMAGE_DIM = 4096  # reject any view larger than this on a side
+MAX_GRID_RES = 256  # the marching-cubes grid is res^3 — bounds the dense grid allocation
+MAX_ITERS = 5000
+Image.MAX_IMAGE_PIXELS = 50_000_000  # PIL raises DecompressionBombError above this (bomb guard)
 
 app = FastAPI(title="plastiq-nerf", version="0.1.0")
 
@@ -36,6 +43,17 @@ _origins = ["*"] if _origins_env.strip() == "*" else [o.strip() for o in _origin
 app.add_middleware(CORSMiddleware, allow_origins=_origins, allow_methods=["*"], allow_headers=["*"])
 
 store = JobStore()
+
+# Optional bearer auth: if NERF_API_KEY is set, /train and DELETE require it; unset ⇒ open (dev default,
+# matching the self-hosted capture/reconstruct siblings). NERF_CORS_ORIGINS keeps the wildcard dev
+# default by the same parity; set both in any non-localhost deployment.
+_API_KEY = os.environ.get("NERF_API_KEY")
+_MAX_CONCURRENT = int(os.environ.get("NERF_MAX_CONCURRENT_JOBS", "2"))
+
+
+def require_auth(authorization: str | None = Header(default=None)) -> None:
+    if _API_KEY and authorization != f"Bearer {_API_KEY}":
+        raise HTTPException(status_code=401, detail="missing or invalid API key")
 
 
 class TrainBody(BaseModel):
@@ -46,10 +64,10 @@ class TrainBody(BaseModel):
     — clean watertight mesh for reconstruct) or `nerf` (density field)."""
 
     transforms_json: str | dict
-    images: list[str]
-    iters: int = 500
+    images: list[str] = Field(..., max_length=MAX_IMAGES)
+    iters: int = Field(500, ge=1, le=MAX_ITERS)
     method: str = "neus"
-    grid_res: int = 64
+    grid_res: int = Field(64, ge=16, le=MAX_GRID_RES)
 
 
 class JobView(BaseModel):
@@ -59,13 +77,16 @@ class JobView(BaseModel):
 
 
 def _decode_images(images_b64: list[str]) -> np.ndarray:
-    """base64 PNG/JPEG list → `(N,H,W,3)` float array in [0,1]. Raises on a malformed/mismatched set."""
+    """base64 PNG/JPEG list → `(N,H,W,3)` float array in [0,1]. Caps decoded dimensions (with the
+    module-level `MAX_IMAGE_PIXELS` decompression-bomb guard) and rejects a malformed/mismatched set."""
     arrs = []
     for i, b in enumerate(images_b64):
         try:
             img = Image.open(io.BytesIO(base64.b64decode(b))).convert("RGB")
-        except Exception as e:  # noqa: BLE001
-            raise HTTPException(status_code=400, detail=f"image {i} is not a decodable PNG/JPEG: {e}") from e
+        except Exception as e:  # noqa: BLE001 — includes PIL DecompressionBombError
+            raise HTTPException(status_code=400, detail=f"image {i} is not a decodable/safe PNG/JPEG: {e}") from e
+        if max(img.size) > MAX_IMAGE_DIM:
+            raise HTTPException(status_code=400, detail=f"image {i} exceeds {MAX_IMAGE_DIM}px on a side")
         arrs.append(np.asarray(img, dtype=np.float32) / 255.0)
     if arrs and any(a.shape != arrs[0].shape for a in arrs):
         raise HTTPException(status_code=400, detail="all images must share the same height/width")
@@ -78,18 +99,26 @@ def health() -> dict:
 
 
 @app.post("/train", response_model=JobView)
-async def submit_train(body: TrainBody) -> JobView:
-    transforms = json.loads(body.transforms_json) if isinstance(body.transforms_json, str) else body.transforms_json
+async def submit_train(body: TrainBody, _: None = Depends(require_auth)) -> JobView:
+    if isinstance(body.transforms_json, str):
+        try:
+            transforms = json.loads(body.transforms_json)
+        except (json.JSONDecodeError, ValueError) as e:
+            raise HTTPException(status_code=400, detail="transforms_json is not valid JSON") from e
+    else:
+        transforms = body.transforms_json
     if not isinstance(transforms, dict) or "frames" not in transforms:
         raise HTTPException(status_code=400, detail="transforms_json must be a transforms.json object with frames")
+    if body.method not in ("neus", "nerf"):
+        raise HTTPException(status_code=400, detail="method must be 'neus' or 'nerf'")
+    if store.running_count() >= _MAX_CONCURRENT:
+        raise HTTPException(status_code=429, detail="too many training jobs in flight; retry shortly")
     images = _decode_images(body.images)
     if len(images) != len(transforms["frames"]):
         raise HTTPException(
             status_code=400,
             detail=f"{len(images)} images but {len(transforms['frames'])} frames — they must be parallel",
         )
-    if body.method not in ("neus", "nerf"):
-        raise HTTPException(status_code=400, detail="method must be 'neus' or 'nerf'")
 
     async def work() -> dict:
         # MLX training + marching cubes is CPU/GPU-bound → run off the event loop.
@@ -119,3 +148,12 @@ def job_result(job_id: str) -> dict:
     if job.state != JobState.completed or job.result is None:
         raise HTTPException(status_code=409, detail=f"job not complete (state: {job.state.value})")
     return job.result
+
+
+@app.delete("/jobs/{job_id}", status_code=204)
+def cancel_job(job_id: str, _: None = Depends(require_auth)) -> Response:
+    """Drop a job record (client cancel/cleanup). An in-flight worker thread cannot be force-killed, so
+    its eventual result is simply discarded; status/result for this id return 404 afterwards."""
+    if store.remove(job_id) is None:
+        raise HTTPException(status_code=404, detail="no such job")
+    return Response(status_code=204)
