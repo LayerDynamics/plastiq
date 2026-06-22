@@ -67,8 +67,13 @@ updating the client + this spec together.
 
 ## 6. Status
 
-N0–N7 shipped (scaffold + ADR + this spec + MLX field/encoder/sampler/renderer/model + real
-train-on-synthetic + hash-grid). N8 (NeuS/VolSDF) in progress. The `@plastiq/nerf` workspace package
-(N11 client + types, this contract) is built and green (6 tests) **ahead of** its server (N10) and app
-wiring (N11.3) — until the app imports it, it is a **tested island** in the integration ledger. See the
-plan for the N1–N12 breakdown and the cross-cutting completion gate. Updated as milestones land.
+N0–N11 shipped. The full MLX core (encoder/field/sampler/renderer/VanillaNeRF + VolSDF surface, real
+M4-Max train-on-synthetic, hash-grid), the exporters (marching-cubes → GLB), the FastAPI submit→poll
+`/train` service (§5 contract; real submit→poll→GLB API test), and the TS side end to end: the
+`@plastiq/nerf` package (`trainNerf` client) **wired into the app** — `apps/plastiq/src/ai/nerf.ts`
+imports it, `NerfCaptureSection` (GenerationPanel) drives it, the produced `MeshDoc` (`mode:
+"photos3d"`) flows into the existing "Convert to CAD" reconstruct path. **Reachability is structural**
+(import chain `GenerationPanel → nerf.ts → @plastiq/nerf`, matching the reconstruct precedent — the
+unit test mocks `trainNerf`, the `.tsx` is e2e-only) — **no longer a tested island.** Remaining: N12
+docs reconciliation (incl. creating the documented `plastiq-nerf` conda env — the API test currently
+runs via fastapi pip-installed into `cadling`). See the plan for the N1–N12 breakdown.

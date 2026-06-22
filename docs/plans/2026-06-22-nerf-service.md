@@ -160,17 +160,21 @@ GLB→MeshDoc patterns the **capture service** (`services/capture/`, M7/M8) esta
   unselected branch (0·inf → NaN gradient) → training diverged at sharp β. Clamped exp args to ≤0
   (selected branch unchanged) + default β 0.1→0.2; regression test `test_volsdf_density_finite_for_large_sdf`.
 
-## N11 — `@plastiq/nerf` workspace package + app wiring (REACHABLE — not a tested island) ⭐
+## N11 — `@plastiq/nerf` workspace package + app wiring (REACHABLE — not a tested island) ✅
 **The TS/browser side is its OWN workspace package `packages/nerf` (`@plastiq/nerf`), a sibling of
-`@plastiq/cad` / `@plastiq/sim` — not an app file.** (`packages/nerf` already exists in the workspace,
-empty; the workspace globs `packages/*`.)
-- [ ] **N11.1 — Package scaffold.** `packages/nerf/{package.json (@plastiq/nerf),tsconfig.json,src/index.ts}`
-      mirroring `packages/sim`. Wired into the pnpm workspace + root tsconfig refs as needed.
-- [ ] **N11.2 — TDD nerf client** (`packages/nerf/src/client.ts`, mirror `apps/plastiq/src/ai/reconstruct.ts`):
-      submit→poll a `/train` job → the produced GLB → a `MeshDoc`-shaped result. Vitest with a scripted fetch.
-- [ ] **N11.3 — Wire into the app.** `apps/plastiq` imports `@plastiq/nerf`; the nerf GLB → `MeshDoc` → the
-      existing **"Convert to CAD"** reconstruct path; a settings `nerfBaseURL`. Vitest + typecheck. **The
-      integration step** — verify a non-test app file imports `@plastiq/nerf` (no orphan).
+`@plastiq/cad` / `@plastiq/sim` — not an app file.**
+- [x] **N11.1 — Package scaffold.** `packages/nerf/{package.json (@plastiq/nerf),tsconfig.json,src/index.ts}`
+      mirroring `packages/sim`; in the pnpm `packages/*` workspace + the root vitest coverage barrel-exclude.
+- [x] **N11.2 — nerf client** (`packages/nerf/src/client.ts`): `trainNerf` submit→poll `/train` →
+      `/jobs/{id}/status` → `/jobs/{id}/result`, mapping the wire result to `{ glb, report }`. Verified
+      against the **services/capture** contract (not reconstruct). 6 vitest (scripted fetch) + typecheck.
+- [x] **N11.3 — Wired into the app.** `apps/plastiq/src/ai/nerf.ts` imports `@plastiq/nerf`
+      (`captureFromPhotos` → `MeshDoc`); `MeshSource.mode` gains `"photos3d"`; a `nerfBaseURL` setting +
+      SettingsPanel field; a `NerfCaptureSection` (GenerationPanel) takes transforms.json + images →
+      `createMeshProject` (which opens the doc) → the existing **MeshConvertSection** "Convert to CAD"
+      path. Reachability is **structural** (import chain `GenerationPanel → nerf.ts → @plastiq/nerf`,
+      matching the reconstruct precedent). `nerf.unit.test.ts` (4) + SettingsPanel/GenerationPanel tests
+      green; app `tsc` clean. **No orphan.**
 > Note: the other empty `packages/*` dirs (`data`, `embed`, `recon`, `rl`, `segment`) are the user's
 > future scaffolding — OUT OF SCOPE for this plan unless requested.
 

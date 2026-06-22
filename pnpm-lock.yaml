@@ -93,6 +93,9 @@ importers:
       '@plastiq/cad':
         specifier: workspace:*
         version: link:../../packages/cad
+      '@plastiq/nerf':
+        specifier: workspace:*
+        version: link:../../packages/nerf
       '@plastiq/sim':
         specifier: workspace:*
         version: link:../../packages/sim

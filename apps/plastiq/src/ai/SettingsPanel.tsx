@@ -52,6 +52,7 @@ export function SettingsPanel(props: { onClose?: () => void }): React.JSX.Elemen
   const [apiKey, setApiKey] = useState(settings?.apiKeys[settings.providerKey] ?? "");
   const [falKey, setFalKey] = useState(settings?.apiKeys["fal"] ?? "");
   const [reconstructBaseURL, setReconstructBaseURL] = useState(settings?.reconstructBaseURL ?? "");
+  const [nerfBaseURL, setNerfBaseURL] = useState(settings?.nerfBaseURL ?? "");
   const [meshGenBaseURL, setMeshGenBaseURL] = useState(settings?.meshGenBaseURL ?? "");
   const [saved, setSaved] = useState(false);
 
@@ -84,6 +85,7 @@ export function SettingsPanel(props: { onClose?: () => void }): React.JSX.Elemen
       apiKeys,
       ...(baseURL.trim() ? { baseURL: baseURL.trim() } : {}),
       ...(reconstructBaseURL.trim() ? { reconstructBaseURL: reconstructBaseURL.trim() } : {}),
+      ...(nerfBaseURL.trim() ? { nerfBaseURL: nerfBaseURL.trim() } : {}),
       ...(meshGenBaseURL.trim() ? { meshGenBaseURL: meshGenBaseURL.trim() } : {}),
     };
     void save(next).then(() => {
@@ -186,6 +188,17 @@ export function SettingsPanel(props: { onClose?: () => void }): React.JSX.Elemen
           setSaved(false);
         }}
         placeholder="http://localhost:8000"
+      />
+
+      <Field
+        testid="settings-nerf-url"
+        label="NeRF / photo-capture service URL"
+        value={nerfBaseURL}
+        onChange={(v) => {
+          setNerfBaseURL(v);
+          setSaved(false);
+        }}
+        placeholder="http://localhost:8002"
       />
 
       <Field

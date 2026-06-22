@@ -23,6 +23,9 @@ export interface AiSettings {
   /** Base URL of the self-hosted mesh→B-rep reconstruction service (SPEC-6 R6.6);
    * absent ⇒ the client default (http://localhost:8000). */
   reconstructBaseURL?: string;
+  /** Base URL of the self-hosted NeRF / photo-capture service (SPEC-11 N11) — posed photos →
+   * surface mesh; absent ⇒ the @plastiq/nerf client default (http://localhost:8002). */
+  nerfBaseURL?: string;
   /** Override the fal mesh-gen queue base URL — the hosted-proxy seam (decision 21).
    * Absent ⇒ fal's queue default. A *direct* browser→fal call needs fal CORS; the
    * proxy (empty fal key + this baseURL) is the production path. */

@@ -40,9 +40,10 @@ export interface CadDocument {
   readonly assembly?: AssemblyModel;
 }
 
-/** How a mesh document was generated (the creative path; SPEC-6 R4). */
+/** How a mesh document was generated. The first three are the creative gen path (SPEC-6 R4);
+ * `photos3d` is the NeRF/surface-capture path (SPEC-11 N11) — posed photos → a trained surface. */
 export interface MeshSource {
-  mode: "text2img3d" | "img3d" | "text3d";
+  mode: "text2img3d" | "img3d" | "text3d" | "photos3d";
   providerId: string;
   prompt?: string;
   imageId?: string;
