@@ -45,3 +45,19 @@ def test_nerf_training_improves_held_out_psnr():
 
     after = _psnr(model.render_rays(ho_o, ho_d, key=make_key(99)), ho_t)
     assert after > before + 2.0, f"PSNR did not improve enough: {before:.2f} → {after:.2f} dB"
+
+
+def test_importance_sampling_is_wired_into_the_render():
+    # importance_samples>0 must engage the hierarchical (coarse→PDF→merge) two-pass — not be ignored.
+    imgs, poses, intr, _ = make_synthetic_dataset(n_views=3, h=12, w=12)
+    o, d = generate_rays(poses[0], intr["fx"], intr["fy"], intr["cx"], intr["cy"], intr["height"], intr["width"])
+    field = FieldConfig(n_frequencies=6, hidden=32, layers=3)
+    coarse = VanillaNeRF(NerfConfig(field=field, sampler=SamplerConfig(n_samples=16, near=2.0, far=4.5)), seed=0)
+    fine = VanillaNeRF(
+        NerfConfig(field=field, sampler=SamplerConfig(n_samples=16, near=2.0, far=4.5, importance_samples=16)),
+        seed=0,
+    )
+    rc = np.asarray(coarse.render_rays(o, d, key=make_key(1)))
+    rf = np.asarray(fine.render_rays(o, d, key=make_key(1)))
+    assert rf.shape == rc.shape and np.all(np.isfinite(rf))  # the two-pass renders cleanly
+    assert not np.allclose(rf, rc)  # and actually changes the result (it isn't a no-op)

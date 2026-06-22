@@ -19,10 +19,11 @@ import mlx.core as mx
 import mlx.nn as nn
 
 from ..fields.sdf_field import SDFField
-from ..generators.ray_samplers import UniformSampler
+from ..generators.ray_samplers import PDFSampler, UniformSampler
 from ..model_components.losses import eikonal_loss, mse_loss
 from ..model_components.renderers import volumetric_render
 from ..utils.config import NerfConfig
+from ..utils.seeding import make_key
 
 
 class BaseSurfaceModel(nn.Module):
@@ -33,22 +34,40 @@ class BaseSurfaceModel(nn.Module):
             config.sampler.n_samples, config.sampler.near, config.sampler.far, jitter=True
         )
         self.lam_eikonal = lam_eikonal
+        # Hierarchical (importance) sampling — see VanillaNeRF. 0 ⇒ coarse-only (default).
+        self.importance_samples = config.sampler.importance_samples
+        self.pdf_sampler = PDFSampler(self.importance_samples) if self.importance_samples > 0 else None
 
     def sdf_to_density(self, sdf: mx.array) -> mx.array:
         """Map a signed distance `(...)` to a non-negative volume density. Subclass responsibility
         (VolSDF Laplace, NeuS logistic, …)."""
         raise NotImplementedError
 
-    def _render(self, origins: mx.array, directions: mx.array, key: mx.array | None):
-        """Render a ray batch; returns (rendered RGB `(R,3)`, flat sample positions `(R·S,3)`). The
-        flat positions are handed back so `render_loss` can take the eikonal gradient on them."""
-        positions, t = self.sampler(origins, directions, key=key)  # (R,S,3), (R,S)
+    def _density_rgb(self, positions: mx.array, directions: mx.array):
+        """Sampled points `(R,S,3)` + view dirs → density `(R,S)`, rgb `(R,S,3)`, flat positions `(R·S,3)`."""
         r, s = positions.shape[0], positions.shape[1]
         flat = positions.reshape(-1, 3)
         dirs = mx.broadcast_to(directions[:, None, :], (r, s, 3)).reshape(-1, 3)
         sdf, rgb = self.field(flat, dirs)  # (R·S,1), (R·S,3)
-        density = self.sdf_to_density(sdf).reshape(r, s)
-        rendered = volumetric_render(density, rgb.reshape(r, s, 3), t)["rgb"]
+        return self.sdf_to_density(sdf).reshape(r, s), rgb.reshape(r, s, 3), flat
+
+    def _render(self, origins: mx.array, directions: mx.array, key: mx.array | None):
+        """Render a ray batch; returns (rendered RGB `(R,3)`, flat sample positions `(R·S,3)`). The
+        flat positions (the FINAL sample set) are handed back so `render_loss` takes the eikonal
+        gradient on them. With `importance_samples > 0`, a coarse pass seeds a fine PDF pass."""
+        if self.pdf_sampler is not None and key is not None:
+            key, key_pdf = mx.random.split(key, 2)
+        else:
+            key_pdf = key
+        positions, t = self.sampler(origins, directions, key=key)  # (R,S,3), (R,S)
+        if self.pdf_sampler is not None:
+            density_c, rgb_c, _ = self._density_rgb(positions, directions)
+            weights = volumetric_render(density_c, rgb_c, t)["weights"]
+            t_fine = self.pdf_sampler(t, mx.stop_gradient(weights), key=key_pdf if key_pdf is not None else make_key(0))
+            t = mx.sort(mx.concatenate([t, t_fine], axis=-1), axis=-1)
+            positions = origins[:, None, :] + t[:, :, None] * directions[:, None, :]
+        density, rgb, flat = self._density_rgb(positions, directions)
+        rendered = volumetric_render(density, rgb, t)["rgb"]
         return rendered, flat
 
     def render_rays(self, origins: mx.array, directions: mx.array, key: mx.array | None = None) -> mx.array:

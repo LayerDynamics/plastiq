@@ -31,6 +31,26 @@ def test_parse_transforms_recovers_intrinsics_and_poses():
     assert np.allclose(out.poses, poses, atol=1e-5)
 
 
+def test_parse_transforms_camera_angle_branch_and_guards():
+    import math
+
+    # the FOV (camera_angle_x) path: fx = 0.5 W / tan(0.5 FOVx). Without camera_angle_y, fy = fx.
+    fov = 0.6911
+    out = parse_transforms({"w": 800, "h": 600, "camera_angle_x": fov, "frames": []})
+    assert out.fx == pytest.approx(0.5 * 800 / math.tan(0.5 * fov))
+    assert out.fy == pytest.approx(out.fx)  # no camera_angle_y → square-pixel fy = fx
+
+    # the explicit camera_angle_y branch derives fy from the image HEIGHT.
+    fovy = 0.5
+    out2 = parse_transforms({"w": 800, "h": 600, "camera_angle_x": fov, "camera_angle_y": fovy, "frames": []})
+    assert out2.fy == pytest.approx(0.5 * 600 / math.tan(0.5 * fovy))
+
+    with pytest.raises(ValueError, match="positive image width/height"):
+        parse_transforms({"camera_angle_x": fov, "frames": []})  # no w/h → degenerate
+    with pytest.raises(ValueError, match="fl_x' or 'camera_angle_x"):
+        parse_transforms({"w": 800, "h": 600, "frames": []})  # no intrinsics at all
+
+
 def test_synthetic_scene_renders_nontrivial_and_deterministic():
     imgs, poses, _, _ = make_synthetic_dataset(n_views=6, h=24, w=24)
     assert imgs.shape == (6, 24, 24, 3)

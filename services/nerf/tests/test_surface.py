@@ -120,3 +120,15 @@ def test_volsdf_training_improves_psnr_and_extracts_mesh():
     assert verts.shape[0] > 0 and faces.shape[0] > 0, "trained field produced an empty mesh"
     mean_r = float(np.linalg.norm(verts, axis=1).mean())
     assert 0.6 < mean_r < 1.5, f"extracted surface is not unit-scaled: mean radius {mean_r:.3f}"
+
+
+def test_eikonal_term_contributes_to_render_loss():
+    # Regression: render_loss must actually include the eikonal penalty. With an identical field + key,
+    # the photometric term is bit-identical, so a larger lam_eikonal can only raise the loss via the
+    # (positive) eikonal term — if it were dropped/detached, the two losses would be equal.
+    imgs, poses, intr, _ = make_synthetic_dataset(n_views=3, h=12, w=12)
+    o, d, t = _rays_for_views([0], imgs, poses, intr)
+    cfg = NerfConfig(field=FieldConfig(hidden=32, layers=3), sampler=SamplerConfig(n_samples=24, near=2.0, far=4.5))
+    l0 = float(VolSDFModel(cfg, laplace_beta=0.2, lam_eikonal=0.0, seed=0).render_loss(o, d, t, make_key(0)))
+    l1 = float(VolSDFModel(cfg, laplace_beta=0.2, lam_eikonal=10.0, seed=0).render_loss(o, d, t, make_key(0)))
+    assert l1 > l0 + 1e-4, f"eikonal term did not affect the loss: lam0={l0:.5f} lam10={l1:.5f}"
