@@ -24,6 +24,9 @@ export interface ReconstructReport {
   surface_deviation?: number;
   /** Advisory tolerance for `surface_deviation`. Absent on older servers. */
   fidelity_tol?: number;
+  /** Tangent-connected regions recognised in the input mesh (box→6, cylinder→3, blob→many) — a
+   * structural fingerprint (M2c; docs/adr/0002). Absent on older servers. */
+  tangent_regions?: number;
   is_solid: boolean;
   is_valid: boolean;
   method: string;

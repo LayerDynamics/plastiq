@@ -30,6 +30,7 @@ from .fidelity import FIDELITY_TOL, surface_fidelity
 from .fitted import fitted_shape
 from .meshio import load_mesh
 from .occ_step import shape_to_step
+from .recognition import recognize
 from .revolution import reconstruct_revolution
 from .topology import reconstruct_cut_cylinder
 
@@ -51,6 +52,9 @@ class ReconstructionReport:
     # SURFACE fidelity score that complements the volume gate (docs/adr/0001). Lower = closer.
     surface_deviation: float = 0.0
     fidelity_tol: float = FIDELITY_TOL
+    # M2c: number of tangent-connected regions recognised in the INPUT mesh (a box → 6, a cylinder
+    # → 3, an organic blob → many) — a structural fingerprint for honest UX (docs/adr/0002).
+    tangent_regions: int = 0
 
 
 @dataclass
@@ -89,6 +93,14 @@ def reconstruct(
         """Scaled Chamfer Distance of `shape` vs the cleaned input mesh (M1; docs/adr/0001)."""
         return surface_fidelity(shape, cleaned_mesh)
 
+    # M2c: recognise the input mesh's tangent structure once; every result reports it.
+    tangent_regions = recognize(vertices, faces)["tangent_regions"]
+
+    def finish(shape, report: ReconstructionReport) -> ReconstructionResult:
+        """Stamp the mesh-recognition count and emit the STEP result (single exit per branch)."""
+        report.tangent_regions = tangent_regions
+        return ReconstructionResult(step=shape_to_step(shape), report=report)
+
     if method == "auto":
         # 1) whole mesh is one analytic primitive (cleanest result for cylinder/sphere/cone)
         prim = try_single_primitive(vertices, faces)
@@ -113,7 +125,7 @@ def reconstruct(
                 freeform_faces=freeform,
                 surface_deviation=prim_dev,
             )
-            return ReconstructionResult(step=shape_to_step(prim.shape), report=report)
+            return finish(prim.shape, report)
         # 2) a multi-segment solid of revolution (stepped shaft, chamfered/capped cylinder)
         rev = reconstruct_revolution(vertices, faces)
         rev_dev = deviation(rev.shape) if rev is not None else None
@@ -132,7 +144,7 @@ def reconstruct(
                 freeform_faces=freeform,
                 surface_deviation=rev_dev,
             )
-            return ReconstructionResult(step=shape_to_step(rev.shape), report=report)
+            return finish(rev.shape, report)
         # 3) a box with cylindrical through-holes (CSG: box − cylinders)
         csg = reconstruct_csg(vertices, faces)
         csg_dev = deviation(csg.shape) if csg is not None else None
@@ -151,7 +163,7 @@ def reconstruct(
                 freeform_faces=freeform,
                 surface_deviation=csg_dev,
             )
-            return ReconstructionResult(step=shape_to_step(csg.shape), report=report)
+            return finish(csg.shape, report)
         # 4) a cylinder trimmed by a non-perpendicular / axis-parallel plane (oblique cap, etc.)
         #    — FR-6 surface-intersection edge recovery (R6.9). Runs LAST among the analytic
         #    routes (after CSG, which is more mature) so it only claims meshes nothing else fit;
@@ -174,7 +186,7 @@ def reconstruct(
                 freeform_faces=freeform,
                 surface_deviation=cutcyl_dev,
             )
-            return ReconstructionResult(step=shape_to_step(cutcyl.shape), report=report)
+            return finish(cutcyl.shape, report)
         method = "fitted"  # not a primitive / revolution / CSG / cut-cylinder → fall through
 
     if method == "faceted":
@@ -209,4 +221,4 @@ def reconstruct(
     else:
         raise ValueError(f"unknown reconstruction method: {method!r}")
 
-    return ReconstructionResult(step=shape_to_step(shape), report=report)
+    return finish(shape, report)

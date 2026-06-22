@@ -56,6 +56,11 @@ export interface TaggedEdge {
   readonly positions: number[];
   /** The two adjacent faces' normals — the persistent EdgeRef signature. */
   readonly faceNormals: readonly [V3, V3];
+  /** The two adjacent face-group ids (transient, this-mesh only), in the SAME order as
+   * `faceNormals` — so a traversal can reach each adjacent face's centroid for the dihedral
+   * convexity test (M2 / select/topology.ts; docs/adr/0002). A seam edge bordering one face has
+   * both ids equal. */
+  readonly faceIds: readonly [number, number];
   /** The edge's mid-parameter point — the EdgeRef positional disambiguator
    * (separates parallel edges sharing `faceNormals`). SI metres. */
   readonly midpoint: V3;

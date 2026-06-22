@@ -109,8 +109,8 @@ and its "reconstruction out of scope" — both by explicit user decision.
 - **FR-8** Any region or join that fails fitting/topology falls back to faceted faces; the service
   always returns a valid B-rep STEP (D-5).
 - **FR-9** The `report` exposes `{ triangles_in, triangles_used, faces_built, planar_faces,
-  curved_faces, freeform_faces, faceted_faces, surface_deviation, fidelity_tol, is_solid, is_valid,
-  method, primitive? }` so the client/UX can show fidelity. *(r2: shipped — `curved_faces`/`faceted_faces`
+  curved_faces, freeform_faces, faceted_faces, surface_deviation, fidelity_tol, tangent_regions,
+  is_solid, is_valid, method, primitive? }` so the client/UX can show fidelity. *(r2: shipped — `curved_faces`/`faceted_faces`
   added; `method` ∈ `auto|fitted|faceted` with `primitive` ∈ `cylinder|sphere|cone|revolution|csg` when
   `auto` collapses the whole mesh. M1: `surface_deviation` (Scaled Chamfer Distance of the built B-rep
   vs the input mesh — a pose/scale-robust SURFACE fidelity score, ported Apache-2.0 from StepForge) +

@@ -28,9 +28,12 @@ current document, build a new part.
 
 DRESS-UPS (fillet, chamfer, shell, draft) target faces/edges, which come from the built
 geometry — you cannot guess them. Prefer a selector in the feature's data, e.g.
-{ "kind": "topFace" } or { "kind": "edgesParallelTo", "axis": [0,0,1] }. If a selector
-does not fit, call inspect_geometry to list the part's faces and edges, then reference
-the ones you want by index.
+{ "kind": "topFace" } or { "kind": "edgesParallelTo", "axis": [0,0,1] }. Topology-aware
+selectors are also available: { "kind": "convexEdges" } / { "kind": "concaveEdges" } (e.g.
+fillet every convex edge), { "kind": "filletChain" } (the rounded blend faces), and
+{ "kind": "tangentFaces", "seed": { "normal": [..], "centroid": [..] } } (all faces
+tangent-connected to a seed face). If a selector does not fit, call inspect_geometry to
+list the part's faces and edges, then reference the ones you want by index.
 
 TOOL: inspect_geometry — returns the current part's faces and edges (with normals and
 positions) as text, for choosing dress-up targets.

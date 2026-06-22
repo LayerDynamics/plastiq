@@ -63,13 +63,15 @@ Coordinates are passed through unscaled (SI metres), matching `@plastiq/cad`'s S
 | `GET`  | `/jobs/{id}/result` | `{ step, report }` when completed (409 while running, 500 if failed) |
 
 `report` = `{ triangles_in, triangles_used, faces_built, planar_faces, curved_faces, freeform_faces,
-faceted_faces, surface_deviation, fidelity_tol, is_solid, is_valid, method, primitive? }` —
+faceted_faces, surface_deviation, fidelity_tol, tangent_regions, is_solid, is_valid, method, primitive? }` —
 `triangles_in` = raw, `triangles_used` = after cleanup, `planar_faces` = facets collapsed into single
 trimmed faces (0 unless `method="fitted"`), `method` = the path taken
 (`cylinder`/`sphere`/`cone`/`revolution`/`csg`/`cut_cylinder`/`fitted`/`faceted`), `primitive` = the
 analytic kind when `auto` matched one (else absent), `surface_deviation` = the **Scaled Chamfer
 Distance** of the built B-rep vs the input mesh (a pose/scale-robust surface-fidelity score, lower =
-closer; advisory — complements the volume gate), `fidelity_tol` = its advisory threshold.
+closer; advisory — complements the volume gate), `fidelity_tol` = its advisory threshold,
+`tangent_regions` = tangent-connected regions recognised in the input mesh (box→6, cylinder→3; M2c, a
+structural fingerprint — see [`docs/adr/0002`](../../docs/adr/0002-brepnet-cleanroom-traversal.md)).
 
 > `app/fidelity.py` (the SCD metric) is ported (**Apache-2.0**) from
 > [StepForge](https://github.com/) `reward/{step_to_pointcloud,scd_reward}.py`; the pose-alignment
