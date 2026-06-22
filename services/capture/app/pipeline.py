@@ -13,6 +13,7 @@ from dataclasses import dataclass
 import numpy as np
 import trimesh
 
+from .completion_mlx import CompletionNet, complete
 from .sdf_mlx import extract_mesh, fit_sdf
 
 
@@ -44,5 +45,19 @@ def reconstruct_surface(
     net = fit_sdf(p - center, n, iters=iters, seed=seed)  # center the cloud at the origin for the init
     verts, faces = extract_mesh(net, bound=bound, res=grid_res)
     verts = verts + center  # back to world frame
+    mesh = trimesh.Trimesh(vertices=verts, faces=faces, process=False)
+    return CaptureResult(mesh=mesh, vertices=len(verts), faces=len(faces))
+
+
+def complete_partial(
+    net: CompletionNet, partial_points: np.ndarray, *, grid_res: int = 48
+) -> CaptureResult:
+    """Complete a PARTIAL point cloud (a scan with holes) into a full watertight mesh, using a
+    trained MLX completion network (M8). The cloud is centered at the origin for the network's frame,
+    then the mesh is returned in world coordinates."""
+    p = np.asarray(partial_points, dtype=np.float32)
+    center = p.mean(axis=0)
+    verts, faces = complete(net, p - center, bound=1.2, res=grid_res)
+    verts = verts + center
     mesh = trimesh.Trimesh(vertices=verts, faces=faces, process=False)
     return CaptureResult(mesh=mesh, vertices=len(verts), faces=len(faces))

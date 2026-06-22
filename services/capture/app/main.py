@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import functools
 import os
 
 import numpy as np
@@ -21,8 +22,9 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
+from .completion_mlx import CompletionNet, fit_completion
 from .jobs import JobState, JobStore
-from .pipeline import reconstruct_surface
+from .pipeline import complete_partial, reconstruct_surface
 
 app = FastAPI(title="plastiq-capture", version="0.1.0")
 
@@ -67,6 +69,50 @@ async def submit_capture(body: CaptureBody) -> JobView:
         res = await asyncio.to_thread(
             reconstruct_surface, pts, nrm, iters=body.iters, grid_res=body.grid_res
         )
+        return {
+            "glb_base64": base64.b64encode(res.to_glb()).decode("ascii"),
+            "vertices": res.vertices,
+            "faces": res.faces,
+        }
+
+    job = await store.submit(work)
+    return JobView(id=job.id, state=job.state.value)
+
+
+class CompleteBody(BaseModel):
+    """A PARTIAL point cloud (a scan with holes) to complete into a full mesh (M8)."""
+
+    points: list[list[float]]
+    grid_res: int = 48
+
+
+@functools.lru_cache(maxsize=1)
+def _completion_model() -> CompletionNet:
+    """The trained completion network. Loads `CAPTURE_COMPLETION_CHECKPOINT` if set (train it on a
+    real dataset for general objects); otherwise trains the synthetic demo completer once and caches
+    it. `CAPTURE_COMPLETION_ITERS` tunes the demo training length."""
+    import mlx.core as mx
+
+    ckpt = os.environ.get("CAPTURE_COMPLETION_CHECKPOINT")
+    if ckpt:
+        net = CompletionNet()
+        net.load_weights(ckpt)
+        mx.eval(net.parameters())
+        return net
+    return fit_completion(iters=int(os.environ.get("CAPTURE_COMPLETION_ITERS", "500")), seed=0)
+
+
+@app.post("/complete", response_model=JobView)
+async def submit_complete(body: CompleteBody) -> JobView:
+    pts = np.asarray(body.points, dtype=np.float32)
+    if pts.ndim != 2 or pts.shape[1] != 3:
+        raise HTTPException(status_code=400, detail="points must be Nx3")
+    if len(pts) < 16:
+        raise HTTPException(status_code=400, detail="need at least 16 points")
+
+    async def work() -> dict:
+        net = await asyncio.to_thread(_completion_model)
+        res = await asyncio.to_thread(complete_partial, net, pts, grid_res=body.grid_res)
         return {
             "glb_base64": base64.b64encode(res.to_glb()).decode("ascii"),
             "vertices": res.vertices,

@@ -231,26 +231,23 @@ photos→points step (SfM/MVS) stays COLMAP's job (ADR 0007); no full multi-view
       correct sign, deterministic. 13 pytest (geometry/sdf/pipeline/jobs); API test gated on fastapi+mlx.
 - [x] **M7.4 — Docs.** `SPEC-10` §capture, `services/capture/README.md`, `Expanse.md` rec #4.
 
-## M8 — shape-completion "Complete Scan / Fill Gaps" · T2 GPU service · MIT · NET-NEW
+## M8 — MLX shape completion "Complete Scan / Fill Gaps" · T2 · MIT · ✅ SHIPPED
 
-**Honest prerequisite: ships NO weights → requires training on ShapeNet (multi-GPU + dataset
-license).** Lowest confidence × highest effort → built last among capability items.
+**Re-scoped on the M4 Max (MLX directive):** DLR-RM shape-completion is CUDA-only and ships no
+weights, so M8 is a **self-contained MLX conditional occupancy network**, trained on the M4 Max. It
+lives in the capture service (both are MLX; the separation that matters — from the *deterministic*
+reconstruct — holds), not a third `services/complete/`.
 
-- [ ] **M8.0 — ADR + dataset/GPU gate.** `docs/adr/0008-shape-completion-service.md`: MIT; record the
-      training requirement and **confirm GPU + ShapeNet access**. If unavailable, scope drops to
-      "service skeleton + bring-your-own-checkpoint" (documented, not faked).
-- [ ] **M8.1 — TDD: service contract (no GPU).** Failing service test (submit a partial mesh →
-      poll → completed-mesh URL; mocked model) → implement `services/complete/app/*` (separate service;
-      **never** inside deterministic reconstruct) → green.
-- [ ] **M8.2 — TDD: client "Complete Scan / Fill Gaps" action.** Failing vitest (a partial `MeshDoc`
-      submits to the completion service, receives a watertight mesh, which then offers "Convert to CAD")
-      → implement the client + UI → green.
-- [ ] **M8.3 — Model integration (gated).** Fork/depend on DLR-RM `shape-completion`; wire its
-      `inference` CLI behind M8.1's API. **Train** (ConvONet/IF-Net on ShapeNet) **or** load a
-      user-supplied checkpoint. With weights present: a partial-scan fixture → asserted watertight
-      completion. **No weights/GPU → this task blocks**; ship skeleton + BYO-checkpoint docs, task
-      explicitly pending.
-- [ ] **M8.4 — Docs.** `SPEC-10` completion half; class-dependence + non-determinism caveats (why it's
+- [x] **M8.0 — ADR.** `docs/adr/0008` (MIT; demo-on-synthetic + BYO-checkpoint for general objects).
+- [x] **M8.1 — Service contract.** `/complete` on the capture service (submit→poll); job contract
+      tested live (`test_jobs.py`); HTTP `/complete` test gated on fastapi+mlx.
+- [x] **M8.2 — Client path.** Output GLB → existing `MeshDoc` → "Convert to CAD" reconstruct (no new
+      JS; external-scan workflow — same as capture).
+- [x] **M8.3 — Model trained here (M4 Max).** `app/completion_mlx.py` (PointNet enc + occupancy dec,
+      logits-BCE). Real MLX training asserted to **fill a missing hemisphere** a partial scan never saw
+      (~2 s); deterministic; `load_weights` for a ShapeNet checkpoint. General objects need that
+      training — documented, not faked.
+- [x] **M8.4 — Docs.** `SPEC-10` §completion; class-dependence + non-determinism caveats (why it's
       a *separate* service from reconstruct); update `Expanse.md` rec #3 + README.
 
 ## M9 — `truck` alt-WASM-kernel evaluation spike · T1 research · license-gated · SPECULATIVE

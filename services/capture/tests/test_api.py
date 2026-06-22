@@ -67,3 +67,33 @@ def test_mismatched_point_cloud_is_400():
             assert r.status_code == 400
 
     asyncio.run(run())
+
+
+def test_complete_submit_poll_result_end_to_end(monkeypatch):
+    # keep the lazily-trained demo model fast for the test
+    monkeypatch.setenv("CAPTURE_COMPLETION_ITERS", "120")
+
+    async def run():
+        rng = np.random.default_rng(3)
+        pts = []
+        while len(pts) < 256:
+            x = rng.normal(size=3)
+            x /= np.linalg.norm(x)
+            if x[2] > 0.05:  # a partial (top-hemisphere) scan
+                pts.append((x * 0.8).tolist())
+        async with _client() as c:
+            r = await c.post("/complete", json={"points": pts, "grid_res": 32})
+            assert r.status_code == 200
+            job_id = r.json()["id"]
+            state = "queued"
+            for _ in range(600):
+                state = (await c.get(f"/jobs/{job_id}/status")).json()["state"]
+                if state in ("completed", "failed"):
+                    break
+                await asyncio.sleep(0.05)
+            assert state == "completed", f"job ended in {state}"
+            body = (await c.get(f"/jobs/{job_id}/result")).json()
+            assert body["faces"] > 0
+            assert len(base64.b64decode(body["glb_base64"])) > 0
+
+    asyncio.run(run())

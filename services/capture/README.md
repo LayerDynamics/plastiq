@@ -17,8 +17,15 @@ geometric init) → marching-cubes the zero level-set → GLB. Deterministic by 
 |---|---|---|
 | `GET`  | `/health` | `{ status, service }` |
 | `POST` | `/capture` | `{ points: [[x,y,z]…], normals: [[x,y,z]…], iters?, grid_res? }` → `{ id, state }` |
+| `POST` | `/complete` | `{ points: [[x,y,z]…], grid_res? }` → `{ id, state }` — **shape completion** (M8): a partial scan → full mesh |
 | `GET`  | `/jobs/{id}/status` | `{ id, state, error? }` |
 | `GET`  | `/jobs/{id}/result` | `{ glb_base64, vertices, faces }` when completed |
+
+Two capabilities, both MLX: **capture** (`/capture`, oriented point cloud → SDF mesh) and **shape
+completion** (`/complete`, a partial scan → full mesh via a conditional occupancy network —
+`app/completion_mlx.py`, M8 / [`docs/adr/0008`](../../docs/adr/0008-shape-completion-service.md)). The
+completion model is trained on a synthetic family by default; set `CAPTURE_COMPLETION_CHECKPOINT` to a
+checkpoint trained on a real dataset (ShapeNet-style) for general objects.
 
 ## Run locally (Apple Silicon)
 

@@ -33,8 +33,22 @@ Turns an **oriented point cloud** (points + per-pixel normals, from a depth scan
 cloud** step (SfM/MVS) is COLMAP's / a depth sensor's job, not built here (ADR 0007) — and a full
 multi-view *radiance* field is unnecessary for a points/depth → surface path.
 
-## §completion — shape completion ("Complete Scan / Fill Gaps") (M8 · pending)
+## §completion — shape completion ("Complete Scan / Fill Gaps") (M8 · shipped)
 
-See `docs/adr/0008-shape-completion-service.md` (to be written): an MLX occupancy/completion network
-that fills holes in a partial scan, trainable on the M4 Max (DLR-RM shape-completion is CUDA-only → own
-MLX implementation). Separate service from the deterministic reconstruct (it is ML, non-deterministic).
+**ADR:** [`docs/adr/0008-shape-completion-service.md`](../adr/0008-shape-completion-service.md) · **Service:** `services/capture/` (`/complete`)
+
+Completes a **partial** point cloud (a scan with holes) into a full watertight mesh.
+
+- **`app/completion_mlx.py`** — a conditional occupancy network (PointNet encoder + occupancy decoder),
+  trained with logits-BCE on (partial, query, full-occupancy) triples; `complete` marching-cubes the
+  predicted occupancy. **Real MLX training on the M4 Max** — the test asserts the completion fills the
+  missing hemisphere a partial top-only scan never saw (`tests/test_completion_mlx.py`, ~2 s).
+  Deterministic by seed; checkpoints via `CompletionNet.load_weights`.
+- **`/complete` endpoint** (submit→poll) on the capture service; a lazily-trained-or-loaded cached
+  model (`CAPTURE_COMPLETION_CHECKPOINT` for a real-dataset checkpoint, else the synthetic demo).
+- **Lives in the capture service, not reconstruct** — it is ML/non-deterministic and must stay out of
+  the deterministic mesh→B-rep path (NFR-2). Output GLB → existing `MeshDoc` → reconstruct.
+
+**Honest scope:** the demo completes the family it trained on (spheres). General objects need a
+ShapeNet-style partial/full training set + a loaded checkpoint (the upstream repo ships no weights
+either). Completion quality is class-dependent.
