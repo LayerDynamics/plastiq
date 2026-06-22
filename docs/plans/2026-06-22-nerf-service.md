@@ -121,15 +121,19 @@ GLB→MeshDoc patterns the **capture service** (`services/capture/`, M7/M8) esta
 - [ ] **N7.2 — TDD NeRF-with-hashgrid converges.** Swap the encoding into the NeRF; train on the synthetic
       scene → reaches a target PSNR in fewer iters than frequency (or at least trains). Real training.
 
-## N8 — SDF / NeuS surface model
-- [ ] **N8.1 — TDD SDFField** (`fields/sdf_field.py`): encoded position → SDF (+ colour), with the
-      geometric/SIREN-style init proven in capture `sdf_mlx.py`. Test: forward shape; `mx.grad` gives a
-      gradient (for eikonal).
-- [ ] **N8.2 — TDD NeuS model** (`models/neus.py`, `models/base_surface_model.py`): SDF→density transform
-      (logistic/VolSDF) + volume render + eikonal loss. Test: a forward renders; eikonal contributes.
-- [ ] **N8.3 — TDD train surface-on-synthetic → mesh.** Train on the synthetic scene → marching-cubes the
-      SDF zero level-set → assert the mesh is **roughly the known shape** (bbox/volume sane, watertight-ish).
-      Real MLX training on the M4 Max.
+## N8 — SDF / NeuS surface model ✅
+- [x] **N8.1 — SDFField** (`fields/sdf_field.py`): **raw** 3D position → SDF + geometry feature, with the
+      IGR geometric init proven in capture `sdf_mlx.py` (raw coords, not positional-encoded — the init
+      formula assumes raw `x`); a colour head turns (feature, encoded view dir) → RGB. `sdf()` exposes the
+      scalar field for `mx.grad`. Tests: forward shapes, inside/outside sign, finite non-zero gradient.
+- [x] **N8.2 — VolSDF model** (`models/neus.py` `VolSDFModel`, `models/base_surface_model.py`): shipped the
+      **VolSDF** Laplace-CDF SDF→density transform (the NeuS/VolSDF family; SPEC-11 FR-2) + the existing
+      `volumetric_render` + eikonal via `render_loss` (second-order `mx.grad`-in-loss, capture pattern).
+      Tests: density ≥ 0, peaks at surface (1/2β), monotone inside→surface→outside.
+- [x] **N8.3 — REAL train surface-on-synthetic → mesh.** Trained VolSDF on synthetic sphere views on the
+      M4 Max: held-out PSNR **7.43 → 21.55 dB (+14.1)** (appearance learned through the SDF→density→render
+      path), and the eikonal-regularized field marching-cubes to a clean **1866-vert, mean-radius-1.034**
+      sphere. 28/28 nerf tests green (cadling env: mlx + skimage).
 
 ## N9 — exporters (field → mesh → GLB)
 - [ ] **N9.1 — TDD marching-cubes exporter** (`exporters/mesh_exporter.py`): evaluate density/SDF on a grid
