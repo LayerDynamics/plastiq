@@ -32,8 +32,12 @@ class PinholeCamera:
         return mx.array([[self.fx, 0.0, self.cx], [0.0, self.fy, self.cy], [0.0, 0.0, 1.0]])
 
     def project(self, point) -> tuple[float, float]:
-        """Project a camera-frame 3D point to a pixel `(u, v)`."""
+        """Project a camera-frame 3D point (in FRONT of the camera, z > 0) to a pixel `(u, v)`.
+        Raises ValueError for z ≤ 0: z = 0 would divide by zero, and z < 0 (behind the camera) would
+        otherwise return a plausible-looking but meaningless pixel."""
         x, y, z = (float(point[0]), float(point[1]), float(point[2]))
+        if z <= 0.0:
+            raise ValueError(f"point is not in front of the camera (z={z:.6g}); cannot project")
         return (self.fx * x / z + self.cx, self.fy * y / z + self.cy)
 
     def unproject(self, u: float, v: float, depth: float) -> mx.array:

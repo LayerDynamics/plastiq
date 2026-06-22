@@ -58,3 +58,27 @@ def test_complete_partial_exports_a_glb():
     glb = res.to_glb()
     assert res.faces > 0
     assert len(glb) > 0
+
+
+def test_complete_partial_handles_non_unit_scale():
+    # Regression: the net is trained on unit-scale spheres over a fixed [-1.2,1.2]³ grid. complete_partial
+    # must normalize the input to unit scale (else a large scan falls outside the field → empty/garbage
+    # mesh) and rescale the result back. A 10× scan must yield a non-empty mesh at ~10× extent.
+    from app.pipeline import complete_partial
+
+    net = fit_completion(iters=300, seed=0)
+    res = complete_partial(net, _top_hemisphere(r=0.8) * 10.0, grid_res=40)
+    assert res.vertices > 0 and res.faces > 0
+    extent = float(np.abs(res.mesh.vertices).max())
+    assert extent > 3.0, f"scale was not honored (extent {extent:.2f}; expected ~8 for a 10× r=0.8 ball)"
+
+
+def test_marching_cubes_field_raises_clear_error_on_no_crossing():
+    # A single-signed field has no surface; the shared helper must raise a CLEAR error (not skimage's
+    # opaque "Surface level must be within volume data range").
+    import mlx.core as mx
+
+    from app.marching import marching_cubes_field
+
+    with pytest.raises(ValueError, match="no 0.0 crossing"):
+        marching_cubes_field(lambda x: mx.ones((x.shape[0],)), bound=1.0, res=8)

@@ -1,6 +1,6 @@
 """Capture pipeline: an oriented point cloud → a watertight mesh (GLB), via the MLX neural SDF.
 
-The capture service's core: fit a SIREN/IGR SDF to points + normals (app.sdf_mlx, trained on the
+The capture service's core: fit a Softplus/IGR SDF to points + normals (app.sdf_mlx, trained on the
 M4 Max in MLX), marching-cubes the zero level-set, and export a GLB the browser imports as a MeshDoc
 (then reconstruct → editable B-rep). Points/normals come from a depth scan (app.geometry) or an
 external SfM/MVS (COLMAP). See docs/adr/0007.
@@ -53,11 +53,17 @@ def complete_partial(
     net: CompletionNet, partial_points: np.ndarray, *, grid_res: int = 48
 ) -> CaptureResult:
     """Complete a PARTIAL point cloud (a scan with holes) into a full watertight mesh, using a
-    trained MLX completion network (M8). The cloud is centered at the origin for the network's frame,
-    then the mesh is returned in world coordinates."""
+    trained MLX completion network (M8). The cloud is centered AND normalized to unit scale for the
+    network's frame (it is trained on radius~[0.5,1] spheres and completes over a fixed [-1.2,1.2]³
+    grid — an arbitrary-scale scan, e.g. millimetres, would otherwise fall entirely outside the field
+    and yield an empty/garbage mesh). The result is returned in world coordinates."""
     p = np.asarray(partial_points, dtype=np.float32)
     center = p.mean(axis=0)
-    verts, faces = complete(net, p - center, bound=1.2, res=grid_res)
-    verts = verts + center
+    centered = p - center
+    scale = float(np.abs(centered).max())
+    if scale < 1e-6:
+        raise ValueError("degenerate partial cloud (near-zero extent)")
+    verts, faces = complete(net, centered / scale, bound=1.2, res=grid_res)
+    verts = verts * scale + center  # undo the unit-scale normalization, back to world frame
     mesh = trimesh.Trimesh(vertices=verts, faces=faces, process=False)
     return CaptureResult(mesh=mesh, vertices=len(verts), faces=len(faces))
