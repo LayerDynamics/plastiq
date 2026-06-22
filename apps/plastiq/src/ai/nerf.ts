@@ -3,9 +3,10 @@
 // The browser client (submit→poll a /train job) lives in the @plastiq/nerf workspace package; this
 // thin app module maps its result into the app's own document model and persists it. Posed images +
 // a transforms.json are trained server-side (MLX, Apple Silicon) into a surface mesh; the returned
-// GLB is wrapped as a MeshDoc — the SAME mesh document the creative mesh-gen produces — so it flows
-// straight into the existing "Convert to CAD" reconstruct path (mesh → editable B-rep). The
-// dependency direction is app → @plastiq/nerf (never the reverse).
+// GLB is wrapped as a MeshDoc — the SAME mesh document the creative mesh-gen produces. `persist`
+// returns the new project id; the caller then OPENS it (createMeshProject only persists, it does not
+// set the active doc), at which point the existing "Convert to CAD" reconstruct path (mesh → editable
+// B-rep) becomes available. The dependency direction is app → @plastiq/nerf (never the reverse).
 
 import { trainNerf, type NerfOptions, type NerfReport, type NerfTrainInput } from "@plastiq/nerf";
 

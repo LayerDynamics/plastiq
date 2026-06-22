@@ -244,11 +244,17 @@ function fileToBase64(file: File): Promise<string> {
   });
 }
 
+/** Cap on photos per capture — bounds peak browser memory (each is base64-inflated ~33% and the whole
+ * set is serialized into one /train POST body). Generous for photogrammetry; a real cap, not a guess. */
+const MAX_CAPTURE_IMAGES = 300;
+
 /** SPEC-11 N11.3 — capture a mesh from posed photos via the @plastiq/nerf service. The user picks a
  * transforms.json (camera poses) + the images it describes; trainNerf fits an MLX surface server-side
- * and returns a GLB, which is persisted as a MeshDoc. createMeshProject opens it, so the panel then
- * shows MeshConvertSection — i.e. the captured mesh flows straight into the existing "Convert to CAD"
- * (mesh → B-rep) path. The nerf base URL comes from settings (nerfBaseURL). */
+ * and returns a GLB, persisted as a MeshDoc. On success the new project is OPENED (createMeshProject
+ * only persists — it deliberately does not switch the active doc), so the panel switches to
+ * MeshConvertSection — i.e. the captured mesh flows into the existing "Convert to CAD" (mesh → B-rep)
+ * path. The nerf base URL comes from settings (nerfBaseURL). Training is the longest job in the app,
+ * so it is abortable. */
 function NerfCaptureSection(): React.JSX.Element {
   const [transformsJson, setTransformsJson] = useState<string | null>(null);
   const [transformsName, setTransformsName] = useState<string | null>(null);
@@ -256,40 +262,81 @@ function NerfCaptureSection(): React.JSX.Element {
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
 
-  const onTransforms = useCallback(async (f?: File): Promise<void> => {
-    if (!f) return;
-    setError(null);
-    setTransformsJson(await fileToText(f));
-    setTransformsName(f.name);
-  }, []);
+  const onTransforms = useCallback(
+    async (f?: File): Promise<void> => {
+      if (!f || busy) return;
+      setError(null);
+      setTransformsName(f.name);
+      setTransformsJson(await fileToText(f));
+    },
+    [busy],
+  );
 
-  const onImages = useCallback(async (files: FileList | null): Promise<void> => {
-    if (!files || files.length === 0) return;
-    setError(null);
-    setImages(await Promise.all(Array.from(files).map(fileToBase64)));
-  }, []);
+  const onImages = useCallback(
+    async (files: FileList | null): Promise<void> => {
+      if (!files || files.length === 0 || busy) return;
+      setError(null);
+      if (files.length > MAX_CAPTURE_IMAGES) {
+        setError(`Too many images (${files.length}); the cap is ${MAX_CAPTURE_IMAGES}.`);
+        return;
+      }
+      setImages(await Promise.all(Array.from(files).map(fileToBase64)));
+    },
+    [busy],
+  );
 
   const capture = useCallback(async (): Promise<void> => {
     if (!transformsJson || images.length === 0 || busy) return;
+
+    // Validate the photos are parallel to the transforms frames BEFORE the (minutes-long) round-trip.
+    let frameCount: number;
+    try {
+      const parsed = JSON.parse(transformsJson) as { frames?: unknown };
+      if (!Array.isArray(parsed.frames)) {
+        setError("transforms.json has no 'frames' array.");
+        return;
+      }
+      frameCount = parsed.frames.length;
+    } catch {
+      setError("transforms.json is not valid JSON.");
+      return;
+    }
+    if (frameCount !== images.length) {
+      setError(`Image count (${images.length}) must match transforms frames (${frameCount}).`);
+      return;
+    }
+
+    const controller = new AbortController();
+    abortRef.current = controller;
     setBusy(true);
     setError(null);
     setStatus("submitting…");
     try {
       const baseURL = useAiStore.getState().settings?.nerfBaseURL;
-      await captureFromPhotos(
+      const { meshDocId } = await captureFromPhotos(
         { transformsJson, images },
         { persist: (doc) => useProjectsStore.getState().createMeshProject(doc) },
-        { ...(baseURL ? { baseURL } : {}), onState: (s) => setStatus(s) },
+        { ...(baseURL ? { baseURL } : {}), signal: controller.signal, onState: (s) => setStatus(s) },
         "Captured mesh",
       );
-      // createMeshProject opens the mesh doc → this panel switches to MeshConvertSection.
+      // Open the new mesh project so the panel switches to MeshConvertSection ("Convert to CAD").
+      await useProjectsStore.getState().open(meshDocId);
+      setTransformsJson(null);
+      setTransformsName(null);
+      setImages([]);
+      setStatus(null);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      if (e instanceof DOMException && e.name === "AbortError") setStatus("cancelled");
+      else setError(e instanceof Error ? e.message : String(e));
     } finally {
       setBusy(false);
+      abortRef.current = null;
     }
   }, [transformsJson, images, busy]);
+
+  const cancel = useCallback(() => abortRef.current?.abort(), []);
 
   return (
     <div data-testid="nerf-capture" className="flex flex-col gap-1 rounded border border-[#1b2230] bg-black/20 p-2">
@@ -332,6 +379,16 @@ function NerfCaptureSection(): React.JSX.Element {
         >
           {busy ? "Capturing…" : "Capture"}
         </button>
+        {busy && (
+          <button
+            type="button"
+            data-testid="nerf-cancel-btn"
+            onClick={cancel}
+            className="rounded border border-[#7a3a3a] bg-[#2a1414] px-2 py-1 text-[#fbb] hover:bg-[#341a1a]"
+          >
+            Cancel
+          </button>
+        )}
       </div>
       {status && (
         <div data-testid="nerf-status" className="text-[10px] text-[#789]">
