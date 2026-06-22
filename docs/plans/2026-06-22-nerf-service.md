@@ -135,12 +135,15 @@ GLB→MeshDoc patterns the **capture service** (`services/capture/`, M7/M8) esta
       path), and the eikonal-regularized field marching-cubes to a clean **1866-vert, mean-radius-1.034**
       sphere. 28/28 nerf tests green (cadling env: mlx + skimage).
 
-## N9 — exporters (field → mesh → GLB)
-- [ ] **N9.1 — TDD marching-cubes exporter** (`exporters/mesh_exporter.py`): evaluate density/SDF on a grid
-      → `skimage.measure.marching_cubes` → vertices/faces (mirrors capture `extract_mesh`). Test: a trained
-      field → non-empty, roughly-correct mesh.
-- [ ] **N9.2 — TDD GLB + point-cloud export** (`exporters/glb_exporter.py`): mesh → GLB (trimesh) + a
-      pointcloud export. Test: GLB round-trips through trimesh as a real mesh.
+## N9 — exporters (field → mesh → GLB) ✅
+- [x] **N9.1 — marching-cubes exporter** (`exporters/mesh_exporter.py`): `marching_cubes_field` evaluates
+      any scalar field on a `res³` grid (MLX, batched) → `skimage.measure.marching_cubes` → world-unit
+      verts/faces; `extract_sdf_mesh` (SDF zero level-set) + `extract_density_mesh` (NeRF density iso, zero-
+      dir query) cover both field kinds. Tests: analytic unit-sphere SDF + density iso → mean radius ≈ 1;
+      a real `SDFField` extracts a non-empty unit-scaled mesh.
+- [x] **N9.2 — GLB + point-cloud export** (`exporters/glb_exporter.py`): `mesh_to_glb` (trimesh,
+      `process=False`, mirrors capture `to_glb`) + `pointcloud_to_glb` (trimesh Scene). Tests: both
+      round-trip back through trimesh preserving vertex/face/point counts. 5/5 exporter tests green.
 
 ## N10 — FastAPI service (submit→poll)
 - [ ] **N10.1 — TDD job contract** (`engine/jobs.py` — mirror capture `jobs.py`): submit→poll state
