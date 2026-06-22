@@ -12,8 +12,10 @@ pieces a depth/scan capture path needs to feed `services/reconstruct`).
 
 ## Decision
 
-Port kornia's **`depth_to_3d` + `depth_to_normals`** math to numpy, plus a small pinhole camera model,
-into the capture service (`services/capture/app/geometry.py`). Apache-2.0, attribution recorded.
+Port kornia's **`depth_to_3d` + `depth_to_normals`** math to **MLX** (`mlx.core`, Apple Silicon —
+consistent with the rest of the capture service's models, M7/M8), plus a small pinhole camera model,
+into the capture service (`services/capture/app/geometry.py`). Apache-2.0, attribution recorded. The
+functions return `mlx.core` arrays; `np.gradient` and `cross` are hand-rolled in MLX.
 
 - **`unproject_depth(depth, K)`** — per-pixel `(u,v,d) → camera-frame xyz` via the pinhole model
   (`x=(u−cx)/fx·d`, `y=(v−cy)/fy·d`, `z=d`), vectorized.
@@ -37,8 +39,8 @@ Revisit criteria: if Plastiq ever hand-rolls SfM (instead of COLMAP/MLX), port t
 
 ## Consequences
 
-- New `services/capture/app/geometry.py` (numpy; no OCC, no torch) + tests — also seeds the M7 capture
-  service directory. Deterministic.
+- New `services/capture/app/geometry.py` (**MLX**; no OCC, no torch, no numpy in the module) + tests —
+  also seeds the M7 capture service directory. Deterministic.
 - `Expanse.md` kornia item updated; the SfM-solver deferral recorded here and in M7's ADR.
 
 ## Wiring status (accuracy note)
