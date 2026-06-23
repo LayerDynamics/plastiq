@@ -8,6 +8,7 @@
 import { describe, expect, it } from "vitest";
 import { grammarSafeToolDefs } from "./nodeBuild.js";
 import { toolDefs } from "../ai/tools/toolDefs.js";
+import type { ToolDef } from "../ai/providers/types.js";
 
 describe("grammarSafeToolDefs", () => {
   it("dereferences build_part's $ref/$defs while preserving box params (dx/dy/dz)", () => {
@@ -34,5 +35,28 @@ describe("grammarSafeToolDefs", () => {
     const au = safe.find((d) => d.name === "answer_user")!;
     const orig = defs.find((d) => d.name === "answer_user")!;
     expect(au).toBe(orig);
+  });
+
+  it("THROWS on an unresolvable $ref instead of silently degrading (no fallbacks)", () => {
+    const broken: ToolDef = {
+      name: "x", description: "",
+      parameters: { type: "object", properties: { a: { $ref: "#/$defs/missing" } } },
+    };
+    expect(() => grammarSafeToolDefs([broken])).toThrow(/unresolved \$ref/i);
+  });
+
+  it("represents a genuine recursion cycle as a generic object (not a throw)", () => {
+    const recursive: ToolDef = {
+      name: "x", description: "",
+      parameters: {
+        type: "object",
+        $defs: { node: { type: "object", properties: { child: { $ref: "#/$defs/node" } } } },
+        properties: { root: { $ref: "#/$defs/node" } },
+      },
+    };
+    const out = grammarSafeToolDefs([recursive])[0]!;
+    const json = JSON.stringify(out.parameters);
+    expect(json).not.toContain("$ref"); // inlined
+    expect(json).toContain('"child":{"type":"object"}'); // recursion point -> generic object
   });
 });

@@ -58,8 +58,18 @@ function dereferenceSchema(schema: JsonSchema): JsonSchema {
       const ref = obj["$ref"];
       if (typeof ref === "string") {
         const name = ref.split("/").pop() ?? "";
-        if (seen.has(name) || !defs[name]) return { type: "object" }; // break cycle / unknown ref
-        return walk(defs[name], new Set(seen).add(name));
+        // Recursion (e.g. boolean.toolFeatures references the feature union again):
+        // a self-referential schema cannot be inlined into a finite one, so the
+        // recursion point is represented as a generic object. This is the standard
+        // JSON-Schema-without-$ref encoding of recursion, not a fallback.
+        if (seen.has(name)) return { type: "object" };
+        // An unresolvable $ref means the schema is genuinely broken — fail loudly
+        // rather than silently degrading it to a permissive object (no fallbacks).
+        const target = defs[name];
+        if (!target) {
+          throw new Error(`grammarSafeToolDefs: unresolved $ref "${ref}" — cannot make this schema grammar-safe`);
+        }
+        return walk(target, new Set(seen).add(name));
       }
       const out: Record<string, unknown> = {};
       for (const [k, v] of Object.entries(obj)) {
