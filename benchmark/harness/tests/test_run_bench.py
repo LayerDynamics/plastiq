@@ -71,6 +71,20 @@ def test_build_command_generation_with_vision(tmp_path: Path) -> None:
     assert "--input-step" not in cmd and "--edit" not in cmd
 
 
+def test_build_command_two_stage_caption(tmp_path: Path) -> None:
+    fx = load_fixture(_write_generation_fixture(tmp_path))
+    cfg = RunConfig(
+        model="gen", caption_base_url="http://localhost:8081/v1", caption_model="vlm",
+    )
+    cmd = build_command(fx, tmp_path / "out.step", cfg)
+    # images are passed (the captioner handles them) even though the tool model
+    # isn't --vision; the caption endpoint + model are forwarded.
+    assert "--image" in cmd
+    assert "--vision" not in cmd
+    assert "--caption-base-url" in cmd and "http://localhost:8081/v1" in cmd
+    assert "--caption-model" in cmd and "vlm" in cmd
+
+
 def test_build_command_generation_no_vision_drops_images(tmp_path: Path) -> None:
     fx = load_fixture(_write_generation_fixture(tmp_path))
     cmd = build_command(fx, tmp_path / "out.step", RunConfig(model="m", vision=False))

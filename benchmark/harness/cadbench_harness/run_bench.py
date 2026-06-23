@@ -93,6 +93,9 @@ class RunConfig:
     base_url: str = "http://localhost:8080/v1"
     api_key: str | None = None
     vision: bool = False
+    caption_base_url: str | None = None
+    caption_model: str | None = None
+    caption_api_key: str | None = None
     max_steps: int | None = None
     first_tool: str | None = None
     gen_cmd: tuple[str, ...] = DEFAULT_GEN_CMD
@@ -118,11 +121,18 @@ def build_command(fixture: Fixture, out_path: Path, cfg: RunConfig) -> list[str]
         if fixture.edit_text:
             cmd += ["--edit", fixture.edit_text]
     else:
-        # Generation: feed the drawing(s) as vision content when the model supports it.
-        if cfg.vision and fixture.images:
-            cmd += ["--vision"]
+        # Generation: feed the drawing(s) when the tool model is vision-capable
+        # (--vision) OR a separate captioner is configured (two-stage pipeline).
+        if (cfg.vision or cfg.caption_base_url) and fixture.images:
+            if cfg.vision:
+                cmd += ["--vision"]
             for img in fixture.images:
                 cmd += ["--image", str(img)]
+            if cfg.caption_base_url and cfg.caption_model:
+                cmd += ["--caption-base-url", cfg.caption_base_url,
+                        "--caption-model", cfg.caption_model]
+                if cfg.caption_api_key:
+                    cmd += ["--caption-api-key", cfg.caption_api_key]
     return cmd
 
 
@@ -246,7 +256,11 @@ def add_subparser(subparsers: argparse._SubParsersAction) -> None:
     p.add_argument("--model", required=True, help="Model id served by the endpoint.")
     p.add_argument("--base-url", default="http://localhost:8080/v1")
     p.add_argument("--api-key", default=None)
-    p.add_argument("--vision", action="store_true", help="Model accepts images (generation drawings).")
+    p.add_argument("--vision", action="store_true", help="Tool model accepts images directly.")
+    p.add_argument("--caption-base-url", default=None,
+                   help="Vision captioner endpoint (two-stage: caption the drawing, then generate).")
+    p.add_argument("--caption-model", default=None, help="Vision captioner model id.")
+    p.add_argument("--caption-api-key", default=None)
     p.add_argument("--max-steps", type=int, default=None)
     p.add_argument("--first-tool", default=None,
                    help="Force this tool on turn 1 (e.g. build_part) for weak models.")
@@ -263,6 +277,9 @@ def _run(args: argparse.Namespace) -> int:
         base_url=args.base_url,
         api_key=args.api_key,
         vision=args.vision,
+        caption_base_url=args.caption_base_url,
+        caption_model=args.caption_model,
+        caption_api_key=args.caption_api_key,
         max_steps=args.max_steps,
         first_tool=args.first_tool,
         workers=args.workers,

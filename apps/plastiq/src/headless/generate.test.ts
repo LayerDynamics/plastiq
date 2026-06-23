@@ -105,6 +105,53 @@ describe("headless generatePart", () => {
     expect(result.step).toContain("ISO-10303");
   });
 
+  it("two-stage: captions an image, then generates from the resulting text", async () => {
+    // The captioner sees the image and returns a text description; the (non-vision)
+    // generator then builds from text. Verifies the perception->authoring handoff
+    // with no network.
+    const captionProvider: ChatProvider = {
+      id: "openai-compatible",
+      model: "vlm",
+      supportsVision: true,
+      supportsTools: false,
+      async *stream(req): AsyncIterable<StreamEvent> {
+        // the captioner must receive the image content part
+        const content = req.messages[0]!.content;
+        const sawImage = Array.isArray(content) && content.some((p) => p.type === "image");
+        yield { type: "text-delta", text: sawImage ? "A 20x20x20 mm cube." : "(no image seen)" };
+        yield { type: "done", finishReason: "stop" };
+      },
+    };
+    // the generator asserts it received TEXT (the image was replaced by the caption)
+    const genProvider: ChatProvider = {
+      id: "openai-compatible",
+      model: "gen",
+      supportsVision: false,
+      supportsTools: true,
+      async *stream(req): AsyncIterable<StreamEvent> {
+        const userText = req.messages.at(-1)!.content;
+        expect(typeof userText).toBe("string");
+        expect(String(userText)).toContain("cube"); // the caption was threaded in
+        yield { type: "tool-call", call: { id: "c1", name: "build_part", arguments: { document: BOX_DOC } } };
+        yield { type: "tool-call", call: { id: "c2", name: "answer_user", arguments: { message: "done" } } };
+        yield { type: "done", finishReason: "tool-calls" };
+      },
+    };
+
+    const result = await generatePart({
+      provider: genProvider,
+      captionProvider,
+      input: [
+        { type: "text", text: "Reproduce the part from the drawing." },
+        { type: "image", mediaType: "image/png", data: "AAAA" },
+      ],
+      maxSteps: 4,
+    });
+    expect(result.caption).toContain("cube");
+    expect(result.hasGeometry).toBe(true);
+    expect(result.step).toContain("ISO-10303");
+  });
+
   it("seedFromStep yields an importStep document a session can export", async () => {
     // Build a box, export it, then seed a new session from that STEP (the editing
     // entry point) and confirm the seed round-trips to the same solid.

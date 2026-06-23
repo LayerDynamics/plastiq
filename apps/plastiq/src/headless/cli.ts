@@ -24,6 +24,9 @@ interface Args {
   model: string;
   apiKey?: string;
   vision: boolean;
+  captionBaseUrl?: string;
+  captionModel?: string;
+  captionApiKey?: string;
   maxSteps?: number;
   firstTool?: string;
   out: string;
@@ -37,9 +40,15 @@ Required:
   --desc <text> | --desc-file <path>   the task prompt
 
 Inputs:
-  --image <path>            drawing image (repeatable; generation tasks, needs --vision)
+  --image <path>            drawing image (repeatable; generation tasks)
   --input-step <path>       starting solid (editing tasks) — seeded as importStep
   --edit <text> | --edit-file <path>   the edit instruction (editing tasks)
+
+Vision (two-stage: caption the drawing, then generate). Use this when the tool
+model isn't vision-capable (the usual local case):
+  --caption-base-url <url>  a vision endpoint (e.g. a llama.cpp VLM with --mmproj)
+  --caption-model <name>    the vision model id
+  --caption-api-key <key>   optional
 
 Endpoint (OpenAI-compatible, e.g. mlx_lm.server / mlx-vlm / llama-server):
   --base-url <url>          default http://localhost:8080/v1
@@ -82,6 +91,9 @@ function parseArgs(argv: string[]): Args {
       case "--model": a.model = next(i); i++; break;
       case "--api-key": a.apiKey = next(i); i++; break;
       case "--vision": a.vision = true; break;
+      case "--caption-base-url": a.captionBaseUrl = next(i); i++; break;
+      case "--caption-model": a.captionModel = next(i); i++; break;
+      case "--caption-api-key": a.captionApiKey = next(i); i++; break;
       case "--max-steps": {
         const n = Number(next(i)); i++;
         if (!Number.isInteger(n) || n <= 0) throw new Error(`--max-steps must be a positive integer, got ${argv[i]}`);
@@ -122,13 +134,14 @@ function buildInput(a: Args): string | ContentPart[] {
   let text = a.desc.trim();
   if (a.edit?.trim()) text += `\n\nRequested change: ${a.edit.trim()}`;
 
-  // Generation drawings ride as vision content parts. If the model isn't vision
-  // capable, sending images would error, so we drop them and note it on stderr —
-  // the run still proceeds text-only (an honest, lower-fidelity result).
+  // Generation drawings ride as vision content parts when the tool model is vision
+  // capable (--vision) OR a separate captioner is configured (--caption-base-url),
+  // which captions them to text first (the two-stage pipeline). Otherwise drop them
+  // with a note — the run proceeds text-only (an honest, lower-fidelity result).
   if (a.images.length > 0) {
-    if (!a.vision) {
+    if (!a.vision && !a.captionBaseUrl) {
       process.stderr.write(
-        `warning: ${a.images.length} image(s) ignored — pass --vision with a vision-capable model\n`,
+        `warning: ${a.images.length} image(s) ignored — pass --vision or --caption-base-url\n`,
       );
       return text;
     }
@@ -146,13 +159,27 @@ function buildProvider(a: Args): ChatProvider {
   });
 }
 
+/** The vision captioner (stage 1) — a separate OpenAI-compatible endpoint (e.g. a
+ * llama.cpp VLM with --mmproj). Returns undefined when not configured. */
+function buildCaptionProvider(a: Args): ChatProvider | undefined {
+  if (!a.captionBaseUrl || !a.captionModel) return undefined;
+  return new OpenAICompatAdapter({
+    baseURL: a.captionBaseUrl,
+    model: a.captionModel,
+    supportsVision: true,
+    ...(a.captionApiKey ? { apiKey: a.captionApiKey } : {}),
+  });
+}
+
 async function main(argv: string[]): Promise<number> {
   const a = parseArgs(argv);
   const seed = a.inputStep ? seedFromStep(readFileSync(a.inputStep, "utf8")) : undefined;
+  const captionProvider = buildCaptionProvider(a);
 
   const result = await generatePart({
     provider: buildProvider(a),
     input: buildInput(a),
+    ...(captionProvider ? { captionProvider } : {}),
     ...(seed ? { seed } : {}),
     ...(a.maxSteps != null ? { maxSteps: a.maxSteps } : {}),
     ...(a.firstTool ? { firstTool: a.firstTool } : {}),
@@ -165,6 +192,7 @@ async function main(argv: string[]): Promise<number> {
     features: result.doc.features.length,
     hasGeometry: result.hasGeometry,
     applied: result.applied,
+    captioned: result.caption != null,
   };
 
   if (result.step) {

@@ -25,9 +25,16 @@
 # provider. mlx-lm/mlx-vlm are fine for experimentation and the editing path.
 #
 # Apple-Silicon (M4 Max) model picks:
-#   text, mlx (no tool_choice) : mlx-community/Qwen2.5-7B-Instruct-4bit
-#   vision, mlx (NO tools)     : mlx-community/Qwen3-VL-8B-Instruct-8bit  (can't tool-call)
-#   tool-calling + vision      : a llama.cpp GGUF + its --mmproj projector via `llama`
+#   tool/generator (llama)     : bartowski/Qwen2.5-7B-Instruct-GGUF:Q4_K_M
+#   vision captioner (llama)   : ggml-org/Qwen2.5-VL-3B-Instruct-GGUF  (auto --mmproj)
+#   mlx (no tool_choice/tools) : mlx-community/Qwen2.5-7B-Instruct-4bit (experiment only)
+#
+# TWO-STAGE vision generation (the benchmark drawings): vision + tool-calling don't
+# coexist in one local model, so serve TWO llama.cpp instances — a VLM captioner and a
+# tool-calling generator — and pass `--caption-base-url`/`--caption-model` to
+# `cadbench-harness run` (which captions the drawing, then generates from the text).
+#   serve-model.sh llama bartowski/Qwen2.5-7B-Instruct-GGUF:Q4_K_M 8080   # generator
+#   serve-model.sh llama ggml-org/Qwen2.5-VL-3B-Instruct-GGUF       8081   # captioner
 set -euo pipefail
 
 backend="${1:?backend required: mlx-lm | mlx-vlm | llama}"

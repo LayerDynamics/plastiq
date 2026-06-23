@@ -57,23 +57,24 @@ headlessly by `plastiq-gen` (`apps/plastiq/src/headless/`). `services/reconstruc
 ```bash
 # 0. mount the inputs (once) — see above
 
-# 1. serve a local model (zero cost, Apple-Silicon native). The agent drives the
-#    model via OpenAI tool calls, so the server MUST support function-calling.
-#    VERIFIED: mlx_lm.server passes tools but ignores tool_choice; mlx_vlm.server
-#    has NO tools support (can't drive the agent). For reliable tool-calling — and
-#    for generation, which needs VISION (the drawing) — use llama.cpp with a
-#    tool-capable + vision (--mmproj) GGUF, or a cloud provider. mlx-lm is fine for
-#    the editing path / experimentation.
-./benchmark/harness/serve-model.sh llama <tool+vision-gguf-repo> 8080   # tool-calling + vision
-#   experiment-only: serve-model.sh mlx-lm mlx-community/Qwen2.5-7B-Instruct-4bit
+# 1. serve local models with llama.cpp (zero cost, Apple-Silicon, torch-free, honors
+#    OpenAI tools via --jinja). Vision + tool-calling don't coexist in one local model,
+#    so use a TWO-STAGE setup (a VLM captions the drawing -> a tool model generates):
+#    - tool/generator (:8080):
+llama-server -hf bartowski/Qwen2.5-7B-Instruct-GGUF:Q4_K_M --port 8080 --jinja -c 8192 &
+#    - vision captioner (:8081, --mmproj pulled automatically for ggml-org VL repos):
+llama-server -hf ggml-org/Qwen2.5-VL-3B-Instruct-GGUF --port 8081 &
+#    (mlx_lm.server ignores tool_choice; mlx_vlm.server has NO tools — don't use them
+#     to drive the agent. Editing tasks are text+step and need only the generator.)
 
 # 2. generate candidates over the fixtures -> runs/<name>/<id>/output.step
+#    The captioner turns each drawing into text, then the generator builds from it.
 mamba run -n cadgenbench python -m cadbench_harness run myrun \
-    --model <model> --base-url http://localhost:8080/v1 \
-    --vision --first-tool build_part --workers 2
+    --model bartowski/Qwen2.5-7B-Instruct-GGUF:Q4_K_M --base-url http://localhost:8080/v1 \
+    --caption-base-url http://localhost:8081/v1 --caption-model ggml-org/Qwen2.5-VL-3B-Instruct-GGUF \
+    --workers 2
 #   smoke first: add --limit 2  (or --only 101 102)
-#   --first-tool build_part forces the tool on turn 1 (needs a tool_choice-honoring
-#   server like llama.cpp; no-op on mlx_lm.server)
+#   editing-only (no drawings): drop the --caption-* flags.
 
 # 3. validate (the hard cad_score=0 gate) before submitting
 mamba run -n cadgenbench python -m cadbench_harness validate myrun
@@ -102,14 +103,19 @@ mamba run -n cadgenbench python -m cadbench_harness sanity path/to/output.step
 ## Honest caveats (verified)
 
 - **Generation works with llama.cpp — VERIFIED end-to-end.** Use `llama-server`
-  (honors request `tools`/`tool_choice` via `--jinja`) with a tool-capable GGUF
-  (e.g. `bartowski/Qwen2.5-7B-Instruct-GGUF:Q4_K_M`). The headless path sends a
-  **grammar-safe** (dereferenced) `build_part` schema — llama.cpp 400s on the zod
-  `$ref`/`$defs` otherwise. A text-specified part then produced a valid box that
-  scored **CAD Score 1.0** vs a self-authored GT. **Still gated:** the 81 *benchmark*
-  generation fixtures are `text+image`, so they need a **vision** GGUF (`--mmproj`,
-  e.g. Qwen2.5-VL) — same pipeline, heavier model. **MLX servers can't do this:**
-  `mlx_lm.server` ignores `tool_choice` and `mlx_vlm.server` has no tools support.
+  (honors request tools via `--jinja`) with a tool-capable GGUF (e.g.
+  `Qwen2.5-7B-Instruct`). The headless path sends a **grammar-safe** (dereferenced)
+  `build_part` schema — llama.cpp 400s on the zod `$ref`/`$defs` otherwise. A
+  text-specified part produced a valid box scoring **CAD Score 1.0** vs a
+  self-authored GT.
+- **Vision (the benchmark drawings) — solved via a two-stage pipeline.** Vision +
+  tool-calling don't coexist in one local model (Qwen2.5-VL's template has no tools;
+  `mlx_vlm.server` has no tools API), so a **VLM captions the drawing to text** and
+  the **tool model generates from that text** (`--caption-base-url`/`--caption-model`,
+  served separately with `--mmproj`). Verified on a real fixture: the captioner
+  describes the part and the generator emits a multi-feature `build_part`. Candidate
+  *quality* on complex parts is model-bound (a 7B sometimes misorders sketch/cut) —
+  swap in larger GGUFs to improve it.
 - **Editing prompt blow-up — FIXED.** `editContext` digests an imported `input.step`
   instead of embedding it (was ~644K tokens); the dropped STEP is restored by id when
   the model re-emits the doc (`tools/toolDefs.ts` `reconcileImportSteps`). The editing

@@ -226,6 +226,16 @@ Claude's context), not just the headless harness.
   CB6.3). 3 grammar-safe + applied-flag tests green. **Still open:** the 81 *benchmark* generation fixtures
   are `text+image`; a vision run needs a vision GGUF (`--mmproj`, e.g. Qwen2.5-VL) — the same pipeline, a
   heavier model the user supplies. `serve-model.sh`/README updated.
+- **CB6.2.3 (DONE — two-stage vision pipeline).** Researched: vision + tool-calling don't coexist in one
+  local model (Qwen2.5-VL's chat template has no tool tokens; `mlx_vlm.server` has no tools API; llama.cpp
+  `--mmproj`+`--jinja` is undocumented). Solution = **decouple perception from authoring**: a VLM captions
+  the drawing → text, then the proven tool model generates from that text. Implemented `captionImages` +
+  `resolveInput` in `generate.ts` and `--caption-base-url`/`--caption-model` in `cli.ts` + `cadbench-harness
+  run`; mlx_vlm needs torchvision (avoided), so the captioner is also **llama.cpp** (`Qwen2.5-VL-3B` GGUF +
+  auto `--mmproj`). **Verified on real fixture 101:** the captioner described the part and Qwen2.5-7B emitted
+  a multi-feature `build_part` (box + fillet via `convexEdges` + holes) — it failed only on a schema-usage
+  slip (`cut` without an upstream `sketch`), a model/prompt matter, not a pipeline one. 7 headless + 21
+  harness tests green. The architecture is proven; candidate quality on complex parts scales with model size.
 
 **Root cause:** the prompt already forbids prose-only answers (`ai/prompt.ts:12-13,48`) and the adapter sends
 tools (`ai/providers/openaiCompatible.ts:188-197`) — but it sends **no `tool_choice`**, so weak models default
