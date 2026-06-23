@@ -126,17 +126,24 @@ export async function generatePart(opts: GenerateOptions): Promise<GenerateResul
   });
 
   const doc = session.currentDoc();
-  let step: string | null;
-  try {
-    step = session.toStep();
-  } catch (e) {
-    // "no geometry" is the honest empty case (reported as hasGeometry:false). Any
-    // other kernel/export error is a real failure and must surface, not be silently
-    // recorded as missing — the CLI's top-level handler then exits non-zero.
-    if (e instanceof Error && /no geometry to export/.test(e.message)) {
-      step = null;
-    } else {
-      throw e;
+  // A candidate is produced ONLY when the model DELIBERATELY finished
+  // (finish === "answer": it called answer_user or stopped with nothing left to do).
+  // A "cap" (ran out of turns while still building), "error", or "cancelled" leaves
+  // an UNCONFIRMED, possibly half-built intermediate in `current` — exporting that
+  // would pass off placeholder geometry as a result. So fail loudly: step stays null
+  // and the run is recorded as missing, never as a fake success.
+  let step: string | null = null;
+  if (result.finish === "answer") {
+    try {
+      step = session.toStep();
+    } catch (e) {
+      // "no geometry" is the honest empty case (hasGeometry:false). Any other
+      // kernel/export error is a real failure and must surface, not be swallowed.
+      if (e instanceof Error && /no geometry to export/.test(e.message)) {
+        step = null;
+      } else {
+        throw e;
+      }
     }
   }
   return {

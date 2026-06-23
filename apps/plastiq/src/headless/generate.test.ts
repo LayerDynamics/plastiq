@@ -86,6 +86,28 @@ describe("headless generatePart", () => {
     expect(result.step).toBeNull();
   });
 
+  it("does NOT export an incomplete (capped) run's intermediate geometry — fails loud", async () => {
+    // The model keeps building but never finishes (no answer_user) → hits the step
+    // cap. A box WAS built and applied, but it's an unconfirmed intermediate, so the
+    // result must be step:null (recorded as missing), not a placeholder candidate.
+    const stuck: ChatProvider = {
+      id: "openai-compatible",
+      model: "scripted-stuck",
+      supportsVision: false,
+      supportsTools: true,
+      async *stream(): AsyncIterable<StreamEvent> {
+        yield { type: "tool-call", call: { id: "c", name: "build_part", arguments: { document: BOX_DOC } } };
+        yield { type: "done", finishReason: "tool-calls" };
+      },
+    };
+    const result = await generatePart({ provider: stuck, input: "make something", maxSteps: 3 });
+    expect(result.finish).toBe("cap");                 // never finished
+    expect(result.applied).toBe(true);                 // a box WAS built (intermediate)
+    expect(result.doc.features.length).toBeGreaterThan(0);
+    expect(result.step).toBeNull();                    // but NOT exported — fail loud
+    expect(result.hasGeometry).toBe(false);
+  });
+
   it("applied:false for a no-op edit (seed re-exported unchanged)", async () => {
     // A provider that only answers — for an editing seed, the input solid is still
     // exported (a valid candidate), but applied must be false so the no-op is visible.
