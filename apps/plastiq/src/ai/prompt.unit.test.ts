@@ -59,6 +59,8 @@ describe("R2.4 parametric system prompt", () => {
     expect(p).toContain("boolean");           // ADD material (boss) via a boolean union
     expect(p).toMatch(/\bunion\b/i);
     expect(p).toContain("convexEdges");        // fillet EVERY edge via the whole-part selector
+    expect(p).toMatch(/NEVER include data\.edges/i); // dress-ups: selector only, no explicit edges
+    expect(p).toMatch(/"to":\s*\[60,0\]/);     // a worked closed-loop (L-profile) example
   });
 });
 

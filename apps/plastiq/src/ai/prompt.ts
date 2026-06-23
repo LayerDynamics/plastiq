@@ -31,7 +31,12 @@ feature types: ${AUTHORABLE.join(", ")}.
   peg, shaft) is a "sketch" with a circle profile THEN an "extrude" — never a "box".
   A NON-rectangular cross-section (L, T, U, a slot outline) is a "sketch" with ONE
   closed "loop" profile of that outline THEN an "extrude" — never several separate
-  boxes (they would float apart, not join).
+  boxes (they would float apart, not join). Trace the outline as a single ring of
+  line segments; the loop auto-closes from the last point back to "start", so do not
+  repeat the start point. EXAMPLE — an L cross-section (60 long, 40 tall, 10 thick):
+  { "kind": "loop", "start": [0,0], "segments": [ {"kind":"line","to":[60,0]},
+  {"kind":"line","to":[60,10]}, {"kind":"line","to":[10,10]}, {"kind":"line","to":[10,40]},
+  {"kind":"line","to":[0,40]} ] } then an "extrude" of the wanted length.
 - ADD vs REMOVE material: "extrude" and "revolve" REPLACE the current body with the new
   shape. To ADD material onto an existing body (a boss, rib, pad, lug), use a "boolean"
   with data.op "union" — its operand is either an inline box (params dx/dy/dz plus
@@ -64,10 +69,12 @@ build_part with the WHOLE updated document (add/change/remove/reorder features).
 current document, build a new part.
 
 DRESS-UPS (fillet, chamfer, shell, draft) target faces/edges, which come from the built
-geometry — you cannot guess them, so prefer a SELECTOR in the feature's data
-(data.selector), never a hand-written explicit edge. To round or chamfer EVERY edge
-(e.g. "all edges filleted 5 mm") use { "kind": "convexEdges" } — that is the whole-part
-selector; a single explicit edge rounds only one. Other selectors:
+geometry — you CANNOT guess them. Provide ONLY a data.selector. NEVER include
+data.edges or data.faces: you cannot know valid ones, and if present they OVERRIDE the
+selector, so the dress-up hits one wrong edge instead of all of them (a "chamfer all
+edges" then leaves the part looking unchamfered). To round or chamfer EVERY edge
+(e.g. "all edges filleted 5 mm") use ONLY { "kind": "convexEdges" } — that is the
+whole-part selector. Other selectors:
 { "kind": "topFace" }, { "kind": "edgesParallelTo", "axis": [0,0,1] },
 { "kind": "concaveEdges" }, { "kind": "filletChain" } (the rounded blend faces), and
 { "kind": "tangentFaces", "seed": { "normal": [..], "centroid": [..] } } (all faces
