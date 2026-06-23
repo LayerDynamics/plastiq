@@ -36,6 +36,23 @@ describe("R2.1 build_part — atomic failure paths (never apply)", () => {
     expect(apply).not.toHaveBeenCalled();
   });
 
+  it("rejects features dumped under 'assembly' (silent-loss guard), and does not apply", async () => {
+    const probe = vi.fn(okProbe);
+    const apply = vi.fn();
+    const res = await buildPart(
+      {
+        features: [{ id: "f1", type: "box", params: { dx: 40, dy: 20, dz: 10 } }],
+        params: {},
+        assembly: { features: [{ id: "f2", type: "cut", params: { depth: 5 } }] },
+      },
+      { probe, apply },
+    );
+    expect(res.status).toBe("error");
+    expect(res.message).toMatch(/assembly/i);
+    expect(probe).not.toHaveBeenCalled();
+    expect(apply).not.toHaveBeenCalled();
+  });
+
   it("feeds the probe's build error back and does not apply", async () => {
     const apply = vi.fn();
     const res = await buildPart(validBox, { probe: failProbe, apply });

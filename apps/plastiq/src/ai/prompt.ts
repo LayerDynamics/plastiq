@@ -24,6 +24,19 @@ TOOL: build_part — create or edit the part. Its input is a feature document:
   { "features": [ { "id": "f1", "type": "<type>", "params": { ... }, "data": { ... } } ], "params": {} }
 Features are evaluated in order; later features build on earlier ones. Supported
 feature types: ${AUTHORABLE.join(", ")}.
+- The document has ONLY "features" and "params". Put EVERY feature in the "features"
+  array, in build order. Do NOT invent other keys such as "assembly" — features placed
+  anywhere else are SILENTLY IGNORED and will be missing from the part.
+- SHAPES: a rectangular block is a "box". Anything ROUND (cylinder, rod, disc, pin,
+  peg, shaft) is a "sketch" with a circle profile THEN an "extrude" — never a "box".
+  A NON-rectangular cross-section (L, T, U, a slot outline) is a "sketch" with ONE
+  closed "loop" profile of that outline THEN an "extrude" — never several separate
+  boxes (they would float apart, not join).
+- ADD vs REMOVE material: "extrude" and "revolve" REPLACE the current body with the new
+  shape. To ADD material onto an existing body (a boss, rib, pad, lug), use a "boolean"
+  with data.op "union" — its operand is either an inline box (params dx/dy/dz plus
+  tx/ty/tz = the operand's MINIMUM corner) or its own data.toolFeatures subtree. To
+  REMOVE material, use "cut" (a pocket/hole) or a "boolean" with data.op "subtract".
 - "extrude", "revolve", and "cut" consume the MOST RECENT "sketch", so you MUST add a
   "sketch" feature IMMEDIATELY BEFORE each of them. A "cut" or "extrude" with no
   preceding "sketch" FAILS to build — never emit one on its own.
@@ -38,6 +51,12 @@ feature types: ${AUTHORABLE.join(", ")}.
   (that is a corner): e.g. a centred hole in a 60 × 40 plate sketches its circle at
   [30, 20] with depth = the plate thickness. Sketching at [0, 0] cuts a notch out of a
   corner — almost never what is wanted.
+- Keep it SIMPLE. A sketch on empty space or the ground needs NO data.plane — it
+  defaults to the XY plane; only add data.plane { "kind": "face", ... } to sketch ONTO
+  an existing body's face (never on the first feature — there is no face yet). A plain
+  "extrude" just pushes the sketch up by params.height — do NOT add data.direction,
+  data.directionEdge, or data.toFace, and do NOT scatter extra "box" features around a
+  sketched profile.
 - Expose meaningful dimensions as named params so the user can edit them afterward.
 
 EDITING: if the current document is provided in context, modify THAT document and call
@@ -45,10 +64,12 @@ build_part with the WHOLE updated document (add/change/remove/reorder features).
 current document, build a new part.
 
 DRESS-UPS (fillet, chamfer, shell, draft) target faces/edges, which come from the built
-geometry — you cannot guess them. Prefer a selector in the feature's data, e.g.
-{ "kind": "topFace" } or { "kind": "edgesParallelTo", "axis": [0,0,1] }. Topology-aware
-selectors are also available: { "kind": "convexEdges" } / { "kind": "concaveEdges" } (e.g.
-fillet every convex edge), { "kind": "filletChain" } (the rounded blend faces), and
+geometry — you cannot guess them, so prefer a SELECTOR in the feature's data
+(data.selector), never a hand-written explicit edge. To round or chamfer EVERY edge
+(e.g. "all edges filleted 5 mm") use { "kind": "convexEdges" } — that is the whole-part
+selector; a single explicit edge rounds only one. Other selectors:
+{ "kind": "topFace" }, { "kind": "edgesParallelTo", "axis": [0,0,1] },
+{ "kind": "concaveEdges" }, { "kind": "filletChain" } (the rounded blend faces), and
 { "kind": "tangentFaces", "seed": { "normal": [..], "centroid": [..] } } (all faces
 tangent-connected to a seed face). If a selector does not fit, call inspect_geometry to
 list the part's faces and edges, then reference the ones you want by index.

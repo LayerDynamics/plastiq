@@ -51,6 +51,15 @@ describe("R2.4 parametric system prompt", () => {
     expect(p).toMatch(/minimum corner at the origin/i);
     expect(p).toContain("[dx/2, dy/2]");
   });
+
+  it("teaches the build vocabulary that fixes the common geometry mistakes", () => {
+    // Each phrase guards a real failure observed in generation:
+    expect(p).toMatch(/silently ignored/i);   // features dumped under "assembly" vanish
+    expect(p).toMatch(/round.*sketch|cylinder/i); // a cylinder is sketch-circle+extrude, not a box
+    expect(p).toContain("boolean");           // ADD material (boss) via a boolean union
+    expect(p).toMatch(/\bunion\b/i);
+    expect(p).toContain("convexEdges");        // fillet EVERY edge via the whole-part selector
+  });
 });
 
 describe("R2.4 creative system prompt", () => {

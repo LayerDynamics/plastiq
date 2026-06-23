@@ -9,7 +9,7 @@ from __future__ import annotations
 import argparse
 import sys
 
-from . import package, run_bench, sanity, score, score_fixtures, validate
+from . import package, render, run_bench, sanity, score, score_fixtures, validate
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -24,6 +24,7 @@ def build_parser() -> argparse.ArgumentParser:
     validate.add_subparser(subparsers)
     package.add_subparser(subparsers)
     score.add_subparser(subparsers)
+    render.add_subparser(subparsers)
     return parser
 
 
