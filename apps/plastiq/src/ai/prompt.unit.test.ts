@@ -36,6 +36,14 @@ describe("R2.4 parametric system prompt", () => {
     expect(p).toMatch(/selector/i);
     expect(p).toMatch(/fillet/i);
   });
+
+  it("teaches that a sketch must precede extrude/cut (the common build failure)", () => {
+    // A cut/extrude with no upstream sketch is the #1 generation error; the prompt
+    // must state the ordering rule explicitly so the model sequences sketch->cut.
+    expect(p).toMatch(/sketch/i);
+    expect(p).toMatch(/preceding "sketch"|before each of them|before the/i);
+    expect(p).toContain("data.profile");
+  });
 });
 
 describe("R2.4 creative system prompt", () => {

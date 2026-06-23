@@ -24,8 +24,14 @@ TOOL: build_part — create or edit the part. Its input is a feature document:
   { "features": [ { "id": "f1", "type": "<type>", "params": { ... }, "data": { ... } } ], "params": {} }
 Features are evaluated in order; later features build on earlier ones. Supported
 feature types: ${AUTHORABLE.join(", ")}.
-- A "sketch" feature carries data.profile (a closed loop or a circle) and an optional
-  data.plane; "extrude"/"revolve"/"cut" consume the most recent sketch.
+- "extrude", "revolve", and "cut" consume the MOST RECENT "sketch", so you MUST add a
+  "sketch" feature IMMEDIATELY BEFORE each of them. A "cut" or "extrude" with no
+  preceding "sketch" FAILS to build — never emit one on its own.
+- A "sketch" carries data.profile: either a circle
+  { "kind": "circle", "center": [x, y], "radius": r } or a closed loop
+  { "kind": "loop", "start": [x, y], "segments": [ { "kind": "line", "to": [x, y] }, ... ] },
+  plus an optional data.plane. To cut a hole/pocket: a "box" (or other base), THEN a
+  "sketch" whose profile is the opening, THEN a "cut" with params.depth = how deep.
 - Expose meaningful dimensions as named params so the user can edit them afterward.
 
 EDITING: if the current document is provided in context, modify THAT document and call
