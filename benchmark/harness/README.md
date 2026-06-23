@@ -125,6 +125,16 @@ mamba run -n cadgenbench python -m cadbench_harness sanity path/to/output.step
   unreachable (validity-only + Space). But point `CADGENBENCH_DATA_DIR` at a
   self-owned `inputs/`+`gt/` tree and `score` produces real CAD Scores (verified:
   1.0 for a correct candidate). See `SUBMIT.md`.
+- **Scoring is GPU-isolated on Apple Silicon.** Each candidate's shape phase renders
+  a 120-frame turntable (a report animation; the CAD Score itself is mesh-derived) via
+  VTK→Metal. The Metal command-buffer pool is **not** reclaimed within a long-lived
+  process, so scoring many fixtures in one process exhausts unified GPU memory
+  (`kIOGPUCommandBufferCallbackErrorOutOfMemory`). `score-fixtures` therefore scores
+  **each fixture in its own subprocess** (`_score_fixture_isolated`) so the OS reclaims
+  the GPU context between fixtures, and **monitors** for the Metal out-of-memory
+  signatures on the child's stderr (`detect_gpu_pressure`) — a degraded render is
+  surfaced loudly, never hidden. Scores are unaffected (they come from chamfer/IoU/
+  topology, not pixels).
 
 ## Tests
 

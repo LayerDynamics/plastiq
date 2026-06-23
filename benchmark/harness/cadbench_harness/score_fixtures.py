@@ -27,6 +27,8 @@ from __future__ import annotations
 import argparse
 import json
 import shutil
+import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
@@ -76,44 +78,132 @@ def score_fixture(test_dir: Path, work: Path) -> dict[str, dict]:
     }
 
 
+# --- GPU-memory monitoring ------------------------------------------------
+#
+# Each candidate's shape phase renders a 120-frame turntable WebP (for the
+# report gallery) through VTK -> the macOS Metal backend. ``pl.close()`` frees
+# the VTK render window per frame, but on Apple Silicon the Metal command-buffer
+# pool is NOT reclaimed within a long-lived process: it grows until the GPU runs
+# out of unified memory. The driver then prints these async error lines to
+# stderr — VTK never raises on them, so the render silently corrupts and the
+# render window eventually becomes "not current" (RenderWindowUnavailable).
+# We detect exhaustion by scanning a scoring subprocess's stderr for them.
+GPU_OOM_SIGNATURES: tuple[str, ...] = (
+    "kIOGPUCommandBufferCallbackErrorOutOfMemory",
+    "Insufficient Memory",
+    "command buffer completion error",
+    "RenderWindowUnavailable",
+    "Render window is not current",
+)
+
+
+def detect_gpu_pressure(stderr_text: str) -> list[str]:
+    """Return the GPU-out-of-memory signatures present in *stderr_text* (empty
+    when the render ran clean). Used to flag a scoring run whose renders may be
+    degraded by Metal memory exhaustion."""
+    return [s for s in GPU_OOM_SIGNATURES if s in stderr_text]
+
+
+# A fixture scores several candidates, each doing alignment + a 120-frame
+# turntable render; ~40s is typical, so 15 min is generous slack before we call
+# the subprocess hung.
+FIXTURE_TIMEOUT_S = 900
+
+
+def _score_fixture_isolated(
+    test_dir: Path, timeout: float = FIXTURE_TIMEOUT_S,
+) -> dict[str, dict]:
+    """Score one fixture in a dedicated subprocess and return its results dict.
+
+    This is how we *account for* the GPU-memory leak: a fresh interpreter per
+    fixture means the OS tears down the entire VTK/Metal context — and every
+    byte of GPU memory the turntable renders accumulated — when the process
+    exits, so scoring many fixtures never exhausts the GPU. It is also how we
+    *monitor* it: the child's stderr is captured and scanned for
+    {@link GPU_OOM_SIGNATURES}; a non-zero exit (incl. a signal kill from a hard
+    OOM) and any pressure signature are surfaced loudly instead of crashing the
+    whole run with a cryptic VTK error.
+    """
+    with tempfile.TemporaryDirectory(prefix="cadbench_iso_") as tmp:
+        out_path = Path(tmp) / "result.json"
+        try:
+            proc = subprocess.run(
+                [sys.executable, "-m", "cadbench_harness.score_fixtures",
+                 str(test_dir), str(out_path)],
+                capture_output=True, text=True, timeout=timeout, check=False,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise RuntimeError(
+                f"scoring fixture {test_dir.name} did not finish within "
+                f"{timeout:.0f}s; the renderer likely deadlocked under GPU-memory "
+                f"pressure",
+            ) from exc
+
+        pressure = detect_gpu_pressure(proc.stderr or "")
+        if proc.returncode != 0 or not out_path.exists():
+            detail = (
+                f"; GPU-memory pressure detected ({', '.join(pressure)})"
+                if pressure else ""
+            )
+            raise RuntimeError(
+                f"scoring fixture {test_dir.name} failed in subprocess "
+                f"(exit={proc.returncode}){detail}\n"
+                f"--- stderr tail ---\n{(proc.stderr or '')[-2000:]}",
+            )
+        if pressure:
+            # Exited 0 but the GPU driver still reported memory exhaustion: the
+            # CAD Score is mesh-derived (chamfer / IoU / topology), not
+            # pixel-derived, so the score is still valid, but the report renders
+            # may be degraded — surface it rather than hide it.
+            print(
+                f"[gpu] fixture {test_dir.name}: GPU-memory pressure during render "
+                f"(scores valid, report renders may be degraded): "
+                f"{', '.join(pressure)}",
+                file=sys.stderr,
+            )
+        return json.loads(out_path.read_text())
+
+
 def evaluate_all() -> tuple[list[dict], bool]:
     """Score all bundled fixtures. Returns ``(rows, discriminates)``.
 
     ``rows`` is one dict per (fixture, candidate) with its CAD Score and status.
     ``discriminates`` is True iff, for every fixture, ``correct`` strictly
     outscores each ``broken_*`` — the property that makes the metric meaningful.
+
+    Each fixture is scored in its own subprocess ({@link _score_fixture_isolated})
+    so the VTK/Metal GPU context is reclaimed between fixtures; scoring all of
+    them in one process exhausts GPU memory on Apple Silicon.
     """
     rows: list[dict] = []
     discriminates = True
-    with tempfile.TemporaryDirectory(prefix="cadbench_fixtures_") as tmp:
-        tmp_root = Path(tmp)
-        for test_dir in jig_fixtures():
-            results = score_fixture(test_dir, tmp_root / test_dir.name)
-            correct_score = float(results["correct"].get("cad_score", 0.0))
-            for stem, data in sorted(results.items()):
-                score = float(data.get("cad_score", 0.0))
-                is_broken = stem.startswith("broken")
-                outranked = is_broken and score >= correct_score
-                if outranked:
-                    discriminates = False
-                rows.append(
-                    {
-                        "fixture": test_dir.name,
-                        "candidate": stem,
-                        "cad_score": round(score, 4),
-                        "status": data.get("status"),
-                        "interface": (data.get("interface_metrics") or {}).get(
-                            "score"
-                        ),
-                        "topology": (data.get("topology_metrics") or {}).get(
-                            "score"
-                        ),
-                        "shape": (data.get("gt_metrics") or {}).get(
-                            "shape_similarity_score"
-                        ),
-                        "broken_outranks_correct": outranked,
-                    }
-                )
+    for test_dir in jig_fixtures():
+        results = _score_fixture_isolated(test_dir)
+        correct_score = float(results["correct"].get("cad_score", 0.0))
+        for stem, data in sorted(results.items()):
+            score = float(data.get("cad_score", 0.0))
+            is_broken = stem.startswith("broken")
+            outranked = is_broken and score >= correct_score
+            if outranked:
+                discriminates = False
+            rows.append(
+                {
+                    "fixture": test_dir.name,
+                    "candidate": stem,
+                    "cad_score": round(score, 4),
+                    "status": data.get("status"),
+                    "interface": (data.get("interface_metrics") or {}).get(
+                        "score"
+                    ),
+                    "topology": (data.get("topology_metrics") or {}).get(
+                        "score"
+                    ),
+                    "shape": (data.get("gt_metrics") or {}).get(
+                        "shape_similarity_score"
+                    ),
+                    "broken_outranks_correct": outranked,
+                }
+            )
     return rows, discriminates
 
 
@@ -157,3 +247,23 @@ def _run(args: argparse.Namespace) -> int:
                else "FAILED to discriminate — a broken candidate tied/beat correct ✗")
         )
     return 0 if discriminates else 1
+
+
+def _score_one_worker(test_dir: Path, out_path: Path) -> None:
+    """Per-fixture subprocess body (see {@link _score_fixture_isolated}).
+
+    Scores one fixture in this fresh interpreter and writes the results dict to
+    *out_path* as JSON. An uncaught exception aborts with a non-zero exit and a
+    traceback on stderr; a hard GPU OOM kills this process with a signal — both
+    are detected by the parent. We write to a file (not stdout) so the parent's
+    JSON parse is immune to any stray stdout from the scorer.
+    """
+    with tempfile.TemporaryDirectory(prefix="cadbench_fx_") as tmp:
+        results = score_fixture(test_dir, Path(tmp))
+    out_path.write_text(json.dumps(results))
+
+
+if __name__ == "__main__":
+    # Worker mode: ``python -m cadbench_harness.score_fixtures <test_dir> <out_json>``.
+    # Invoked only by _score_fixture_isolated; not part of the public CLI.
+    _score_one_worker(Path(sys.argv[1]), Path(sys.argv[2]))

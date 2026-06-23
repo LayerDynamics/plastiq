@@ -12,7 +12,34 @@ from pathlib import Path
 import pytest
 
 from cadbench_harness.paths import jig_fixtures
-from cadbench_harness.score_fixtures import evaluate_all, score_fixture
+from cadbench_harness.score_fixtures import (
+    detect_gpu_pressure,
+    evaluate_all,
+    score_fixture,
+)
+
+
+def test_detect_gpu_pressure_flags_metal_oom_signatures() -> None:
+    """The monitor must recognise the Apple-Silicon Metal out-of-memory lines the
+    GPU driver prints to stderr during the turntable render — these are async
+    callbacks VTK never raises on, so stderr scanning is how we see exhaustion.
+    A clean render log must produce no signatures."""
+    oom_stderr = (
+        "[eval:phase] pid=72478 render turntable n=120 4.64s\n"
+        "2026-06-23 01:39:18.287 python[72478:6643104] GLDRendererMetal command "
+        "buffer completion error: Error Domain=MTLCommandBufferErrorDomain Code=8 "
+        '"Insufficient Memory (00000008:kIOGPUCommandBufferCallbackErrorOutOfMemory)"\n'
+    )
+    hits = detect_gpu_pressure(oom_stderr)
+    assert "kIOGPUCommandBufferCallbackErrorOutOfMemory" in hits
+    assert "command buffer completion error" in hits
+    assert "Insufficient Memory" in hits
+
+    clean_stderr = (
+        "[eval:phase] pid=72478 render turntable n=120 4.64s\n"
+        "[eval:phase] pid=72478 test_1 shape 5.09s\n"
+    )
+    assert detect_gpu_pressure(clean_stderr) == []
 
 
 def test_first_fixture_correct_outscores_broken() -> None:

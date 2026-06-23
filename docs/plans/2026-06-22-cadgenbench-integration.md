@@ -97,7 +97,10 @@ in the browser can run in Node/CI.
       `.gitignore` (`runs/`, `results/`, `*.zip`), `README.md`, `tests/`.
 - [x] **CB1.2 — `score_fixtures` proof.** `evaluate_result` over all four `jig_metric/test_*` fixtures →
       every `correct` = **1.000**, every `broken_*` strictly lower (interface axis discriminates).
-      **DISCRIMINATES ✓.** Robust against upstream-test `*_aligned.step` pollution.
+      **DISCRIMINATES ✓.** Robust against upstream-test `*_aligned.step` pollution. Each fixture is
+      scored in its own subprocess (`_score_fixture_isolated`) so the VTK→Metal turntable renders don't
+      exhaust unified GPU memory across fixtures on Apple Silicon; the child's stderr is monitored for
+      the Metal OOM signatures (`detect_gpu_pressure`). Full suite green: **24 passed** (incl. both slow).
 - [x] **CB1.3 — `sanity` gate.** `cadbench_harness sanity <step>` over `analyze_step`; reports
       valid/watertight/solids/volume/bbox; catches loader failures as invalid (never crashes). Tests green
       (`pytest benchmark/harness/tests -m "not slow"` → 5 passed).
