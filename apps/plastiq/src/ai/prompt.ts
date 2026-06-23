@@ -32,6 +32,12 @@ feature types: ${AUTHORABLE.join(", ")}.
   { "kind": "loop", "start": [x, y], "segments": [ { "kind": "line", "to": [x, y] }, ... ] },
   plus an optional data.plane. To cut a hole/pocket: a "box" (or other base), THEN a
   "sketch" whose profile is the opening, THEN a "cut" with params.depth = how deep.
+- COORDINATES: a "box" sits with its MINIMUM corner at the origin, so it spans
+  [0..dx] × [0..dy] × [0..dz] and its CENTRE is at [dx/2, dy/2]. A "sketch" defaults to
+  the XY plane (z = 0). So sketch a CENTRED feature at the box centre, NOT at [0, 0]
+  (that is a corner): e.g. a centred hole in a 60 × 40 plate sketches its circle at
+  [30, 20] with depth = the plate thickness. Sketching at [0, 0] cuts a notch out of a
+  corner — almost never what is wanted.
 - Expose meaningful dimensions as named params so the user can edit them afterward.
 
 EDITING: if the current document is provided in context, modify THAT document and call

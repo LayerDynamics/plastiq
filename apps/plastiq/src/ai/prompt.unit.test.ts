@@ -44,6 +44,13 @@ describe("R2.4 parametric system prompt", () => {
     expect(p).toMatch(/preceding "sketch"|before each of them|before the/i);
     expect(p).toContain("data.profile");
   });
+
+  it("teaches the box coordinate frame so centred features land in the centre", () => {
+    // The model placed a 'centred' hole at [0,0] (a corner) because it assumed a
+    // centred box; the prompt must state min-corner-at-origin + the centre formula.
+    expect(p).toMatch(/minimum corner at the origin/i);
+    expect(p).toContain("[dx/2, dy/2]");
+  });
 });
 
 describe("R2.4 creative system prompt", () => {
