@@ -259,8 +259,12 @@ a correct candidate scores **1.0**, a broken one strictly lower — the only tes
 local with zero code change. `SUBMIT.md` now carries a ready-to-send GT-access message and the self-owned
 mini-GT layout. **Full real-model loop proven:** authored a 60×40×8 GT via the kernel, generated a candidate
 with **Qwen2.5-7B (llama.cpp)**, and scored it **CAD Score 1.0** end-to-end — a real model, real geometry,
-real local score. Authoring GT for the real *benchmark* drawings is genuine CAD work (the user's), so no
-official-set numbers are claimed — only that the machinery is correct and proven on a self-owned part.
+real local score. A reusable `authorStep` helper (`headless/nodeBuild.ts`) builds a GT solid from a feature
+document (no model) — used to author a **plate + 10 mm hole** GT (box→sketch→cut); the local model's
+candidate (built it 10 mm thick vs the GT's 8 mm) scored **CAD Score 0.68**, the metric correctly giving
+partial credit for a real geometric error. So the gen→score loop is proven across a perfect part (1.0) and a
+flawed one (0.68). Authoring GT for the real *benchmark* drawings is genuine CAD work (the user's), so no
+official-set numbers are claimed — only that the machinery is correct and proven on self-owned parts.
 
 **Root cause:** `cadgenbench.common.paths.data_gt_dir` resolves GT only via `CADGENBENCH_DATA_GT_REPO`
 (HF read access + `HF_TOKEN`) or `CADGENBENCH_DATA_DIR/gt` — neither is satisfied (GT private, account not in

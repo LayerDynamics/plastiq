@@ -90,8 +90,21 @@ mamba run -n cadgenbench python -m cadbench_harness score myrun   # real CAD Sco
 
 This path is verified end-to-end (`tests/test_score_local_gt.py`): a correct
 candidate scores ~1.0 and a broken one strictly lower, against an authored GT.
-Authoring correct GT for a real drawing is genuine CAD work — start with a few
-simple fixtures (solve them in Plastiq, export `ground_truth.step`).
+
+**Author a GT solid with the kernel** (`authorStep` in
+`apps/plastiq/src/headless/nodeBuild.ts`) — build it from a feature document (SI
+metres), no model needed. E.g. a 60×40×8 plate with a centred 10 mm hole is
+`box → sketch(circle @ [0.03,0.02], r 0.005) → cut(depth 0.008)`. Real results
+with a local model (Qwen2.5-7B via llama.cpp) against authored GT:
+
+| part | candidate | CAD Score |
+|---|---|---|
+| 60×40×8 block | model built it exactly | **1.0** |
+| plate + 10 mm hole | model built 60×40×**10** + hole (thickness off) | **0.68** |
+
+The 0.68 is the metric working correctly — partial credit for a real geometric
+error. Authoring GT for a real *drawing* is genuine CAD work; start with a few
+simple fixtures.
 
 ## Notes
 

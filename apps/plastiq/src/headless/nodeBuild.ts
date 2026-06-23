@@ -193,6 +193,24 @@ export async function createHeadlessSession(
   };
 }
 
+/**
+ * Author a STEP string directly from a CadDocument via the kernel — no agent, no
+ * model. The document is in SI units (metres/radians), like the live store. Used to
+ * author self-owned **ground-truth** solids for local scoring (the CB6.3 mini-GT
+ * workflow), e.g. a plate with a hole: box → sketch(circle) → cut.
+ */
+export async function authorStep(doc: CadDocument): Promise<string> {
+  ensureNodeCjsGlobals();
+  const oc = await initOcct();
+  const solid = rebuildDocument(oc, doc);
+  if (!solid) throw new Error("document produced no geometry to export");
+  try {
+    return exportStep(oc, solid);
+  } finally {
+    solid.delete();
+  }
+}
+
 /** Build an `importStep` seed document from STEP text — the editing-task starting
  * solid, loaded the same way the app's reconstruct path does (one opaque body the
  * agent then modifies by adding features). */

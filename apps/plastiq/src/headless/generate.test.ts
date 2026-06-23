@@ -12,7 +12,8 @@ import type {
   StreamEvent,
 } from "../ai/providers/types.js";
 import { generatePart } from "./generate.js";
-import { seedFromStep, createHeadlessSession } from "./nodeBuild.js";
+import { authorStep, seedFromStep, createHeadlessSession } from "./nodeBuild.js";
+import type { CadDocument } from "../store/types.js";
 
 /** A deterministic provider: turn 1 calls build_part with `doc`, turn 2 finalizes. */
 function scriptedProvider(doc: unknown, finalMessage = "Built it."): ChatProvider {
@@ -150,6 +151,32 @@ describe("headless generatePart", () => {
     expect(result.caption).toContain("cube");
     expect(result.hasGeometry).toBe(true);
     expect(result.step).toContain("ISO-10303");
+  });
+
+  it("authorStep builds a plate-with-hole (box→sketch→cut) into a valid solid", async () => {
+    // The self-GT authoring path (CB6.3): a kernel-only build, no agent/model.
+    const plateWithHole: CadDocument = {
+      features: [
+        { id: "plate", type: "box", params: { dx: 0.06, dy: 0.04, dz: 0.008 } },
+        { id: "sk", type: "sketch", data: { profile: { kind: "circle", center: [0.03, 0.02], radius: 0.005 } } },
+        { id: "hole", type: "cut", params: { depth: 0.008 } },
+      ],
+      params: {},
+    };
+    const step = await authorStep(plateWithHole);
+    expect(step).toContain("ISO-10303");
+
+    const oc = await initOcct();
+    const solid = importStep(oc, step);
+    try {
+      const fullBox = 0.06 * 0.04 * 0.008; // 1.92e-5 m³
+      const hole = Math.PI * 0.005 ** 2 * 0.008; // ~6.28e-7 m³
+      expect(solid.volume()).toBeGreaterThan(0);
+      expect(solid.volume()).toBeLessThan(fullBox); // the cut removed material
+      expect(solid.volume()).toBeCloseTo(fullBox - hole, 7);
+    } finally {
+      solid.delete();
+    }
   });
 
   it("seedFromStep yields an importStep document a session can export", async () => {
