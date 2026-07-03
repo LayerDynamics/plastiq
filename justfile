@@ -64,3 +64,15 @@ bench-run name model:
 # Harness unit tests (offline).
 bench-test:
     mamba run -n cadgenbench python -m pytest benchmark/harness/tests -q -m "not slow"
+
+# --- Self-host (Docker) --------------------------------------------------------
+# Build + serve the production app as a single static-nginx container. Full
+# guide (bare-metal path, headers/compression, optional services): docs/deploy.md.
+
+# Build the self-host image (repo-root context, multi-stage pnpm build → nginx).
+app-docker-build:
+    docker build -f deploy/plastiq-web/Dockerfile -t plastiq-web "{{justfile_directory()}}"
+
+# Run the self-host image on http://localhost:8080.
+app-docker-run:
+    docker run --rm -p 8080:80 plastiq-web

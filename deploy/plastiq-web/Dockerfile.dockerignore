@@ -1,0 +1,29 @@
+# Context filter for deploy/plastiq-web/Dockerfile (BuildKit reads the
+# `<Dockerfile>.dockerignore` next to the Dockerfile, falling back to the
+# context root's .dockerignore — the repo has none).
+#
+# Keep: root manifests (package.json, pnpm-lock.yaml, pnpm-workspace.yaml,
+# tsconfig.base.json), apps/* and packages/* sources incl. vendored wasm.
+# apps/desktop must stay in the context: it is a lockfile importer, and
+# `pnpm install --frozen-lockfile` fails if a workspace package is missing.
+
+# Dependency + build output (recreated inside the image)
+**/node_modules
+apps/plastiq/dist
+apps/desktop/src-tauri/target
+
+# VCS + local mounts/artifacts that are irrelevant to the JS build
+.git
+local
+coverage
+test-results
+
+# Not part of the web build
+benchmark
+services
+docs
+e2e
+ref
+
+# OS noise
+**/.DS_Store
