@@ -5,9 +5,10 @@
 // Built directly on OCCT (BRepMesh_IncrementalMesh + BRep_Tool.Triangulation).
 // All OCCT temporaries are freed; the only retained data is plain JS arrays.
 
-import type { TopoDS_Edge, TopoDS_Shape } from "opencascade.js";
+import type { TopoDS_Edge, TopoDS_Face, TopoDS_Shape } from "opencascade.js";
 
 import type { Occt } from "../oc/init.js";
+import type { Vec3 } from "../math/index.js";
 import type { Solid } from "../solid/solid.js";
 import {
   MESH_PURPOSE,
@@ -28,6 +29,25 @@ import type {
 
 const DEFAULT_DEFLECTION = 1e-4; // 0.1 mm
 const DEFAULT_ANGULAR = 0.5;
+
+/**
+ * True for the ONE documented skippable per-edge failure: an adjacent face with
+ * no triangulation (`faceNormal` throws this after such a face was dropped —
+ * and counted — in the face pass). Anything else is a real error and must
+ * surface, not be swallowed.
+ */
+function isMissingTriangulationError(err: unknown): boolean {
+  return err instanceof Error && err.message.includes("no triangulation");
+}
+
+/** `faceCentroid` on an adjacent face, freeing the face handle even on a throw. */
+function ownedFaceCentroid(oc: Occt, face: TopoDS_Face): Vec3 {
+  try {
+    return faceCentroid(oc, face);
+  } finally {
+    face.delete();
+  }
+}
 
 /** Discretize an edge into a flat world-space polyline `[x,y,z, …]`. */
 function discretizeEdge(oc: Occt, edge: TopoDS_Edge, deflection: number): number[] {
@@ -148,50 +168,58 @@ export function tessellateTagged(
 
   // --- Edges: world polylines + two adjacent-face normals (EdgeRef signature).
   const edges: TaggedEdge[] = [];
+  let droppedEdges = 0;
   const edgeFaceMap = new oc.TopTools_IndexedDataMapOfShapeListOfShape_1();
-  oc.TopExp.MapShapesAndAncestors(shape, S.TopAbs_EDGE, S.TopAbs_FACE, edgeFaceMap);
-  const edgeCount = edgeFaceMap.Extent();
-  for (let i = 1; i <= edgeCount; i++) {
-    const edge = oc.TopoDS.Edge_1(edgeFaceMap.FindKey(i));
-    const faceList = edgeFaceMap.FindFromIndex(i);
-    try {
-      // adjacentFaceNormals reads the adjacent faces' triangulations; if one of
-      // them was dropped above (no triangulation), faceNormal throws. Skip such an
-      // edge — without both adjacent normals it has no persistent signature, and
-      // it borders the already-counted missing face. Fabricating a normal here is
-      // exactly the silent-corruption this avoids.
-      const [na, nb] = adjacentFaceNormals(oc, faceList);
-      // The two adjacent faces' ids, same order as [na, nb] (First/Last, matching
-      // adjacentFaceNormals). Resolved by centroid, which is byte-identical to the face group's.
-      const fA = oc.TopoDS.Face_1(faceList.First_1());
-      const cA = faceCentroid(oc, fA);
-      fA.delete();
-      let cB = cA;
-      if (faceList.Size() >= 2) {
-        const fB = oc.TopoDS.Face_1(faceList.Last_1());
-        cB = faceCentroid(oc, fB);
-        fB.delete();
+  try {
+    oc.TopExp.MapShapesAndAncestors(shape, S.TopAbs_EDGE, S.TopAbs_FACE, edgeFaceMap);
+    const edgeCount = edgeFaceMap.Extent();
+    for (let i = 1; i <= edgeCount; i++) {
+      const edge = oc.TopoDS.Edge_1(edgeFaceMap.FindKey(i));
+      try {
+        const faceList = edgeFaceMap.FindFromIndex(i);
+        // adjacentFaceNormals reads the adjacent faces' triangulations; if one of
+        // them was dropped above (no triangulation), faceNormal throws. Skip such an
+        // edge — without both adjacent normals it has no persistent signature, and
+        // it borders the already-counted missing face. Fabricating a normal here is
+        // exactly the silent-corruption this avoids.
+        const [na, nb] = adjacentFaceNormals(oc, faceList);
+        // The two adjacent faces' ids, same order as [na, nb] (First/Last, matching
+        // adjacentFaceNormals). Resolved by centroid, which is byte-identical to the face group's.
+        const cA = ownedFaceCentroid(oc, oc.TopoDS.Face_1(faceList.First_1()));
+        const cB =
+          faceList.Size() >= 2 ? ownedFaceCentroid(oc, oc.TopoDS.Face_1(faceList.Last_1())) : cA;
+        const idA = centroidToFaceId.get(cA.join(",")) ?? -1;
+        const idB = centroidToFaceId.get(cB.join(",")) ?? -1;
+        const positions = discretizeEdge(oc, edge, deflection);
+        const mid = edgeMidpoint(oc, edge);
+        edges.push({
+          // Compact id: a skipped edge leaves no gap, so `edges[e.edgeId] === e`
+          // always holds — matching faceId, which also renumbers past dropped
+          // faces. Safe for selection: resolve/select re-match by persistent
+          // signature (faceNormals/midpoint), never by edgeId, and the app keys
+          // its transient pick refs by this same field on this same mesh.
+          edgeId: edges.length,
+          positions,
+          faceNormals: [
+            [na[0], na[1], na[2]],
+            [nb[0], nb[1], nb[2]],
+          ],
+          faceIds: [idA, idB],
+          midpoint: [mid[0], mid[1], mid[2]],
+        });
+      } catch (err) {
+        // ONLY the documented case is skippable: an edge bordering a face that was
+        // dropped above for having no triangulation (see droppedFaces). Any other
+        // failure is a real bug — re-throw instead of silently thinning the mesh.
+        if (!isMissingTriangulationError(err)) throw err;
+        droppedEdges++;
+      } finally {
+        edge.delete();
       }
-      const idA = centroidToFaceId.get(cA.join(",")) ?? -1;
-      const idB = centroidToFaceId.get(cB.join(",")) ?? -1;
-      const positions = discretizeEdge(oc, edge, deflection);
-      const mid = edgeMidpoint(oc, edge);
-      edges.push({
-        edgeId: i - 1,
-        positions,
-        faceNormals: [
-          [na[0], na[1], na[2]],
-          [nb[0], nb[1], nb[2]],
-        ],
-        faceIds: [idA, idB],
-        midpoint: [mid[0], mid[1], mid[2]],
-      });
-    } catch {
-      // edge omitted (adjacent face has no triangulation) — see droppedFaces.
     }
-    edge.delete();
+  } finally {
+    edgeFaceMap.delete();
   }
-  edgeFaceMap.delete();
 
   // --- Vertices: unique B-rep corners.
   const vertexPoints: VertexPoint[] = [];
@@ -207,5 +235,5 @@ export function tessellateTagged(
   }
   vertMap.delete();
 
-  return { vertices, indices, faceGroups, edges, vertexPoints, droppedFaces };
+  return { vertices, indices, faceGroups, edges, vertexPoints, droppedFaces, droppedEdges };
 }

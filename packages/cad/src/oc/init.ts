@@ -60,7 +60,14 @@ async function initNode(): Promise<Occt> {
  */
 export function initOcct(opts?: { wasmUrl?: string }): Promise<Occt> {
   if (!engine) {
-    engine = isNode() ? initNode() : initBrowser(opts?.wasmUrl);
+    engine = (isNode() ? initNode() : initBrowser(opts?.wasmUrl)).catch((err: unknown) => {
+      // Don't poison the memo: a transient load failure (a network blip on the
+      // wasm fetch, a momentary OOM) must not make every future call re-await
+      // the same rejected promise — clear it so a later call can retry. Same
+      // pattern as lower/decompose.ts initDecomposer.
+      engine = null;
+      throw err;
+    });
   }
   return engine;
 }

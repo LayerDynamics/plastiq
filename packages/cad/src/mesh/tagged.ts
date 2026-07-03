@@ -89,6 +89,14 @@ export interface TaggedMesh {
    * treat the shorter mesh as the full geometry.
    */
   readonly droppedFaces: number;
+  /**
+   * Number of B-rep edges OMITTED from `edges` because an adjacent face had no
+   * triangulation (each such face is already counted in `droppedFaces`, so
+   * `droppedEdges > 0` implies `droppedFaces > 0`). The emitted edges keep
+   * compact consecutive `edgeId`s (`edges[e.edgeId] === e`) — a skipped edge
+   * leaves no gap in the numbering.
+   */
+  readonly droppedEdges: number;
 }
 
 /** Tessellation quality knobs. */
