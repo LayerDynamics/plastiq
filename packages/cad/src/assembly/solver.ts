@@ -262,7 +262,7 @@ export function solveMates(components: ComponentPose[], mates: Mate[]): MateSolv
     if (Math.sqrt(cost0) < 1e-10) break;
 
     const J = jacobian(poses, free, mates, r0);
-    // Normal equations: (JᵀJ + λ·diag(JᵀJ)) Δ = −Jᵀr
+    // Normal equations: (JᵀJ + λ·s·I) Δ = −Jᵀr
     const JtJ: number[][] = Array.from({ length: n }, () => new Array(n).fill(0));
     const Jtr = new Array(n).fill(0);
     for (let i = 0; i < r0.length; i++) {
@@ -272,7 +272,20 @@ export function solveMates(components: ComponentPose[], mates: Mate[]): MateSolv
         for (let b = 0; b < n; b++) JtJ[a]![b]! += row[a]! * row[b]!;
       }
     }
-    const A = JtJ.map((row, i) => row.map((v, j) => (i === j ? v * (1 + lambda) : v)));
+    // ADDITIVE Levenberg damping, scaled by the largest JᵀJ diagonal entry so λ
+    // keeps its dimensionless up/down semantics. Multiplicative Marquardt damping
+    // (diag·(1+λ)) leaves any parameter direction the mates don't constrain
+    // (diag ≈ 0) undamped; solveLinear then pivots on numeric-Jacobian noise and
+    // emits enormous junk components in those null directions, which the cost
+    // check can't see (they don't change the residual) — poses teleported by
+    // ~1e7 m. Additive λ·s·I damps null directions to a zero step instead.
+    // s falls back to 1 when the whole diagonal is ~0 (e.g. the exactly-parallel
+    // perpendicular saddle, where the true gradient vanishes and diag is pure
+    // forward-difference noise ~1e-15) so the step stays bounded there too.
+    let maxDiag = 0;
+    for (let a = 0; a < n; a++) maxDiag = Math.max(maxDiag, JtJ[a]![a]!);
+    const scale = maxDiag > 1e-12 ? maxDiag : 1;
+    const A = JtJ.map((row, i) => row.map((v, j) => (i === j ? v + lambda * scale : v)));
     const g = Jtr.map((v) => -v);
     const delta = solveLinear(A, g);
 
