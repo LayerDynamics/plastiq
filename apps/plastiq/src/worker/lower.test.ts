@@ -39,6 +39,12 @@ describe("lowerAssembly — assembly → SimManifest (SPEC-5 M4.5)", () => {
     expect(manifest.bodies[1]!.com[0]).toBeCloseTo(mm(90), 6);
     // Each body carries a positive mass (volume × steel density).
     expect(manifest.bodies[0]!.mass).toBeGreaterThan(0);
+    // i0 is grounded (the editor's "Fix" toggle) → it lowers to a static body;
+    // i1 is free → no fixed flag, so it stays dynamic.
+    expect(manifest.bodies[0]!.fixed).toBe(true);
+    expect(manifest.bodies[1]!.fixed).toBeUndefined();
+    // A grounded body still carries its real mass (backends key static off `fixed`).
+    expect(manifest.bodies[0]!.mass).toBeCloseTo(manifest.bodies[1]!.mass, 9);
   });
 
   it("lowers a revolute joint to a hinge constraint between the two bodies", () => {

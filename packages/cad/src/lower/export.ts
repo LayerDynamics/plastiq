@@ -1,7 +1,9 @@
 // exportForSim — walk a component hierarchy and emit a SimManifest. Each body's
 // world centre-of-mass pose is composed down through its component placements;
 // its collider is the part's convex shape — one convex hull for a convex part,
-// or several convex pieces (convex decomposition) for a concave one.
+// or several convex pieces (convex decomposition) for a concave one. A component
+// marked `fixed` grounds its whole subtree: those bodies emit `fixed: true` and
+// spawn static.
 
 import type { Occt } from "../oc/init.js";
 import { quatMul, quatRotate, vAdd, type Quat, type Vec3 } from "../assembly/quat.js";
@@ -42,8 +44,11 @@ export function exportForSim(
 ): SimManifest {
   const bodies: ManifestBody[] = [];
 
-  const walk = (comp: Component, parent: Placement): void => {
+  const walk = (comp: Component, parent: Placement, parentFixed: boolean): void => {
     const here = comp.placement ? compose(parent, comp.placement) : parent;
+    // Grounding composes down the tree like the placement does: a fixed
+    // ancestor anchors every body in its subtree.
+    const fixed = parentFixed || comp.fixed;
     for (const body of comp.bodies) {
       const solid = body.geometry;
       if (!solid) continue;
@@ -70,11 +75,14 @@ export function exportForSim(
         com: worldCom,
         orientation: here.orientation,
         colliders,
+        // A grounded body spawns static; mass stays the real volume × density
+        // (backends key static purely off `fixed`).
+        ...(fixed ? { fixed: true } : {}),
       });
     }
-    for (const child of comp.children) walk(child, here);
+    for (const child of comp.children) walk(child, here, fixed);
   };
-  walk(root, IDENTITY_PLACEMENT);
+  walk(root, IDENTITY_PLACEMENT, false);
 
   return {
     version: 1,

@@ -1,7 +1,8 @@
 // Assembly → SimManifest lowering (SPEC-5 M4.5, FR-35). Maps the editor's
 // AssemblyModel onto the @plastiq/cad lowering path (Component hierarchy →
 // exportForSim + lowerJoints). Every instance becomes one body posed into the
-// COM frame; lowerable joints (revolute → hinge, fixed → fixed) become
+// COM frame (a grounded instance — the editor's "Fix" toggle — becomes a static
+// body); lowerable joints (revolute → hinge, fixed → fixed) become
 // constraints; non-lowerable kinds (prismatic/cylindrical/ball/planar) are
 // skipped with a logged note (no physics-layer equivalent). Runs in the geometry
 // worker (needs OCCT).
@@ -58,6 +59,9 @@ export function lowerAssembly(
       position: [...inst.pose.position],
       orientation: [...inst.pose.orientation],
     };
+    // The editor's "Fix (ground)" toggle → a static sim body (ManifestBody.fixed),
+    // so grounded assemblies don't free-fall under gravity.
+    comp.fixed = inst.fixed === true;
     const body = makeBody(inst.id, DEFAULT_MATERIAL);
     body.geometry = solid; // shared geometry; exportForSim reads it read-only
     comp.addBody(body);
