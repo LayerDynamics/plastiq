@@ -5,7 +5,7 @@
 // dimensions (M3.5) render into this same SVG. SVG (not three.js) gives crisp
 // text and trivial hit-testing for selectable glyphs.
 
-import { useEffect, useRef, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { useSketchStore, sketchId, type SketchTool } from "./sketchStore.js";
 import { circumcircle, type SketchModel } from "./model.js";
 import {
@@ -38,7 +38,17 @@ import {
   type View2D,
 } from "./transform2d.js";
 
-function GridAndAxes({ view, w, h }: { view: View2D; w: number; h: number }): React.JSX.Element {
+/** Memoised (perf): the grid depends only on the view transform and the viewport
+ * size, so a drag-solve tick (model change) must not rebuild its line array. */
+const GridAndAxes = memo(function GridAndAxes({
+  view,
+  w,
+  h,
+}: {
+  view: View2D;
+  w: number;
+  h: number;
+}): React.JSX.Element {
   const step = gridStep(view.scale);
   const lines: React.JSX.Element[] = [];
   // World bounds of the viewport corners.
@@ -90,7 +100,15 @@ function GridAndAxes({ view, w, h }: { view: View2D; w: number; h: number }): Re
       <circle cx={o.x} cy={o.y} r={4} fill="#ffd34a" />
     </g>
   );
-}
+},
+// The view object is re-created by pan/zoom; compare its fields so an unrelated
+// re-render with an equivalent view still skips the grid rebuild.
+(prev, next) =>
+  prev.w === next.w &&
+  prev.h === next.h &&
+  prev.view.scale === next.view.scale &&
+  prev.view.panX === next.view.panX &&
+  prev.view.panY === next.view.panY);
 
 /** Three-state solver colour (FR-20): under = blue, well = green, over = red. */
 export function verdictColor(verdict: string | undefined): string {
@@ -126,8 +144,10 @@ function arcPolyline(a: Pt, through: Pt, b: Pt): string {
   return pts.join(" ");
 }
 
-/** The drawn sketch entities (lines, arcs, circles, points) in screen space. */
-function SketchGeometry({
+/** The drawn sketch entities (lines, arcs, circles, points) in screen space.
+ * Memoised (perf, shallow props): the store only replaces `model` / `selection`
+ * when they actually change, so a hover-only tick skips the whole rebuild. */
+const SketchGeometry = memo(function SketchGeometry({
   model,
   view,
   selection,
@@ -232,7 +252,7 @@ function SketchGeometry({
       })}
     </g>
   );
-}
+});
 
 const MM = 1000;
 const DEG = 180 / Math.PI;
@@ -290,8 +310,10 @@ function DimensionEditor({
 }
 
 /** Selectable, deletable constraint glyphs (FR-18/FR-19). Click removes; a valued
- * (dimension) glyph shows its value and double-click edits it. */
-function ConstraintGlyphs({
+ * (dimension) glyph shows its value and double-click edits it.
+ * Memoised (perf, shallow props): the callbacks are stable store actions, so a
+ * hover-only tick skips re-walking every constraint. */
+const ConstraintGlyphs = memo(function ConstraintGlyphs({
   model,
   view,
   onDelete,
@@ -407,7 +429,7 @@ function ConstraintGlyphs({
       })}
     </g>
   );
-}
+});
 
 const TOOLS: { tool: SketchTool; label: string }[] = [
   { tool: "select", label: "Select" },
@@ -594,7 +616,9 @@ export function Sketcher(): React.JSX.Element | null {
   // Finish (FR-21): commit the sketch via the shared helper (solve → derive the
   // closed profile → persist model+profile+plane → exit), used identically by the
   // ribbon / context-menu "Finish sketch" so the surfaces can't diverge.
-  const profileReady = extractProfile(model) !== null;
+  // Memoised (perf): profile extraction walks every entity, so run it only when
+  // the model actually changes — not on every hover/preview re-render.
+  const profileReady = useMemo(() => extractProfile(model) !== null, [model]);
 
   const hostRef = useRef<HTMLDivElement>(null);
   const [size, setSize] = useState({ w: 800, h: 600 });
@@ -616,6 +640,16 @@ export function Sketcher(): React.JSX.Element | null {
   const dragDraw = useRef<{ px: Px; snap: Snap } | null>(null);
   /** Live drag-draw rubber-band (press → cursor) for the preview overlay. */
   const [dragPreview, setDragPreview] = useState<{ from: Px; to: Px } | null>(null);
+  /** rAF-coalesced point-drag (perf): pointermove only records the latest pointer
+   * here; at most ONE movePoint+solve runs per animation frame (with that latest
+   * position), and pointerup flushes any unapplied position synchronously, so the
+   * end state is identical to solving on every move. */
+  const dragSolveFrame = useRef<number | null>(null);
+  const dragSolveLatest = useRef<{ id: string; u: number; v: number } | null>(null);
+  /** rAF-coalesced hover preview (perf): snap/inference (inferAt) runs at most
+   * once per animation frame with the latest pointer, not on every pointermove. */
+  const hoverFrame = useRef<number | null>(null);
+  const hoverLatest = useRef<Px | null>(null);
   const baseColor = verdictColor(result?.verdict);
 
   // The world point the in-progress gesture started from (rubber-band anchor).
@@ -698,6 +732,83 @@ export function Sketcher(): React.JSX.Element | null {
         : null;
     return { snap, hint };
   };
+  // Latest-render bridge for the rAF callbacks (same pattern as startDraftRef): a
+  // frame scheduled during one render must infer with the freshest model/view/tool.
+  const inferAtRef = useRef(inferAt);
+  inferAtRef.current = inferAt;
+
+  // --- rAF coalescing (perf; semantics-preserving) ---
+  // Dragging a point re-solves the whole sketch; hovering re-runs snap inference.
+  // Doing either on EVERY pointermove floods the wasm solver / hit-testing at the
+  // pointer's event rate (often 120+ Hz). Coalesce both to at most once per
+  // animation frame, always with the LATEST pointer; pointerup flushes the drag
+  // so the committed end state is byte-identical to the unthrottled path.
+  const applyDragSolve = (): void => {
+    const latest = dragSolveLatest.current;
+    dragSolveLatest.current = null;
+    if (!latest) return;
+    movePoint(latest.id, latest.u, latest.v);
+    solve();
+  };
+  const scheduleDragSolve = (pid: string, u: number, v: number): void => {
+    dragSolveLatest.current = { id: pid, u, v };
+    if (dragSolveFrame.current != null) return;
+    dragSolveFrame.current = requestAnimationFrame(() => {
+      dragSolveFrame.current = null;
+      applyDragSolve();
+    });
+  };
+  /** Cancel the pending frame and apply the latest unapplied drag position NOW
+   * (pointerup): the final solve is authoritative. No-op when nothing is pending. */
+  const flushDragSolve = (): void => {
+    if (dragSolveFrame.current != null) {
+      cancelAnimationFrame(dragSolveFrame.current);
+      dragSolveFrame.current = null;
+    }
+    applyDragSolve();
+  };
+  const scheduleHover = (p: Px): void => {
+    hoverLatest.current = p;
+    if (hoverFrame.current != null) return;
+    hoverFrame.current = requestAnimationFrame(() => {
+      hoverFrame.current = null;
+      const px = hoverLatest.current;
+      hoverLatest.current = null;
+      if (!px) return;
+      // A drag-draw in progress also rubber-bands from the press to the cursor.
+      const draw = dragDraw.current;
+      if (draw) setDragPreview({ from: draw.px, to: px });
+      setHover({ px, ...inferAtRef.current(px) });
+    });
+  };
+  /** Drop any coalesced hover so a stale frame can't overwrite a synchronous
+   * setHover (pointerup) or a cleared one (pointerleave). */
+  const cancelHover = (): void => {
+    if (hoverFrame.current != null) {
+      cancelAnimationFrame(hoverFrame.current);
+      hoverFrame.current = null;
+    }
+    hoverLatest.current = null;
+  };
+
+  // Leaving the sketch (or unmounting) drops any coalesced frame — a late frame
+  // must not solve against a reset model.
+  useEffect(() => {
+    if (active) return;
+    if (dragSolveFrame.current != null) cancelAnimationFrame(dragSolveFrame.current);
+    dragSolveFrame.current = null;
+    dragSolveLatest.current = null;
+    if (hoverFrame.current != null) cancelAnimationFrame(hoverFrame.current);
+    hoverFrame.current = null;
+    hoverLatest.current = null;
+  }, [active]);
+  useEffect(
+    () => () => {
+      if (dragSolveFrame.current != null) cancelAnimationFrame(dragSolveFrame.current);
+      if (hoverFrame.current != null) cancelAnimationFrame(hoverFrame.current);
+    },
+    [],
+  );
 
   // Track the host size; centre the view the first time the sketch opens.
   useEffect(() => {
@@ -932,18 +1043,23 @@ export function Sketcher(): React.JSX.Element | null {
               Conflicts — click to remove
             </div>
             <ul className="max-h-32 space-y-0.5 overflow-auto">
-              {model.constraints.map((c) => (
-                <li key={c.id}>
-                  <button
-                    type="button"
-                    data-testid="conflict-item"
-                    onClick={() => removeConstraint(c.id)}
-                    className="w-full rounded px-1 text-left text-[#ff9b9b] hover:bg-[#2a1717]"
-                  >
-                    {c.kind}
-                  </button>
-                </li>
-              ))}
+              {/* Driven (reference) dimensions add no solver equation (they are
+                  skipped by toSolverInput), so they can never be the conflict —
+                  filter them out, matching how the glyphs treat them. */}
+              {model.constraints
+                .filter((c) => !("driven" in c && c.driven === true))
+                .map((c) => (
+                  <li key={c.id}>
+                    <button
+                      type="button"
+                      data-testid="conflict-item"
+                      onClick={() => removeConstraint(c.id)}
+                      className="w-full rounded px-1 text-left text-[#ff9b9b] hover:bg-[#2a1717]"
+                    >
+                      {c.kind}
+                    </button>
+                  </li>
+                ))}
             </ul>
           </div>
         )}
@@ -1006,20 +1122,20 @@ export function Sketcher(): React.JSX.Element | null {
         }}
         onPointerMove={(e) => {
           const p = rectPx(e);
-          // Dragging a point: move it and re-solve live (under-constrained DOF).
+          // Dragging a point: record the latest position; the rAF coalescer moves
+          // it and re-solves live (under-constrained DOF) at most once per frame.
           if (dragPoint.current) {
             moved.current = true;
             const w = toWorld(view, p);
-            movePoint(dragPoint.current, w.u, w.v);
-            solve();
+            scheduleDragSolve(dragPoint.current, w.u, w.v);
             return;
           }
-          // A drag-draw in progress: rubber-band from the press to the cursor.
+          // A drag-draw in progress: rubber-band from the press to the cursor
+          // (coalesced — the frame callback also draws the preview).
           if (dragDraw.current) {
             if (moved.current || Math.hypot(p.x - dragDraw.current.px.x, p.y - dragDraw.current.px.y) >= 3) {
               moved.current = true;
-              setDragPreview({ from: dragDraw.current.px, to: p });
-              setHover({ px: p, ...inferAt(p) });
+              scheduleHover(p);
             }
             return;
           }
@@ -1030,10 +1146,14 @@ export function Sketcher(): React.JSX.Element | null {
             pan.current = p;
             return;
           }
-          // Hovering in a drawing tool: live snap + inference preview (FR-17).
-          if (tool !== "select") setHover({ px: p, ...inferAt(p) });
+          // Hovering in a drawing tool: live snap + inference preview (FR-17),
+          // coalesced to one inferAt per animation frame.
+          if (tool !== "select") scheduleHover(p);
         }}
-        onPointerLeave={() => setHover(null)}
+        onPointerLeave={() => {
+          cancelHover();
+          setHover(null);
+        }}
         onPointerUp={(e) => {
           if (e.button !== 0 && e.button !== 1) return;
           const wasMove = moved.current;
@@ -1045,6 +1165,11 @@ export function Sketcher(): React.JSX.Element | null {
           dragPoint.current = null;
           dragDraw.current = null;
           setDragPreview(null);
+          // Coalesced-work handoff: drop any stale hover frame (the paths below
+          // set hover synchronously from the release point) and run the final
+          // authoritative solve with the latest drag position.
+          cancelHover();
+          flushDragSolve();
           // Completed drag-draw: press = first click, release = second click.
           if (draw && wasMove) {
             clickAt(draw.snap.u, draw.snap.v, { reusePointId: draw.snap.pointId });
