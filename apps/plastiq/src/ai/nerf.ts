@@ -10,6 +10,7 @@
 
 import { trainNerf, type NerfOptions, type NerfReport, type NerfTrainInput } from "@plastiq/nerf";
 
+import { useAiStore } from "./aiStore.js";
 import type { MeshDoc } from "../store/types.js";
 
 /** Wrap a NeRF result GLB (already base64) as a mesh document. `mode: "photos3d"` records that this
@@ -25,14 +26,19 @@ export interface CaptureFromPhotosDeps {
 
 /** Train a surface from posed photos and persist it as a mesh project. Returns the new mesh doc id,
  * the doc, and the training report — the caller can then open it so the "Convert to CAD" path
- * appears. Mirrors the createMesh tool's "produce a MeshDoc → persist" shape. */
+ * appears. Mirrors the createMesh tool's "produce a MeshDoc → persist" shape.
+ *
+ * Auth (SPEC-11 §5): a caller-supplied `opts.apiKey` wins; otherwise the persisted `nerfApiKey`
+ * setting is threaded into `trainNerf` (sent as `Authorization: Bearer <key>` on every request),
+ * matching how the caller sources `nerfBaseURL` from the same settings. */
 export async function captureFromPhotos(
   input: NerfTrainInput,
   deps: CaptureFromPhotosDeps,
   opts: NerfOptions = {},
   name = "Captured mesh",
 ): Promise<{ meshDocId: string; doc: MeshDoc; report: NerfReport }> {
-  const result = await trainNerf(input, opts);
+  const apiKey = opts.apiKey ?? useAiStore.getState().settings?.nerfApiKey;
+  const result = await trainNerf(input, { ...opts, ...(apiKey ? { apiKey } : {}) });
   const doc = nerfResultToMeshDoc(result.glb, name);
   const meshDocId = await deps.persist(doc);
   return { meshDocId, doc, report: result.report };

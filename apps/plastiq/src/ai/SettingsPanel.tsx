@@ -4,7 +4,8 @@
 // preset (Anthropic / local Ollama / OpenAI-compatible), choose a model from the curated
 // catalog (Appendix A) OR type a free-text override, set the base URL (also the hosted-proxy
 // seam — FR-5), the BYO API key, the creative mesh-gen (fal) key + proxy URL, and the
-// self-hosted reconstruction-service URL. The tool-capability preflight warning (FR-5b) is
+// self-hosted reconstruction / NeRF service URLs (+ the optional NeRF API key for a
+// NERF_API_KEY-protected deployment). The tool-capability preflight warning (FR-5b) is
 // SURFACED here so a non-tool model isn't silently accepted. Persists via the aiStore.
 
 import { useMemo, useState } from "react";
@@ -53,6 +54,7 @@ export function SettingsPanel(props: { onClose?: () => void }): React.JSX.Elemen
   const [falKey, setFalKey] = useState(settings?.apiKeys["fal"] ?? "");
   const [reconstructBaseURL, setReconstructBaseURL] = useState(settings?.reconstructBaseURL ?? "");
   const [nerfBaseURL, setNerfBaseURL] = useState(settings?.nerfBaseURL ?? "");
+  const [nerfApiKey, setNerfApiKey] = useState(settings?.nerfApiKey ?? "");
   const [meshGenBaseURL, setMeshGenBaseURL] = useState(settings?.meshGenBaseURL ?? "");
   const [saved, setSaved] = useState(false);
 
@@ -86,6 +88,7 @@ export function SettingsPanel(props: { onClose?: () => void }): React.JSX.Elemen
       ...(baseURL.trim() ? { baseURL: baseURL.trim() } : {}),
       ...(reconstructBaseURL.trim() ? { reconstructBaseURL: reconstructBaseURL.trim() } : {}),
       ...(nerfBaseURL.trim() ? { nerfBaseURL: nerfBaseURL.trim() } : {}),
+      ...(nerfApiKey.trim() ? { nerfApiKey: nerfApiKey.trim() } : {}),
       ...(meshGenBaseURL.trim() ? { meshGenBaseURL: meshGenBaseURL.trim() } : {}),
     };
     void save(next).then(() => {
@@ -199,6 +202,18 @@ export function SettingsPanel(props: { onClose?: () => void }): React.JSX.Elemen
           setSaved(false);
         }}
         placeholder="http://localhost:8002"
+      />
+
+      <Field
+        testid="settings-nerf-key"
+        label="NeRF service API key (if it sets NERF_API_KEY)"
+        value={nerfApiKey}
+        onChange={(v) => {
+          setNerfApiKey(v);
+          setSaved(false);
+        }}
+        type="password"
+        placeholder="(blank = open dev service)"
       />
 
       <Field

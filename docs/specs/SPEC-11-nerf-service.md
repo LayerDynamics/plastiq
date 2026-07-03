@@ -58,12 +58,20 @@ contract both honor. It mirrors `services/capture` exactly (same `/jobs/{id}/…
 | `POST /train` | `{ transforms_json: string, images: string[], iters?: int, method?: "nerf"\|"neus", grid_res?: int }` | `{ id: string, state: string }` |
 | `GET /jobs/{id}/status` | — | `{ id, state, error? }` — `state ∈ {queued, running, completed, failed}` |
 | `GET /jobs/{id}/result` | — | `{ glb_base64: string, vertices: int, faces: int, psnr: float, method: string, iters: int }` (200 when completed; 409 if not; 500 if failed; 404 unknown id) |
+| `DELETE /jobs/{id}` | — | 204 (job record dropped — cancel/cleanup; an in-flight worker's eventual result is discarded); 404 unknown id |
 | `GET /health` | — | `{ status, service }` |
 
 `transforms_json` is the stringified `transforms.json`; `images` are base64 PNG/JPEG parallel to its
 frames. The client maps the result to `{ glb: glb_base64, report: { method, iters, psnr, vertices,
 faces } }`; the app then wraps `glb` as a `MeshDoc`. **N10 must not diverge from this table** without
 updating the client + this spec together.
+
+**Auth.** When the service is deployed with `NERF_API_KEY` set, `POST /train` and `DELETE /jobs/{id}`
+require `Authorization: Bearer <key>` and reply 401 without it; unset ⇒ open (the dev default,
+matching the self-hosted capture/reconstruct siblings). The client sends the header on **every**
+request when a key is configured (`NerfOptions.apiKey`, sourced app-side from the persisted
+`nerfApiKey` setting — Settings panel field `settings-nerf-key`), so the read endpoints stay
+compatible if they are ever guarded too.
 
 ## 6. Status
 

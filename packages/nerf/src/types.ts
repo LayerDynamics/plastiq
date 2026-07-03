@@ -50,6 +50,9 @@ export interface NerfResult {
 export interface NerfOptions {
   /** Base URL of the NeRF service. Default `http://localhost:8002` (the documented dev port). */
   baseURL?: string;
+  /** API key for a key-protected deployment (the service's `NERF_API_KEY`) — sent as
+   * `Authorization: Bearer <key>` on every request. Absent ⇒ no auth header (open dev default). */
+  apiKey?: string;
   /** Injectable fetch (tests pass a fake; defaults to the global `fetch`). */
   fetchImpl?: typeof fetch;
   signal?: AbortSignal;

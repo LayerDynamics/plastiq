@@ -1,26 +1,40 @@
 // SPEC-11 N11.3 — the app-side NeRF capture adapter: GLB → MeshDoc mapping + the capture orchestrator
-// (trainNerf → MeshDoc → persist), over a scripted fake fetch (no network, no server).
+// (trainNerf → MeshDoc → persist), over a scripted fake fetch (no network, no server). Also covers
+// the SPEC-11 §5 auth seam: the persisted `nerfApiKey` setting is threaded into every request.
 
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { captureFromPhotos, nerfResultToMeshDoc } from "./nerf.js";
+import { useAiStore } from "./aiStore.js";
+import type { AiSettings } from "./settings.js";
 import type { MeshDoc } from "../store/types.js";
+
+/** Minimal valid settings (the auth tests spread `nerfApiKey` on top). */
+const BASE_SETTINGS: AiSettings = { providerKey: "anthropic", providerId: "anthropic", model: "m", apiKeys: {} };
+
+beforeEach(() => {
+  // The adapter reads the live store for the auth default — start every test key-less.
+  useAiStore.setState({ settings: null, loaded: false });
+});
 
 function jsonResponse(body: unknown, ok = true, status = 200): Response {
   return { ok, status, json: async () => body } as unknown as Response;
 }
 
-/** submit → status(running) → status(completed) → result, recording every URL + the submit body so a
- * test can assert the actual HTTP contract (path shape, snake_case body). */
+/** submit → status(running) → status(completed) → result, recording every URL + RequestInit + the
+ * submit body so a test can assert the actual HTTP contract (path shape, snake_case body, headers). */
 function scriptedFetch(result: unknown): {
   fetchImpl: typeof fetch;
   calls: string[];
+  inits: (RequestInit | undefined)[];
   submitBody: () => Record<string, unknown> | undefined;
 } {
   const calls: string[] = [];
+  const inits: (RequestInit | undefined)[] = [];
   let body: Record<string, unknown> | undefined;
   let statusHits = 0;
   const fetchImpl = (async (url: string, init?: RequestInit) => {
     calls.push(url);
+    inits.push(init);
     if (url.endsWith("/train")) {
       body = init?.body ? (JSON.parse(init.body as string) as Record<string, unknown>) : undefined;
       return jsonResponse({ id: "job-1", state: "queued" });
@@ -32,7 +46,12 @@ function scriptedFetch(result: unknown): {
     if (url.endsWith("/result")) return jsonResponse(result);
     throw new Error(`unexpected url ${url}`);
   }) as unknown as typeof fetch;
-  return { fetchImpl, calls, submitBody: () => body };
+  return { fetchImpl, calls, inits, submitBody: () => body };
+}
+
+/** The Authorization header of a recorded request (the client sends plain-object headers). */
+function authOf(init: RequestInit | undefined): string | undefined {
+  return (init?.headers as Record<string, string> | undefined)?.["Authorization"];
 }
 
 describe("nerfResultToMeshDoc", () => {
@@ -102,5 +121,35 @@ describe("captureFromPhotos", () => {
       ),
     ).rejects.toThrow(/no surface found/);
     expect(persisted).toBe(false);
+  });
+});
+
+describe("captureFromPhotos — nerfApiKey threading (SPEC-11 §5)", () => {
+  const WIRE = { glb_base64: "R0xC", vertices: 1, faces: 1, psnr: 20, method: "neus", iters: 100 };
+  const deps = { persist: async (): Promise<string> => "mesh-1" };
+
+  it("threads the persisted nerfApiKey setting into EVERY request as a bearer header", async () => {
+    useAiStore.setState({ settings: { ...BASE_SETTINGS, nerfApiKey: "nerf-secret" }, loaded: true });
+    const { fetchImpl, calls, inits } = scriptedFetch(WIRE);
+    await captureFromPhotos({ transformsJson: "{}", images: [] }, deps, { fetchImpl, delay: async () => {} });
+    expect(calls).toHaveLength(4); // train + status×2 + result — all authenticated
+    for (const init of inits) expect(authOf(init)).toBe("Bearer nerf-secret");
+  });
+
+  it("a caller-supplied opts.apiKey wins over the persisted setting", async () => {
+    useAiStore.setState({ settings: { ...BASE_SETTINGS, nerfApiKey: "from-settings" }, loaded: true });
+    const { fetchImpl, inits } = scriptedFetch(WIRE);
+    await captureFromPhotos(
+      { transformsJson: "{}", images: [] },
+      deps,
+      { fetchImpl, delay: async () => {}, apiKey: "explicit-key" },
+    );
+    for (const init of inits) expect(authOf(init)).toBe("Bearer explicit-key");
+  });
+
+  it("sends no Authorization header when neither settings nor opts carry a key", async () => {
+    const { fetchImpl, inits } = scriptedFetch(WIRE);
+    await captureFromPhotos({ transformsJson: "{}", images: [] }, deps, { fetchImpl, delay: async () => {} });
+    for (const init of inits) expect(authOf(init)).toBeUndefined();
   });
 });

@@ -32,7 +32,10 @@ async function httpError(res: Response, what: string): Promise<string> {
 /** Train a NeRF/surface field from posed views and return the reconstructed surface (submit → poll).
  *
  * Throws on submit/status/result HTTP errors, on a `failed` job, on an aborted signal, and on poll
- * timeout. The returned `glb` is a base64 GLB ready to wrap as a MeshDoc. */
+ * timeout. The returned `glb` is a base64 GLB ready to wrap as a MeshDoc. When `opts.apiKey` is set
+ * it is sent as `Authorization: Bearer <key>` on EVERY request — the service enforces it on
+ * `POST /train` (and `DELETE /jobs/{id}`) when deployed with `NERF_API_KEY`; sending it uniformly
+ * keeps the client correct if the read endpoints are ever guarded too (SPEC-11 §5). */
 export async function trainNerf(input: NerfTrainInput, opts: NerfOptions = {}): Promise<NerfResult> {
   const base = (opts.baseURL ?? DEFAULT_BASE_URL).replace(/\/+$/, "");
   const f = opts.fetchImpl ?? globalThis.fetch;
@@ -40,6 +43,12 @@ export async function trainNerf(input: NerfTrainInput, opts: NerfOptions = {}): 
   const delay = opts.delay ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
   const interval = opts.pollIntervalMs ?? 2000;
   const maxPolls = opts.maxPolls ?? 600;
+  const auth: Record<string, string> = opts.apiKey ? { Authorization: `Bearer ${opts.apiKey}` } : {};
+  /** Shared init for the GET polls: bearer auth (if configured) + abort signal (if provided). */
+  const getInit: RequestInit = {
+    ...(opts.apiKey ? { headers: auth } : {}),
+    ...(opts.signal ? { signal: opts.signal } : {}),
+  };
 
   const transforms_json =
     typeof input.transformsJson === "string" ? input.transformsJson : JSON.stringify(input.transformsJson);
@@ -50,7 +59,7 @@ export async function trainNerf(input: NerfTrainInput, opts: NerfOptions = {}): 
 
   const submitRes = await f(`${base}/train`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...auth },
     body: JSON.stringify(body),
     ...(opts.signal ? { signal: opts.signal } : {}),
   });
@@ -61,12 +70,12 @@ export async function trainNerf(input: NerfTrainInput, opts: NerfOptions = {}): 
 
   for (let i = 0; i < maxPolls; i++) {
     if (opts.signal?.aborted) throw new DOMException("aborted", "AbortError");
-    const statusRes = await f(`${base}/jobs/${id}/status`, opts.signal ? { signal: opts.signal } : {});
+    const statusRes = await f(`${base}/jobs/${id}/status`, getInit);
     if (!statusRes.ok) throw new Error(await httpError(statusRes, "status"));
     const status = (await statusRes.json()) as { state?: string; error?: string };
     opts.onState?.(status.state ?? "?");
     if (status.state === "completed") {
-      const resultRes = await f(`${base}/jobs/${id}/result`, opts.signal ? { signal: opts.signal } : {});
+      const resultRes = await f(`${base}/jobs/${id}/result`, getInit);
       if (!resultRes.ok) throw new Error(await httpError(resultRes, "result"));
       const wire = (await resultRes.json()) as NerfResultWire;
       const report: NerfReport = {

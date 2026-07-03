@@ -26,6 +26,10 @@ export interface AiSettings {
   /** Base URL of the self-hosted NeRF / photo-capture service (SPEC-11 N11) — posed photos →
    * surface mesh; absent ⇒ the @plastiq/nerf client default (http://localhost:8002). */
   nerfBaseURL?: string;
+  /** API key for a key-protected NeRF service deployment (its `NERF_API_KEY`) — sent as
+   * `Authorization: Bearer <key>` on every request (SPEC-11 §5); absent ⇒ no auth header
+   * (the open dev default, matching the other self-hosted services). */
+  nerfApiKey?: string;
   /** Override the fal mesh-gen queue base URL — the hosted-proxy seam (decision 21).
    * Absent ⇒ fal's queue default. A *direct* browser→fal call needs fal CORS; the
    * proxy (empty fal key + this baseURL) is the production path. */

@@ -19,19 +19,23 @@ function jsonResponse(body: unknown, ok = true, status = 200): Response {
 }
 
 /** A fetch that walks submit → status(running)×N → status(completed) → result, recording every
- * URL and the parsed submit body so tests can assert the wire contract. */
+ * URL + its RequestInit and the parsed submit body so tests can assert the wire contract
+ * (paths, snake_case body, and per-request headers). */
 function scriptedFetch(opts: { runningPolls?: number; result?: unknown } = {}): {
   fetchImpl: typeof fetch;
   calls: string[];
+  inits: (RequestInit | undefined)[];
   submitBody: () => Record<string, unknown> | undefined;
 } {
   const calls: string[] = [];
+  const inits: (RequestInit | undefined)[] = [];
   let body: Record<string, unknown> | undefined;
   let statusHits = 0;
   const running = opts.runningPolls ?? 1;
   const result = opts.result ?? RESULT_WIRE;
   const fetchImpl = (async (url: string, init?: RequestInit) => {
     calls.push(url);
+    inits.push(init);
     if (url.endsWith("/train")) {
       body = init?.body ? (JSON.parse(init.body as string) as Record<string, unknown>) : undefined;
       return jsonResponse({ id: "job-7", state: "queued" });
@@ -43,7 +47,12 @@ function scriptedFetch(opts: { runningPolls?: number; result?: unknown } = {}): 
     if (url.endsWith("/result")) return jsonResponse(result);
     throw new Error(`unexpected url ${url}`);
   }) as unknown as typeof fetch;
-  return { fetchImpl, calls, submitBody: () => body };
+  return { fetchImpl, calls, inits, submitBody: () => body };
+}
+
+/** The Authorization header of a recorded request (all requests use plain-object headers). */
+function authOf(init: RequestInit | undefined): string | undefined {
+  return (init?.headers as Record<string, string> | undefined)?.["Authorization"];
 }
 
 describe("trainNerf (SPEC-11 N11)", () => {
@@ -114,5 +123,27 @@ describe("trainNerf (SPEC-11 N11)", () => {
     await expect(
       trainNerf({ transformsJson: "{}", images: [] }, { fetchImpl, delay: async () => {}, maxPolls: 3 }),
     ).rejects.toThrow(/timed out after 3 polls/);
+  });
+});
+
+describe("trainNerf auth header (SPEC-11 §5 — NERF_API_KEY deployments)", () => {
+  it("sends Authorization: Bearer <key> on EVERY request when apiKey is set", async () => {
+    const { fetchImpl, calls, inits } = scriptedFetch({ runningPolls: 2 });
+    await trainNerf(
+      { transformsJson: "{}", images: [] },
+      { fetchImpl, delay: async () => {}, apiKey: "nerf-secret" },
+    );
+    // submit + status(running)×2 + status(completed) + result — the header rides on all of them
+    expect(calls).toHaveLength(5);
+    for (const init of inits) expect(authOf(init)).toBe("Bearer nerf-secret");
+    // …and the submit request keeps its JSON content type alongside the auth header
+    expect((inits[0]?.headers as Record<string, string>)["Content-Type"]).toBe("application/json");
+  });
+
+  it("sends NO Authorization header when apiKey is absent (the open dev default)", async () => {
+    const { fetchImpl, calls, inits } = scriptedFetch();
+    await trainNerf({ transformsJson: "{}", images: [] }, { fetchImpl, delay: async () => {} });
+    expect(calls.length).toBeGreaterThan(0);
+    for (const init of inits) expect(authOf(init)).toBeUndefined();
   });
 });
