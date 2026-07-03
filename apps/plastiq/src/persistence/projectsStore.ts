@@ -9,7 +9,14 @@ import { useCadStore } from "../store/store.js";
 import { useAiStore } from "../ai/aiStore.js";
 import { defaultDocument } from "../store/seed.js";
 import { projectStore } from "./index.js";
-import { clearRecovery, readRecovery, writeRecovery, type RecoverySnapshot } from "./recovery.js";
+import {
+  clearRecovery,
+  hydrateRecovery,
+  readRecovery,
+  writeRecovery,
+  type RecoverySnapshot,
+  type RecoveryWriteResult,
+} from "./recovery.js";
 import type { ProjectMeta, ProjectStore } from "./types.js";
 import { isMeshDoc, type MeshDoc } from "../store/types.js";
 
@@ -19,11 +26,28 @@ const AUTOSAVE_DELAY_MS = 1500;
 const RECOVERY_DELAY_MS = 500;
 let recoveryTimer: ReturnType<typeof setTimeout> | undefined;
 
+/** Surface a failed recovery-snapshot write on the status line (Review #13).
+ * Quota exhaustion means crash recovery is NOT protecting the current work, so
+ * the user must save; the write itself stays best-effort and never throws. */
+function surfaceRecoveryFailure(result: RecoveryWriteResult): void {
+  if (result.ok) return;
+  useProjectsStore.setState({
+    status:
+      result.reason === "quota"
+        ? "recovery snapshot failed (storage full) — save your work"
+        : `recovery snapshot failed — save your work (${result.message})`,
+  });
+}
+
 /** Schedule a debounced dirty crash-recovery snapshot (JSON.stringify +
- * localStorage.setItem are blocking, so coalesce rapid edits/drags). */
+ * localStorage.setItem are blocking, so coalesce rapid edits/drags). A failed
+ * write is reported on the status line, never swallowed (Review #13). */
 function scheduleRecovery(snapshot: () => RecoverySnapshot): void {
   if (recoveryTimer) clearTimeout(recoveryTimer);
-  recoveryTimer = setTimeout(() => writeRecovery(snapshot()), RECOVERY_DELAY_MS);
+  recoveryTimer = setTimeout(
+    () => void writeRecovery(snapshot()).then(surfaceRecoveryFailure),
+    RECOVERY_DELAY_MS,
+  );
 }
 
 /** Cancel a pending dirty snapshot (a save is about to write a clean one). */
@@ -120,10 +144,12 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
     set({ store });
     await get().refresh();
     // Surface a dirty recovery snapshot from a previous crash (FR-40); the UI
-    // prompts the user to recover or discard. Wire autosave AFTER, so reading
-    // the snapshot doesn't get overwritten by the first edit.
+    // prompts the user to recover or discard. Hydrate it first: a snapshot may
+    // carry compacted `stepRef` import-payload references (Review #13), and
+    // recover() must load a document that rebuilds identically. Wire autosave
+    // AFTER, so reading the snapshot doesn't get overwritten by the first edit.
     const snap = readRecovery();
-    if (snap?.dirty) set({ recoverable: snap });
+    if (snap?.dirty) set({ recoverable: await hydrateRecovery(snap) });
     wireAutosave(get);
   },
 
@@ -185,15 +211,16 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
       await get().refresh();
       set({ status: "saved" });
       // The on-disk project is now current → the recovery snapshot is clean. Cancel
-      // any pending dirty write so it can't clobber this clean one.
+      // any pending dirty write so it can't clobber this clean one. A failed clean
+      // write still surfaces (the stale dirty snapshot would re-prompt next launch).
       cancelPendingRecovery();
-      writeRecovery({
+      void writeRecovery({
         doc: useCadStore.getState().toDocument(),
         name: currentName,
         currentId,
         dirty: false,
         savedAt: Date.now(),
-      });
+      }).then(surfaceRecoveryFailure);
     } catch (err) {
       // store.save genuinely rejects — the project row was deleted in another tab
       // (sqlite.ts: getRowsModified() === 0) or IndexedDB `put` hit quota. Every
@@ -218,13 +245,13 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
       await get().refresh();
       set({ currentId: meta.id, currentName: name, status: "saved" });
       cancelPendingRecovery();
-      writeRecovery({
+      void writeRecovery({
         doc: useCadStore.getState().toDocument(),
         name,
         currentId: meta.id,
         dirty: false,
         savedAt: Date.now(),
-      });
+      }).then(surfaceRecoveryFailure);
     } catch (err) {
       // Same rationale as save(): create/save reject on quota or a backend failure,
       // and the callers invoke saveAs() as `void`. Surface it on the status line and

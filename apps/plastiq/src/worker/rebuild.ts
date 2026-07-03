@@ -429,9 +429,23 @@ export function rebuildDocument(oc: Occt, doc: CadDocument): Solid | null {
       }
       case "importStep": {
         // Imported STEP as a base body (FR-42). The STEP text persists in the
-        // feature's data, so the import reloads + rebuilds reproducibly.
+        // feature's data, so the import reloads + rebuilds reproducibly. A
+        // crash-recovery snapshot may carry `data.stepRef` (a content-addressed
+        // reference into the recovery payload store, Review #13) instead of the
+        // inline text; hydrateRecovery re-inflates it before load, so an
+        // unresolved ref here means the stored payload was lost — fail loudly,
+        // never fabricate geometry.
         const text = f.data?.["step"];
         if (typeof text !== "string" || text.length === 0) {
+          const ref = f.data?.["stepRef"] as { hash?: unknown } | undefined;
+          if (ref && typeof ref === "object" && typeof ref.hash === "string") {
+            throw new Error(
+              `feature '${f.id}' (importStep): the imported STEP payload (ref ` +
+                `${ref.hash.slice(0, 12)}…) is unavailable — the document was ` +
+                `recovered without its stored import payload. Re-import the ` +
+                `original STEP file.`,
+            );
+          }
           throw new Error(`feature '${f.id}' (importStep): missing STEP text`);
         }
         replace(importStep(oc, text));

@@ -86,7 +86,27 @@ async function exportFile(
   }
 }
 
-/** Open a file picker and import the chosen STEP as a base body (FR-43). */
+/** Imports at/above this size get a status warning (never a block): the STEP
+ * text is the import feature's source of truth, so it rides along in browser
+ * storage — crash recovery keeps it as a single content-addressed payload
+ * (persistence/recovery.ts, Review #13), and storage pressure can make that
+ * payload (and hence the feature) unrecoverable until re-imported. Warn so the
+ * user saves the project promptly. */
+export const LARGE_IMPORT_WARN_BYTES = 8 * 1024 * 1024;
+
+/** Status-line message for a completed STEP import — size-aware (FR-43). */
+export function importStatusMessage(name: string, bytes: number): string {
+  if (bytes < LARGE_IMPORT_WARN_BYTES) return `imported ${name}`;
+  const mb = (bytes / (1024 * 1024)).toFixed(1);
+  return (
+    `imported ${name} (${mb} MB) — large STEP: kept out of quick crash-recovery ` +
+    `snapshots and stored once in browser storage; save your project to keep it safe`
+  );
+}
+
+/** Open a file picker and import the chosen STEP as a base body (FR-43). A
+ * large file is imported all the same, with a size warning on the status line
+ * (recovery-snapshot implications — see LARGE_IMPORT_WARN_BYTES). */
 export function importStepFromDisk(): void {
   const input = document.createElement("input");
   input.type = "file";
@@ -96,7 +116,7 @@ export function importStepFromDisk(): void {
     if (!file) return;
     void file.text().then((step) => {
       cad().addFeature({ type: "importStep", name: file.name, data: { step } });
-      cad().setStatus(`imported ${file.name}`);
+      cad().setStatus(importStatusMessage(file.name, step.length));
     });
   };
   input.click();
