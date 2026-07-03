@@ -2,6 +2,7 @@
   "name": "@plastiq/app",
   "version": "0.0.0",
   "private": true,
+  "license": "SEE LICENSE IN LICENSE",
   "type": "module",
   "description": "Plastiq CAD Studio: an interactive parametric CAD editor (React + three.js) on @plastiq/cad (SPEC-5).",
   "scripts": {
