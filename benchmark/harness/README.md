@@ -148,3 +148,12 @@ pnpm exec vitest run apps/plastiq/src/headless/
 Not wired into push-CI: the harness needs the mounted bucket, the `cadgenbench`
 env, and a local model — all local/manual. The app's headless **unit** test
 (`generate.test.ts`, no network) does run in CI.
+
+## Self-owned local GT (`gt-local/`)
+
+Five committed self-owned fixtures (`901`–`905`: prompts in
+`gt-local/inputs/<id>/description.yaml`, kernel-authored
+`gt-local/gt/<id>/ground_truth.step`) let `score` produce real local CAD Scores
+today — point `CADGENBENCH_DATA_DIR` at `benchmark/harness/gt-local`. Layout,
+dimensions, authoring scripts, and the verification record are in
+[`gt-local/README.md`](gt-local/README.md).

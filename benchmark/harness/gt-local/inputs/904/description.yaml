@@ -1,0 +1,9 @@
+# Self-owned fixture (CB6.3 mini-GT): L-shaped angle bracket.
+task_type: generation
+input_type: text
+description: >-
+  An L-shaped angle bracket, 60 mm long (X), with a square inside corner.
+  Horizontal leg: 40 mm deep (Y), 6 mm thick (Z). Vertical leg: 6 mm thick
+  (Y), rising from the same base plane along the y = 0 long edge to an
+  overall height of 40 mm (Z). Both legs run the full 60 mm length.
+input_files: []

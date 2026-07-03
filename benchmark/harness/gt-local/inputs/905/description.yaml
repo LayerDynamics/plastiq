@@ -1,0 +1,9 @@
+# Self-owned fixture (CB6.3 mini-GT): square plate with centred boss + through hole.
+task_type: generation
+input_type: text
+description: >-
+  A square plate, 50 x 50 mm, 6 mm thick, with a centred cylindrical boss
+  20 mm in diameter standing 10 mm above the plate's top face (16 mm overall
+  height from the base). A 6 mm diameter hole passes through the centre of
+  both the boss and the plate along the boss axis.
+input_files: []
