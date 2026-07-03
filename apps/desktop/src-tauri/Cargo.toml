@@ -1,0 +1,24 @@
+[package]
+name = "plastiq-desktop"
+version = "0.1.0"
+description = "Plastiq desktop shell: a Tauri 2 app that hosts the Plastiq CAD editor (apps/plastiq)."
+authors = ["LayerDynamics"]
+edition = "2021"
+# NOTE: no `license`/`license-file` field — the repository has no root LICENSE
+# file yet. Cargo only requires one when packaging/publishing, and this crate
+# is a private app shell. Add `license-file` pointing at the repo LICENSE once
+# that file exists.
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[lib]
+# The `_lib` suffix keeps the lib name distinct from the bin name; this
+# matters on Windows, see https://github.com/rust-lang/cargo/issues/8519
+name = "plastiq_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
