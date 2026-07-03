@@ -117,6 +117,16 @@ describe("GenerationPanel — image attach + route toggle (FR-10a/FR-10b)", () =
 });
 
 describe("GenerationPanel — NeRF capture opens the mesh so Convert-to-CAD becomes reachable (SPEC-11 N11.3)", () => {
+  // Capture pre-checks GET <nerfBaseURL>/health before submitting (errorHints.ts); answer
+  // "healthy" so the test stays about the persist→open flow, not service reachability.
+  const realFetch = globalThis.fetch;
+  beforeEach(() => {
+    globalThis.fetch = (async () => ({ ok: true })) as unknown as typeof fetch;
+  });
+  afterEach(() => {
+    globalThis.fetch = realFetch;
+  });
+
   const selectFile = async (testid: string, file: File): Promise<void> => {
     await act(async () => {
       fireEvent.change(screen.getByTestId(testid), { target: { files: [file] } });

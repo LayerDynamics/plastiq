@@ -6,7 +6,7 @@
 // neutral first-run chooser (FR-5a) lets the user pick a provider so the panel is
 // self-sufficient. Conversation + trace persist per project via the aiStore (R5.1).
 
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAiStore } from "./aiStore.js";
 import { useCadStore } from "../store/store.js";
 import { useProjectsStore } from "../persistence/projectsStore.js";
@@ -15,6 +15,15 @@ import { toProviderSettings, type AiSettings } from "./settings.js";
 import { runGeneration } from "./runGeneration.js";
 import { reconstructMesh, stepToImportDocument } from "./reconstruct.js";
 import { captureFromPhotos } from "./nerf.js";
+import {
+  checkServiceHealth,
+  providerEndpoint,
+  serviceUnreachableMessage,
+  translateProviderError,
+  NERF_DEFAULT_BASE_URL,
+  RECONSTRUCT_DEFAULT_BASE_URL,
+  type ProviderEndpoint,
+} from "./errorHints.js";
 import { fileToBase64, fileToText } from "./fileRead.js";
 import { exportMeshGlb } from "../mesh/exportGlb.js";
 import { buildMeshGenDeps, meshGenConfigured } from "./meshGenDeps.js";
@@ -25,7 +34,7 @@ import { planAttachmentRoute, type AttachmentRoute } from "./visionRoute.js";
 import { UsageMeter, type UsageSnapshot } from "./usage.js";
 import { createMesh } from "./tools/createMesh.js";
 import type { GenImage } from "./meshgen/types.js";
-import type { ContentPart } from "./providers/types.js";
+import type { ChatMessage, ContentPart } from "./providers/types.js";
 
 /** An image the user attached to a prompt, with a stable id so the creative img3d route
  * (create_mesh) can reference it via resolveImage. */
@@ -50,6 +59,30 @@ interface Line {
   kind: "text" | "tool" | "status" | "error";
   text: string;
   isError?: boolean;
+  /** Secondary detail (the raw provider error), rendered collapsed under the line. */
+  detail?: string;
+  /** True for messages replayed from the persisted conversation (a prior session). */
+  prior?: boolean;
+}
+
+/** Flatten a persisted message's content to plain text (image parts noted inline). */
+function messageText(content: string | ContentPart[]): string {
+  if (typeof content === "string") return content;
+  return content.map((p) => (p.type === "text" ? p.text : "(image)")).join(" ");
+}
+
+/** R5.1 transcript replay — render the persisted per-project conversation as prior-
+ * session lines so reopening a project doesn't present an empty panel. Tool/system
+ * turns are internal loop plumbing; only user/assistant turns are replayed. */
+function hydrateTranscript(messages: ChatMessage[]): Line[] {
+  const visible = messages.filter((m) => m.role === "user" || m.role === "assistant");
+  if (visible.length === 0) return [];
+  const lines: Line[] = [{ kind: "status", text: "— earlier messages in this project —", prior: true }];
+  for (const m of visible) {
+    const text = messageText(m.content);
+    lines.push({ kind: "text", text: m.role === "user" ? `> ${text}` : text, prior: true });
+  }
+  return lines;
 }
 
 /** Compact neutral first-run chooser (decision 17 / FR-5a) — local Ollama (no key,
@@ -135,9 +168,20 @@ function MeshConvertSection(): React.JSX.Element {
     abortRef.current = controller;
     setBusy(true);
     setError(null);
+    setStatus("checking service…");
+    const baseURL = useAiStore.getState().settings?.reconstructBaseURL;
+    // Pre-flight GET /health (short timeout) so a down service fails in seconds with a
+    // "start it with …" hint instead of submitting the job into a raw fetch error.
+    const healthBase = (baseURL ?? RECONSTRUCT_DEFAULT_BASE_URL).replace(/\/+$/, "");
+    if (!(await checkServiceHealth(healthBase))) {
+      setError(serviceUnreachableMessage("reconstruct", healthBase));
+      setStatus(null);
+      setBusy(false);
+      abortRef.current = null;
+      return;
+    }
     setStatus("submitting…");
     try {
-      const baseURL = useAiStore.getState().settings?.reconstructBaseURL;
       const result = await reconstructMesh(doc.glb, {
         ...(baseURL ? { baseURL } : {}),
         signal: controller.signal,
@@ -291,9 +335,20 @@ function NerfCaptureSection(): React.JSX.Element {
     abortRef.current = controller;
     setBusy(true);
     setError(null);
+    setStatus("checking service…");
+    const baseURL = useAiStore.getState().settings?.nerfBaseURL;
+    // Pre-flight GET /health (short timeout) BEFORE the minutes-long train job, so a
+    // down service fails in seconds with a "start it with …" hint.
+    const healthBase = (baseURL ?? NERF_DEFAULT_BASE_URL).replace(/\/+$/, "");
+    if (!(await checkServiceHealth(healthBase))) {
+      setError(serviceUnreachableMessage("nerf", healthBase));
+      setStatus(null);
+      setBusy(false);
+      abortRef.current = null;
+      return;
+    }
     setStatus("submitting…");
     try {
-      const baseURL = useAiStore.getState().settings?.nerfBaseURL;
       const { meshDocId } = await captureFromPhotos(
         { transformsJson, images },
         { persist: (doc) => useProjectsStore.getState().createMeshProject(doc) },
@@ -430,9 +485,19 @@ function CreativeKeyField(): React.JSX.Element {
   );
 }
 
+/** Everything a generation run needs, captured at submit time so a failed run can be
+ * retried verbatim (same prompt, same attachment, same route) via the Retry button. */
+interface RunRequest {
+  text: string;
+  attached: Attachment | null;
+  route: AttachmentRoute;
+  meshProvider: string;
+}
+
 export function GenerationPanel(): React.JSX.Element {
   const settings = useAiStore((s) => s.settings);
   const activeMeshDoc = useProjectsStore((s) => s.activeMeshDoc);
+  const conversationProjectId = useAiStore((s) => s.conversationProjectId);
   const [prompt, setPrompt] = useState("");
   const [lines, setLines] = useState<Line[]>([]);
   const [running, setRunning] = useState(false);
@@ -451,14 +516,32 @@ export function GenerationPanel(): React.JSX.Element {
   /** Set by create_mesh's persist dep when a mesh document is generated mid-run; the
    * panel opens it AFTER the agent loop so a success never swaps the UI mid-generation. */
   const createdMeshIdRef = useRef<string | null>(null);
+  /** The last run that failed, kept so Retry can re-run it verbatim; null after a
+   * success (or before any failure). */
+  const [failedRun, setFailedRun] = useState<RunRequest | null>(null);
 
   const append = useCallback((line: Line): void => setLines((prev) => [...prev, line]), []);
 
-  const run = useCallback(async (): Promise<void> => {
+  // R5.1 transcript replay — when the panel mounts or the open project changes, seed the
+  // visible transcript from the persisted conversation (rendered dimmed as prior-session
+  // messages) instead of an empty panel. Keyed on the project id: openConversation sets
+  // the id and the loaded conversation together, and mid-run appendMessage updates only
+  // the conversation, so a live transcript is never wiped by its own persistence.
+  useEffect(() => {
+    setLines(hydrateTranscript(useAiStore.getState().conversation.messages));
+    setFailedRun(null);
+  }, [conversationProjectId]);
+
+  const run = useCallback(async (retryOf?: RunRequest): Promise<void> => {
     const current = useAiStore.getState().settings;
     if (!current || running) return;
-    const text = prompt.trim();
-    const attached = attachment;
+    const req: RunRequest = retryOf ?? {
+      text: prompt.trim(),
+      attached: attachment,
+      route: attachRoute,
+      meshProvider: meshProviderId,
+    };
+    const { text, attached } = req;
     if (!text && !attached) return;
 
     if (!buildSeam()) {
@@ -511,7 +594,7 @@ export function GenerationPanel(): React.JSX.Element {
     let directCreative: { mode: "img3d"; imageId: string; prompt?: string } | null = null;
     if (attached) {
       const plan = planAttachmentRoute({
-        route: attachRoute,
+        route: req.route,
         prompt: text,
         image: attached.image,
         imageId: attached.id,
@@ -527,20 +610,39 @@ export function GenerationPanel(): React.JSX.Element {
 
     abortRef.current = controller;
     setRunning(true);
-    const routeTag = attached ? ` [${attachRoute === "creative" ? "→3D" : "vision"}: ${attached.name}]` : "";
+    setFailedRun(null);
+    const routeTag = attached ? ` [${req.route === "creative" ? "→3D" : "vision"}: ${attached.name}]` : "";
     append({ kind: "text", text: `> ${text || "(image)"}${routeTag}` });
     void ai.appendMessage({ role: "user", content: text || "(image attached)" });
-    setPrompt("");
-    setAttachment(null);
+    if (!retryOf) {
+      setPrompt("");
+      setAttachment(null);
+    }
+
+    // Provider failures reach us as `[provider error]`/`[error]` text relays (agentRunner)
+    // or a thrown Error; translate the common classes to actionable lines (raw kept as the
+    // collapsed detail) and remember the request so the user can Retry it verbatim.
+    const endpoint: ProviderEndpoint = providerEndpoint(current);
+    let failed = false;
+    const appendFailure = (raw: string): void => {
+      failed = true;
+      const hint = translateProviderError(raw, endpoint);
+      append(
+        hint
+          ? { kind: "error", text: hint.friendly, detail: hint.raw, isError: true }
+          : { kind: "error", text: raw, isError: true },
+      );
+    };
 
     let assistantText = "";
     try {
       if (directCreative) {
         // Creative image→3D runs the create_mesh pipeline directly (no LLM needed): the
         // attached image + the user-selected 3D-gen provider, gated by the paid confirm.
-        append({ kind: "tool", text: `→ create_mesh(img3d via ${meshProviderId})` });
-        void ai.appendTrace({ kind: "tool-call", name: "create_mesh", detail: `img3d via ${meshProviderId}` });
-        const r = await createMesh({ ...directCreative, providerId: meshProviderId }, buildCreateMeshDeps(turnDeps));
+        append({ kind: "tool", text: `→ create_mesh(img3d via ${req.meshProvider})` });
+        void ai.appendTrace({ kind: "tool-call", name: "create_mesh", detail: `img3d via ${req.meshProvider}` });
+        const r = await createMesh({ ...directCreative, providerId: req.meshProvider }, buildCreateMeshDeps(turnDeps));
+        if (r.status === "error") failed = true;
         append({ kind: r.status === "error" ? "error" : "status", text: r.message, isError: r.status === "error" });
         void ai.appendTrace({ kind: "tool-result", name: "create_mesh", detail: r.message, isError: r.status === "error" });
       } else {
@@ -553,6 +655,14 @@ export function GenerationPanel(): React.JSX.Element {
           signal: controller.signal,
           onEvent: (e) => {
             if (e.type === "text") {
+              // agentRunner relays provider failures as `[provider error] …` / `[error] …`
+              // text events; route those through the translation layer instead of the
+              // assistant transcript (and keep them out of the persisted assistant turn).
+              const marker = /^\n?\[(?:provider )?error\] (.*)$/s.exec(e.text);
+              if (marker?.[1] != null) {
+                appendFailure(marker[1]);
+                return;
+              }
               assistantText += e.text;
               append({ kind: "text", text: e.text });
             } else if (e.type === "tool-call") {
@@ -566,6 +676,7 @@ export function GenerationPanel(): React.JSX.Element {
               meter.addTokens({ inputTokens: e.inputTokens, outputTokens: e.outputTokens });
               setUsage(meter.snapshot());
             } else if (e.type === "status") {
+              if (e.finish === "error") failed = true;
               append({ kind: "status", text: `[${e.finish} · ${e.steps} step${e.steps === 1 ? "" : "s"}]` });
             }
           },
@@ -581,12 +692,20 @@ export function GenerationPanel(): React.JSX.Element {
         await useProjectsStore.getState().open(newMeshId);
       }
     } catch (e) {
-      append({ kind: "error", text: e instanceof Error ? e.message : String(e), isError: true });
+      appendFailure(e instanceof Error ? e.message : String(e));
     } finally {
       setRunning(false);
       abortRef.current = null;
+      // A failed run is retryable verbatim; a success clears any earlier failure.
+      setFailedRun(failed ? req : null);
     }
   }, [prompt, running, append, attachment, attachRoute, meshProviderId]);
+
+  const retry = useCallback((): void => {
+    const req = failedRun;
+    if (!req || running) return;
+    void run(req);
+  }, [failedRun, running, run]);
 
   const cancel = useCallback((): void => abortRef.current?.abort(), []);
 
@@ -710,6 +829,16 @@ export function GenerationPanel(): React.JSX.Element {
                 Cancel
               </button>
             )}
+            {!running && failedRun && (
+              <button
+                type="button"
+                data-testid="generation-retry"
+                onClick={retry}
+                className="rounded border border-[#7a5a3a] bg-[#2a2014] px-2 py-1 text-[#fdb] hover:bg-[#342a1a]"
+              >
+                Retry
+              </button>
+            )}
             {usage && (
               <span data-testid="generation-usage" className="ml-auto text-[10px] text-[#789]">
                 {usage.totalTokens} tok{usage.paidJobs > 0 ? ` · ${usage.paidJobs} paid` : ""}
@@ -724,7 +853,8 @@ export function GenerationPanel(): React.JSX.Element {
               {lines.map((l, i) => (
                 <div
                   key={i}
-                  className={
+                  {...(l.prior ? { "data-prior": "true" } : {})}
+                  className={`${
                     l.isError
                       ? "text-[#fb9]"
                       : l.kind === "tool"
@@ -732,9 +862,15 @@ export function GenerationPanel(): React.JSX.Element {
                         : l.kind === "status"
                           ? "text-[#789]"
                           : "text-[#cde]"
-                  }
+                  }${l.prior ? " opacity-60" : ""}`}
                 >
                   {l.text}
+                  {l.detail && (
+                    <details data-testid="error-detail" className="text-[#a87]">
+                      <summary className="cursor-pointer select-none">raw error</summary>
+                      {l.detail}
+                    </details>
+                  )}
                 </div>
               ))}
             </div>
