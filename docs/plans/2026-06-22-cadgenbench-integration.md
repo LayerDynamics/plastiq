@@ -214,9 +214,12 @@ Claude's context), not just the headless harness.
 ## CB6.2 — Generation: get a real model to call `build_part` (not `answer_user`)
 **Status: ACHIEVED — a real local model produced a valid generation candidate that scored CAD Score 1.0.**
 - **CB6.2.2 (DONE).** Optional `tool_choice` end-to-end: `ToolChoice` type (`providers/types.ts`), mapped in
-  the adapter (`openaiCompatible.ts` `toOpenAIToolChoice`), threaded as `firstTool` through `agentRunner`
-  (turn-1 only) → `runGeneration` → `generate` → `plastiq-gen --first-tool` and `cadbench-harness run
-  --first-tool`. Unit-tested (mapping + turn-1-only forcing).
+  **both** adapters (`openaiCompatible.ts` `toOpenAIToolChoice`, `anthropic.ts` `toAnthropicToolChoice`),
+  threaded as `firstTool` through `agentRunner` (turn-1 only) → `runGeneration` → `generate` →
+  `plastiq-gen --first-tool` and `cadbench-harness run --first-tool`. The Anthropic path also drops
+  adaptive thinking on a forced-tool turn (Anthropic 400s on thinking + forced `tool_choice`) and guards
+  `tool_choice` on tools being present. Unit-tested (mapping + turn-1-only forcing + the thinking/forced
+  request-building rules via a fake client).
 - **CB6.2.1 (DONE — real candidate produced via llama.cpp).** Investigation first found the MLX servers can't
   drive tool-calling (`mlx_lm.server` ignores `tool_choice`; `mlx_vlm.server` has **no** tools support), so
   switched to **llama.cpp `llama-server`** (Qwen2.5-7B-Instruct GGUF; `--jinja` honors request tools). Two

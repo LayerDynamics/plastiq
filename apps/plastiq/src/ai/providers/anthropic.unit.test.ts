@@ -3,15 +3,18 @@
 // without network. The live round-trip is the gated anthropic.integration.test.ts.
 
 import { describe, it, expect } from "vitest";
+import type AnthropicSDK from "@anthropic-ai/sdk";
 import {
+  AnthropicAdapter,
   toAnthropicMessages,
   toAnthropicTools,
+  toAnthropicToolChoice,
   initAnthropicState,
   reduceAnthropicEvent,
   finalizeAnthropic,
   type AnthropicStreamEvent,
 } from "./anthropic.js";
-import type { ChatMessage, StreamEvent } from "./types.js";
+import type { ChatMessage, StreamEvent, ToolDef } from "./types.js";
 
 describe("R1.3 request mapping", () => {
   it("maps a ToolDef to an Anthropic tool with input_schema", () => {
@@ -36,6 +39,15 @@ describe("R1.3 request mapping", () => {
     expect(content[1]).toEqual({ type: "image", source: { type: "base64", media_type: "image/png", data: "AAAA" } });
   });
 
+  it("maps every ToolChoice to Anthropic's tool_choice (firstTool reaches Claude)", () => {
+    // undefined / "auto" omit the field (model decides); the rest force.
+    expect(toAnthropicToolChoice(undefined)).toBeUndefined();
+    expect(toAnthropicToolChoice("auto")).toBeUndefined();
+    expect(toAnthropicToolChoice("required")).toEqual({ type: "any" });
+    expect(toAnthropicToolChoice("none")).toEqual({ type: "none" });
+    expect(toAnthropicToolChoice({ tool: "build_part" })).toEqual({ type: "tool", name: "build_part" });
+  });
+
   it("maps an assistant tool-call turn and a tool result turn", () => {
     const msgs: ChatMessage[] = [
       { role: "assistant", content: "building", toolCalls: [{ id: "tu_1", name: "build_part", arguments: { a: 1 } }] },
@@ -48,6 +60,59 @@ describe("R1.3 request mapping", () => {
     const toolMsg = out[1] as { role: string; content: { type: string; tool_use_id: string; content: string }[] };
     expect(toolMsg.role).toBe("user");
     expect(toolMsg.content[0]).toEqual({ type: "tool_result", tool_use_id: "tu_1", content: "compiled" });
+  });
+});
+
+describe("R1.3 request building — tool_choice + thinking", () => {
+  // A fake SDK client that records the params handed to messages.create and
+  // returns an empty event stream, so we can assert what the adapter sent.
+  function captureClient(): { calls: Record<string, unknown>[]; client: AnthropicSDK } {
+    const calls: Record<string, unknown>[] = [];
+    const client = {
+      messages: {
+        create: async (params: Record<string, unknown>) => {
+          calls.push(params);
+          return (async function* () {
+            // no events — finalize still emits usage + done
+          })();
+        },
+      },
+    } as unknown as AnthropicSDK;
+    return { calls, client };
+  }
+
+  async function drain(it: AsyncIterable<StreamEvent>): Promise<void> {
+    for await (const _ev of it) void _ev;
+  }
+
+  const tools: ToolDef[] = [{ name: "build_part", description: "", parameters: { type: "object" } }];
+  const msgs: ChatMessage[] = [{ role: "user", content: "go" }];
+
+  it("forces the tool AND drops thinking (Anthropic 400s on thinking+forced tool)", async () => {
+    const { calls, client } = captureClient();
+    const a = new AnthropicAdapter({ apiKey: "x", model: "claude-x", thinking: true, client });
+    await drain(a.stream({ system: "", messages: msgs, tools, toolChoice: { tool: "build_part" } }));
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!["tool_choice"]).toEqual({ type: "tool", name: "build_part" });
+    expect(calls[0]!["thinking"]).toBeUndefined();
+    expect(calls[0]!["tools"]).toBeDefined();
+  });
+
+  it("keeps adaptive thinking and sends no tool_choice when the turn is unforced", async () => {
+    const { calls, client } = captureClient();
+    const a = new AnthropicAdapter({ apiKey: "x", model: "claude-x", thinking: true, client });
+    await drain(a.stream({ system: "", messages: msgs, tools }));
+    expect(calls[0]!["tool_choice"]).toBeUndefined();
+    expect(calls[0]!["thinking"]).toEqual({ type: "adaptive" });
+  });
+
+  it("omits tool_choice when there are no tools (it would be invalid)", async () => {
+    const { calls, client } = captureClient();
+    const a = new AnthropicAdapter({ apiKey: "x", model: "claude-x", thinking: true, client });
+    await drain(a.stream({ system: "", messages: msgs, tools: [], toolChoice: { tool: "build_part" } }));
+    expect(calls[0]!["tool_choice"]).toBeUndefined();
+    // no tools ⇒ nothing is forced ⇒ thinking is preserved
+    expect(calls[0]!["thinking"]).toEqual({ type: "adaptive" });
   });
 });
 

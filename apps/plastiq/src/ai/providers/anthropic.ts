@@ -12,11 +12,13 @@ import type {
   ChatStreamRequest,
   ContentPart,
   StreamEvent,
+  ToolChoice,
 } from "./types.js";
 
 type AMessage = Anthropic.MessageParam;
 type ATool = Anthropic.Tool;
 type ABlock = Anthropic.ContentBlockParam;
+type AToolChoice = Anthropic.ToolChoice;
 
 /** Map our tool definitions to Anthropic tools (`input_schema` is the JSON Schema). */
 export function toAnthropicTools(tools: { name: string; description: string; parameters: Record<string, unknown> }[]): ATool[] {
@@ -25,6 +27,17 @@ export function toAnthropicTools(tools: { name: string; description: string; par
     description: t.description,
     input_schema: t.parameters as ATool["input_schema"],
   }));
+}
+
+/** Map our tool-choice to Anthropic's `tool_choice`. `undefined`/`"auto"` ⇒ omit
+ * (the model decides). `"required"` ⇒ `any` (force *some* tool); `"none"` ⇒ forbid
+ * tools; `{ tool }` ⇒ force that specific tool. This is what makes `firstTool`
+ * (CB6.2 — push a weak/first turn onto `build_part`) take effect with Claude. */
+export function toAnthropicToolChoice(tc: ToolChoice | undefined): AToolChoice | undefined {
+  if (tc === undefined || tc === "auto") return undefined;
+  if (tc === "required") return { type: "any" };
+  if (tc === "none") return { type: "none" };
+  return { type: "tool", name: tc.tool };
 }
 
 function userBlocks(content: string | ContentPart[]): ABlock[] {
@@ -179,6 +192,14 @@ export class AnthropicAdapter implements ChatProvider {
   }
 
   async *stream(req: ChatStreamRequest): AsyncIterable<StreamEvent> {
+    // tool_choice is only valid alongside tools; omit it (auto) otherwise.
+    const toolChoice = req.tools.length > 0 ? toAnthropicToolChoice(req.toolChoice) : undefined;
+    // Anthropic rejects extended thinking combined with FORCED tool use
+    // (`any`/`tool` ⇒ 400). When a tool is forced (e.g. `firstTool` on turn 1),
+    // honor the forced tool by dropping thinking for THIS turn only; unforced
+    // turns keep adaptive thinking.
+    const forcesTool = toolChoice?.type === "any" || toolChoice?.type === "tool";
+    const useThinking = this.thinking && !forcesTool;
     let stream: AsyncIterable<unknown>;
     try {
       stream = await this.client.messages.create(
@@ -188,7 +209,8 @@ export class AnthropicAdapter implements ChatProvider {
           system: req.system,
           messages: toAnthropicMessages(req.messages),
           ...(req.tools.length > 0 ? { tools: toAnthropicTools(req.tools) } : {}),
-          ...(this.thinking ? { thinking: { type: "adaptive" } } : {}),
+          ...(toolChoice ? { tool_choice: toolChoice } : {}),
+          ...(useThinking ? { thinking: { type: "adaptive" } } : {}),
           stream: true,
         },
         { signal: req.signal },
