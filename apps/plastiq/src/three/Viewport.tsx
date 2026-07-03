@@ -19,6 +19,7 @@ import { resolveDatumPlane } from "../worker/sketchPlane.js";
 import { createCoalescer } from "./coalesce.js";
 import { useSketchStore } from "../sketch/sketchStore.js";
 import { explodeInstances } from "../viewport/explode.js";
+import { ViewCubeOverlay } from "../viewport/ViewCube.js";
 import { findClashes, type InstanceBox } from "../viewport/interference.js";
 import { Simulator } from "../sim/simulator.js";
 import { applyJointDrives, type AssemblyModel, type Quat, type Vec3 } from "../assembly/model.js";
@@ -468,9 +469,11 @@ export function Viewport(): React.JSX.Element {
   return (
     <>
       <Viewport3D mesh={mesh} meshBodies={meshBodies} sketchFrame={sketchFrame} instances={instances} />
-      {/* The in-scene 3D view cube (viewCube.gizmo, top-right) owns click-to-orient;
-          explicit named views + Fit live in the sidebar's Inspect panel (ViewControl
-          + the fit-view action). No floating panel sits over the cube any more. */}
+      {/* The first-party SVG view cube (viewport/ViewCube, top-right DOM overlay)
+          owns click-to-orient via the setView seam; explicit named views + Fit live
+          in the sidebar's Inspect panel (ViewControl + the fit-view action). No
+          floating panel sits over the cube. */}
+      <ViewCubeOverlay />
       {measuring && (
         <div
           data-testid="measure-readout"

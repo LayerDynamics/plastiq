@@ -1,16 +1,26 @@
-// Clickable view cube (SPEC-5 FR-12). An isometric SVG cube whose three visible
-// faces snap to the ortho views, whose three visible edges snap to edge views,
-// and whose near corner snaps to the iso view. Opposite orientations stay
-// reachable from the named view buttons. Direction maths lives in cubeView.ts;
-// this is thin presentation that calls `onPick(axes)`.
+// Clickable view cube (SPEC-5 FR-12) — the production orientation control, a DOM
+// overlay pinned to the viewport's top-right corner. An isometric SVG cube whose
+// three visible faces snap to the ortho views, whose three visible edges snap to
+// edge views, and whose near corner snaps to the iso view. Opposite orientations
+// stay reachable from the named view buttons (ViewControl). Direction maths lives
+// in cubeView.ts; <ViewCube> is thin presentation that calls `onPick(axes)`, and
+// <ViewCubeOverlay> is the production glue that drives the camera through the
+// viewport's published setView seam — the same call the named-view buttons make.
 
-import type { CubeAxes } from "./cubeView.js";
+import { useState } from "react";
+import { cubeDirection, type CubeAxes } from "./cubeView.js";
 
 const R = 24;
 const CX = 36;
 const CY = 36;
 const HX = R * 0.866; // cos30
 const HY = R * 0.5; // sin30
+
+// Hover accent — SELECT_ORANGE (three/colors.ts), the same hue the retired drei
+// cube used for its hoverColor, so the swap keeps the viewport's hover language.
+const HOVER = "#ffa23a";
+const FACE_FILL = "#1b2230"; // GRID_CELL
+const SPOT_FILL = "#2a3850";
 
 // Visible cube vertices in 2D (iso projection, near corner at the centre).
 const topBack = [CX, CY - R] as const;
@@ -68,6 +78,9 @@ const SPOTS: Spot[] = [
 ];
 
 export function ViewCube({ onPick }: { onPick: (axes: CubeAxes) => void }): React.JSX.Element {
+  // Hover highlight (parity with the retired drei cube's hoverColor): the face or
+  // spot under the pointer fills orange. Keyed by testid-ish identity.
+  const [hot, setHot] = useState<string | null>(null);
   return (
     <svg
       data-testid="view-cube"
@@ -77,24 +90,29 @@ export function ViewCube({ onPick }: { onPick: (axes: CubeAxes) => void }): Reac
       className="cursor-pointer"
       role="group"
       aria-label="View cube"
+      // The svg box is pointer-transparent; only the painted shapes below re-enable
+      // hits — so orbit/pan gestures beside the cube still reach the canvas.
+      style={{ pointerEvents: "none" }}
     >
       {FACES.map((f) => (
         <g key={f.label}>
           <polygon
             data-testid={`cube-face-${f.label}`}
             points={f.points}
-            fill="#1b2230"
+            fill={hot === f.label ? HOVER : FACE_FILL}
             stroke="#3a4860"
             strokeWidth={1}
             onClick={() => onPick(f.axes)}
-            style={{ cursor: "pointer" }}
+            onMouseOver={() => setHot(f.label)}
+            onMouseOut={() => setHot(null)}
+            style={{ cursor: "pointer", pointerEvents: "auto" }}
           >
             <title>{`${f.label} view`}</title>
           </polygon>
           <text
             x={f.at[0]}
             y={f.at[1]}
-            fill="#9ab"
+            fill={hot === f.label ? "#0b0d12" : "#9ab"}
             fontSize={11}
             fontFamily="monospace"
             textAnchor="middle"
@@ -105,20 +123,48 @@ export function ViewCube({ onPick }: { onPick: (axes: CubeAxes) => void }): Reac
           </text>
         </g>
       ))}
-      {SPOTS.map((s) => (
-        <circle
-          key={s.axes.join(",")}
-          data-testid={`cube-spot-${s.axes.join("")}`}
-          cx={s.at[0]}
-          cy={s.at[1]}
-          r={s.r}
-          fill="#2a3850"
-          stroke="#4ea1ff"
-          strokeWidth={1}
-          onClick={() => onPick(s.axes)}
-          style={{ cursor: "pointer" }}
-        />
-      ))}
+      {SPOTS.map((s) => {
+        const id = s.axes.join(",");
+        return (
+          <circle
+            key={id}
+            data-testid={`cube-spot-${s.axes.join("")}`}
+            cx={s.at[0]}
+            cy={s.at[1]}
+            r={s.r}
+            fill={hot === id ? HOVER : SPOT_FILL}
+            stroke="#4ea1ff"
+            strokeWidth={1}
+            onClick={() => onPick(s.axes)}
+            onMouseOver={() => setHot(id)}
+            onMouseOut={() => setHot(null)}
+            style={{ cursor: "pointer", pointerEvents: "auto" }}
+          />
+        );
+      })}
     </svg>
+  );
+}
+
+/** Minimal shape of the viewport global the overlay drives (see Scene.tsx). */
+interface SetViewGlobal {
+  __plastiqViewport?: { setView?: (dir: readonly [number, number, number]) => void };
+}
+
+/** The production view-cube overlay: <ViewCube> pinned over the canvas's
+ * top-right corner (right/top 36px + the 56px cube ⇒ cube centre ≈64px from the
+ * corner — the exact spot the retired drei gizmo occupied with margin [64,64]).
+ * Picks orient the camera through the published `setView` seam, instantly and
+ * deterministically — the same call the named-view buttons make. */
+export function ViewCubeOverlay(): React.JSX.Element {
+  return (
+    <div className="pointer-events-none absolute right-9 top-9">
+      <ViewCube
+        onPick={(axes) => {
+          const d = cubeDirection(axes);
+          (globalThis as SetViewGlobal).__plastiqViewport?.setView?.([d.x, d.y, d.z]);
+        }}
+      />
+    </div>
   );
 }

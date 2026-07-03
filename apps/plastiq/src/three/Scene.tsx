@@ -9,7 +9,6 @@ import { OrbitControls } from "@react-three/drei";
 import { Part } from "./Part.js";
 import { Picking } from "./Picking.js";
 import { TransformGizmo } from "./gizmos/transform.gizmo.js";
-import { ViewCubeGizmo } from "./gizmos/viewCube.gizmo.js";
 import { OriginGizmo } from "./gizmos/origin.gizmo.js";
 import { ObjectCenterGizmo } from "./gizmos/objectCenter.gizmo.js";
 import { PlaneGizmo } from "./gizmos/plane.gizmo.js";
@@ -221,7 +220,6 @@ export function Scene({
       <FeatureEditGizmo part={part} />
       <OffsetGizmo />
       <TransformGizmo part={part} />
-      <ViewCubeGizmo />
       {/* Right-click context menu: reads the same part for pick-under-cursor;
           renders a world-anchored DOM dropdown of the actions for the target. */}
       <RightClickDropdownGizmo part={part} />

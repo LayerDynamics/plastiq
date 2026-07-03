@@ -1,6 +1,7 @@
 // E2E (no mock): R2 gizmos on the r3f viewport.
 //  • transform gizmo (FR-11) appears only while something is selected,
-//  • view cube / named views (FR-12) reorient the camera (the render changes).
+//  • view cube (the first-party SVG overlay, viewport/ViewCube) / named views
+//    (FR-12) reorient the camera (the render changes).
 // The transform DRAG write-back (readPlacement→upsertPlacement) is pure and
 // unit-covered; dragging a 3D handle in a headless canvas is flaky, so here we
 // assert the gizmo's presence (the store-gated visibility) instead.
@@ -79,29 +80,39 @@ test("named standard views reorient the camera (FR-12)", async ({ page }) => {
   expect(await shot()).not.toBe(top);
 });
 
-test("the 3D view cube is unobstructed and reorients the camera on click (FR-12)", async ({
+test("the view cube is unobstructed and reorients the camera on click (FR-12)", async ({
   page,
 }) => {
   await ready(page);
   const canvas = page.locator("#viewport-root canvas");
   const box = (await canvas.boundingBox())!;
 
-  // 1) Deterministic: nothing with pointer-events sits over the cube's top-right
-  //    region any more — document.elementFromPoint there is the CANVAS, not a HUD div.
-  //    (Before the declutter it returned the floating named-view panel.)
-  const tags = await page.evaluate(() => {
-    const c = document.querySelector("#viewport-root canvas")!.getBoundingClientRect();
-    return [80, 100, 120].map((dx) => {
-      const el = document.elementFromPoint(c.right - dx, c.top + 90) as HTMLElement | null;
-      return el?.tagName ?? "null";
-    });
-  });
-  expect(tags.every((t) => t === "CANVAS")).toBe(true);
+  // The view cube is now the first-party SVG overlay (viewport/ViewCube), pinned
+  // over the canvas's top-right corner — same spot the retired drei gizmo occupied.
+  const cube = page.getByTestId("view-cube");
+  await expect(cube).toBeVisible();
+  const cb = (await cube.boundingBox())!;
+  expect(cb.x).toBeGreaterThan(box.x + box.width / 2); // right side…
+  expect(cb.y - box.y).toBeLessThan(120); // …near the top
 
-  // 2) Real interaction: clicking a cube face tweens the main camera → the rendered
-  //    model changes. Try a few face pixels (the cube spans ~the 64px-margin corner);
-  //    succeed as soon as one click reorients. Mouse parks on an empty corner between
-  //    attempts so a gizmo hover-highlight can't masquerade as a camera move.
+  // 1) Deterministic: the only thing with pointer-events over the cube's corner is
+  //    the cube itself — the element at a face's centre is inside the view-cube svg,
+  //    and a point beside the cube falls through to the CANVAS (the overlay is
+  //    pointer-transparent outside its painted shapes, so orbit still works there).
+  const [onFace, besideCube] = await page.evaluate(() => {
+    const svg = document.querySelector('[data-testid="view-cube"]')!;
+    const f = document.querySelector('[data-testid="cube-face-F"]')!.getBoundingClientRect();
+    const el = document.elementFromPoint(f.left + f.width / 2, f.top + f.height / 2);
+    const c = document.querySelector("#viewport-root canvas")!.getBoundingClientRect();
+    const beside = document.elementFromPoint(c.right - 150, c.top + 60);
+    return [svg.contains(el), beside?.tagName ?? "null"] as const;
+  });
+  expect(onFace).toBe(true);
+  expect(besideCube).toBe("CANVAS");
+
+  // 2) Real interaction: clicking the Front face snaps the main camera to the front
+  //    view (render changes), and the near-corner spot snaps to iso (changes again).
+  //    Snaps are instant via the setView seam — same as the named-view buttons.
   const shot = (): Promise<string> =>
     page.evaluate(
       () => (document.querySelector("#viewport-root canvas") as HTMLCanvasElement).toDataURL(),
@@ -115,21 +126,14 @@ test("the 3D view cube is unobstructed and reorients the camera on click (FR-12)
   await settle();
   const before = await shot();
 
-  let reoriented = false;
-  for (const [dx, dy] of [
-    [100, 90],
-    [110, 70],
-    [90, 105],
-    [120, 100],
-  ] as const) {
-    await page.mouse.click(box.x + box.width - dx, box.y + dy);
-    await page.mouse.move(...neutral); // clear the cube hover-highlight
-    await page.waitForTimeout(1100); // drei tweens the camera over ~1s
-    await settle();
-    if ((await shot()) !== before) {
-      reoriented = true;
-      break;
-    }
-  }
-  expect(reoriented).toBe(true);
+  await page.getByTestId("cube-face-F").click();
+  await page.mouse.move(...neutral); // clear the cube hover-highlight
+  await settle();
+  const front = await shot();
+  expect(front).not.toBe(before); // the camera moved to the front view
+
+  await page.getByTestId("cube-spot-1-11").click(); // near corner → iso
+  await page.mouse.move(...neutral);
+  await settle();
+  expect(await shot()).not.toBe(front); // …and again to iso
 });
