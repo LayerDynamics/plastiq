@@ -7,7 +7,7 @@
 
 import type { ChatProvider } from "./types.js";
 
-export type ProviderId = ChatProvider["id"]; // "anthropic" | "openai-compatible"
+export type ProviderId = ChatProvider["id"]; // "anthropic" | "openai-compatible" | "llama-mlx"
 
 export interface ModelInfo {
   id: string;
