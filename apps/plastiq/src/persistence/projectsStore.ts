@@ -3,11 +3,17 @@
 // the new/open/save/save-as/rename/delete actions the UI calls. The store is
 // loaded lazily (its SQLite WASM is heavy); a thumbnail provider is registered
 // by the viewport so Save captures the canvas.
+//
+// Document kinds (PersistedDoc): a parametric CadDocument lives in useCadStore, a
+// generated MeshDoc in `activeMeshDoc`, and a voxel sculpt (ADR-0010) in
+// useVoxelStore — open/save/autosave/recovery route on the document's kind.
 
 import { create } from "zustand";
 import { useCadStore } from "../store/store.js";
 import { useAiStore } from "../ai/aiStore.js";
 import { defaultDocument } from "../store/seed.js";
+import { useVoxelStore } from "../voxel/voxelStore.js";
+import { defaultVoxelDoc } from "../voxel/doc.js";
 import { projectStore } from "./index.js";
 import {
   clearRecovery,
@@ -18,7 +24,14 @@ import {
   type RecoveryWriteResult,
 } from "./recovery.js";
 import type { ProjectMeta, ProjectStore } from "./types.js";
-import { isMeshDoc, type MeshDoc } from "../store/types.js";
+import {
+  isMeshDoc,
+  isVoxelDoc,
+  type CadDocument,
+  type MeshDoc,
+  type PersistedDoc,
+  type VoxelDoc,
+} from "../store/types.js";
 
 /** Debounced autosave (FR-40): persist the open project a quiet interval after
  * its document changes. Wired once, after the store loads. */
@@ -63,30 +76,75 @@ function errMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
+/** The document to persist for the OPEN project: the live voxel sculpt when one is
+ * open (voxel mode), else the parametric editor document. Deep-copied either way so
+ * a stored document never aliases live state (toDocument already clones). */
+function liveDocument(): PersistedDoc {
+  const voxel = useVoxelStore.getState().doc;
+  return voxel ? structuredClone(voxel) : useCadStore.getState().toDocument();
+}
+
+/** Wrap a document for the recovery-snapshot machinery (persistence/recovery.ts),
+ * which is typed over CadDocument and walks `doc.features` for import-payload
+ * compaction. A voxel sculpt rides in an envelope with empty features/params: the
+ * compaction pass no-ops over it, JSON round-trips it verbatim, and
+ * {@link voxelOfRecoveryDoc} unwraps it on recover. Parametric docs pass through. */
+function toRecoveryDoc(doc: PersistedDoc): CadDocument {
+  if (!isVoxelDoc(doc)) return doc as CadDocument;
+  return { features: [], params: {}, voxel: doc } as CadDocument;
+}
+
+/** The voxel document inside a recovery snapshot's envelope, or null. */
+export function voxelOfRecoveryDoc(doc: CadDocument): VoxelDoc | null {
+  const v = (doc as { voxel?: unknown }).voxel;
+  return isVoxelDoc(v) ? v : null;
+}
+
+/** Enter/leave the Sculpt workspace to match the document kind being opened, so a
+ * voxel project always lands on its tools and a non-voxel document never strands
+ * the user on the (all-disabled) sculpt toolset. */
+function syncWorkspace(voxel: boolean): void {
+  const cad = useCadStore.getState();
+  if (voxel && cad.workspace !== "sculpt") cad.setWorkspace("sculpt");
+  if (!voxel && cad.workspace === "sculpt") cad.setWorkspace("design");
+}
+
 let autosaveWired = false;
 function wireAutosave(get: () => ProjectsState): void {
   if (autosaveWired) return;
   autosaveWired = true;
   let timer: ReturnType<typeof setTimeout> | undefined;
-  useCadStore.subscribe((s, prev) => {
-    if (s.features === prev.features && s.params === prev.params && s.assembly === prev.assembly) {
-      return;
-    }
-    const ps = get();
-    if (ps.busy) return; // mid-load → not a user edit
-    // Crash-recovery snapshot (debounced) — captures even an untitled document so
-    // a reload/crash before any named save can still be recovered (FR-40). The
-    // thunk reads the latest doc when the timer fires.
+  // Shared reaction to a live document edit (parametric or voxel): schedule the
+  // debounced dirty crash-recovery snapshot — capturing even an untitled document
+  // so a reload/crash before any named save can still be recovered (FR-40); the
+  // thunk reads the latest LIVE document when the timer fires — and, for a named
+  // project, the debounced autosave.
+  const onEdit = (): void => {
     scheduleRecovery(() => ({
-      doc: useCadStore.getState().toDocument(),
+      doc: toRecoveryDoc(liveDocument()),
       name: get().currentName,
       currentId: get().currentId,
       dirty: true,
       savedAt: Date.now(),
     }));
-    if (!ps.currentId) return; // untitled → no named project to autosave (yet)
+    if (!get().currentId) return; // untitled → no named project to autosave (yet)
     if (timer) clearTimeout(timer);
     timer = setTimeout(() => void get().save(), AUTOSAVE_DELAY_MS);
+  };
+  useCadStore.subscribe((s, prev) => {
+    if (s.features === prev.features && s.params === prev.params && s.assembly === prev.assembly) {
+      return;
+    }
+    if (get().busy) return; // mid-load → not a user edit
+    onEdit();
+  });
+  // Voxel sculpt edits (ADR-0010): same debounce + recovery discipline. Open/close
+  // transitions are project loads, not edits — `busy` guards the former and the
+  // `!s.doc` check skips the latter.
+  useVoxelStore.subscribe((s, prev) => {
+    if (s.doc === prev.doc || !s.doc) return;
+    if (get().busy) return;
+    onEdit();
   });
 }
 
@@ -111,6 +169,10 @@ export interface ProjectsState {
   refresh: () => Promise<void>;
   setThumbnailProvider: (provider: (() => string | null) | null) => void;
   newProject: () => void;
+  /** Start a fresh untitled voxel sculpt (ADR-0010): opens the default grid in the
+   * voxel store and switches to the Sculpt workspace. Save/autosave then persist it
+   * as a `kind:"voxel"` project through the normal save path. */
+  newVoxelProject: () => void;
   /** Persist a generated MESH document as a NEW project (the create_mesh creative path,
    * SPEC-6 R4.3). Returns the new project id. Deliberately does NOT switch the open
    * project or set activeMeshDoc — the caller opens it AFTER the agent loop finishes so
@@ -163,8 +225,18 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
 
   newProject: () => {
     set({ busy: true });
+    useVoxelStore.getState().close(); // a new parametric doc leaves voxel mode
+    syncWorkspace(false);
     useCadStore.getState().loadDocument(defaultDocument());
-    set({ currentId: null, currentName: "Untitled", status: "new document", busy: false });
+    set({ activeMeshDoc: null, currentId: null, currentName: "Untitled", status: "new document", busy: false });
+    void useAiStore.getState().openConversation(null); // fresh untitled → empty conversation
+  },
+
+  newVoxelProject: () => {
+    set({ busy: true });
+    useVoxelStore.getState().open(defaultVoxelDoc());
+    syncWorkspace(true);
+    set({ activeMeshDoc: null, currentId: null, currentName: "Untitled", status: "new voxel sculpt", busy: false });
     void useAiStore.getState().openConversation(null); // fresh untitled → empty conversation
   },
 
@@ -188,8 +260,18 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
     if (isMeshDoc(project.doc)) {
       // A generated mesh project (decision 20): held as activeMeshDoc and rendered
       // from its GLB by the viewport; the parametric cad store stays empty for it.
+      useVoxelStore.getState().close();
+      syncWorkspace(false);
       set({ activeMeshDoc: project.doc, currentId: id, currentName: project.meta.name, status: "opened", busy: false });
+    } else if (isVoxelDoc(project.doc)) {
+      // A voxel sculpt (ADR-0010): opened into the voxel store and edited in the
+      // Sculpt workspace; the parametric cad store stays untouched for it.
+      useVoxelStore.getState().open(project.doc);
+      syncWorkspace(true);
+      set({ activeMeshDoc: null, currentId: id, currentName: project.meta.name, status: "opened", busy: false });
     } else {
+      useVoxelStore.getState().close();
+      syncWorkspace(false);
       useCadStore.getState().loadDocument(project.doc);
       set({ activeMeshDoc: null, currentId: id, currentName: project.meta.name, status: "opened", busy: false });
     }
@@ -207,7 +289,10 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
     }
     set({ status: "saving…" });
     try {
-      await store.save(currentId, useCadStore.getState().toDocument(), thumbnail?.() ?? null);
+      // Kind-aware: persists the live voxel sculpt when one is open, else the
+      // parametric document (liveDocument). Voxel projects get viewport thumbnails
+      // exactly like parametric ones — the same canvas shows the sculpt.
+      await store.save(currentId, liveDocument(), thumbnail?.() ?? null);
       await get().refresh();
       set({ status: "saved" });
       // The on-disk project is now current → the recovery snapshot is clean. Cancel
@@ -215,7 +300,7 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
       // write still surfaces (the stale dirty snapshot would re-prompt next launch).
       cancelPendingRecovery();
       void writeRecovery({
-        doc: useCadStore.getState().toDocument(),
+        doc: toRecoveryDoc(liveDocument()),
         name: currentName,
         currentId,
         dirty: false,
@@ -239,14 +324,15 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
     if (!store) return;
     set({ status: "saving…" });
     try {
-      const meta = await store.create(name, useCadStore.getState().toDocument());
+      const doc = liveDocument(); // kind-aware: the live voxel sculpt or the parametric doc
+      const meta = await store.create(name, doc);
       // Attach the thumbnail in the same flow.
-      await store.save(meta.id, useCadStore.getState().toDocument(), thumbnail?.() ?? null);
+      await store.save(meta.id, doc, thumbnail?.() ?? null);
       await get().refresh();
       set({ currentId: meta.id, currentName: name, status: "saved" });
       cancelPendingRecovery();
       void writeRecovery({
-        doc: useCadStore.getState().toDocument(),
+        doc: toRecoveryDoc(doc),
         name,
         currentId: meta.id,
         dirty: false,
@@ -283,7 +369,17 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
     const snap = get().recoverable;
     if (!snap) return;
     set({ busy: true });
-    useCadStore.getState().loadDocument(snap.doc);
+    const voxel = voxelOfRecoveryDoc(snap.doc);
+    if (voxel) {
+      // A crashed voxel sculpt (ADR-0010): reopen it in the voxel store + workspace.
+      useVoxelStore.getState().open(voxel);
+      syncWorkspace(true);
+      set({ activeMeshDoc: null });
+    } else {
+      useVoxelStore.getState().close();
+      syncWorkspace(false);
+      useCadStore.getState().loadDocument(snap.doc);
+    }
     set({
       currentId: snap.currentId,
       currentName: snap.name,

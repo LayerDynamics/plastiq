@@ -7,6 +7,7 @@
 import { useEffect, useState } from "react";
 import { useCadStore } from "../store/store.js";
 import { useSketchStore } from "../sketch/sketchStore.js";
+import { useVoxelStore } from "../voxel/voxelStore.js";
 import { RIBBON, type RibbonItem } from "./ribbonConfig.js";
 import { ActionButton } from "./ActionButton.js";
 import { useActionContext } from "./useActionContext.js";
@@ -19,6 +20,27 @@ interface Group {
   key: string;
   title: string;
   items: RibbonItem[];
+}
+
+/** Sculpt-mode indicator (ADR-0010): the open voxel document + active tool, live.
+ * Subscribing here also keeps the sculpt ActionButtons' enabled/active states fresh
+ * — voxel edits change the voxel store, not the cad store the panel otherwise reads. */
+function SculptStatus(): React.JSX.Element | null {
+  const doc = useVoxelStore((s) => s.doc);
+  const tool = useVoxelStore((s) => s.tool);
+  if (!doc) {
+    return (
+      <p data-testid="sculpt-status" className="px-2 py-1 text-[10px] text-[#789]">
+        No sculpt open — use New Sculpt.
+      </p>
+    );
+  }
+  return (
+    <p data-testid="sculpt-status" className="px-2 py-1 text-[10px] text-[#8aa]">
+      {doc.name ?? "Voxel sculpt"} · {doc.cells.length} voxel{doc.cells.length === 1 ? "" : "s"} ·{" "}
+      {doc.dims.join("×")} @ {(doc.voxelSize * 1000).toFixed(1)} mm · tool: {tool}
+    </p>
+  );
 }
 
 export function WorkspacePanel(): React.JSX.Element {
@@ -65,6 +87,7 @@ export function WorkspacePanel(): React.JSX.Element {
 
   return (
     <div data-testid="workspace-panel" className="mb-2 flex flex-col gap-1">
+      {workspace === "sculpt" && <SculptStatus />}
       {groups.map((g) => {
         const open = !collapsed.has(g.key);
         return (

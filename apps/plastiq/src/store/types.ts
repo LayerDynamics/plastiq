@@ -41,9 +41,10 @@ export interface CadDocument {
 }
 
 /** How a mesh document was generated. The first three are the creative gen path (SPEC-6 R4);
- * `photos3d` is the NeRF/surface-capture path (SPEC-11 N11) — posed photos → a trained surface. */
+ * `photos3d` is the NeRF/surface-capture path (SPEC-11 N11) — posed photos → a trained surface;
+ * `voxel` records a mesh staged from a voxel sculpt's surface (the ADR-0010 Convert-to-CAD handoff). */
 export interface MeshSource {
-  mode: "text2img3d" | "img3d" | "text3d" | "photos3d";
+  mode: "text2img3d" | "img3d" | "text3d" | "photos3d" | "voxel";
   providerId: string;
   prompt?: string;
   imageId?: string;
@@ -65,9 +66,9 @@ export interface MeshDoc {
  * indices of its occupied cells; the grid is re-derived on load (voxel/doc.ts). Like a MeshDoc it is
  * a non-parametric mode (B-rep ops don't apply); its surface mesh feeds reconstruct (mesh→B-rep).
  *
- * NOTE: not yet a member of `PersistedDoc` — it joins the persisted union (and the open/persist
- * switch in projectsStore) when the voxel editing MODE is wired (docs/adr/0010 defers that). The type
- * + grid converters (voxel/doc.ts) exist now so the document model and mesh handoff are concrete. */
+ * A full member of `PersistedDoc`: projectsStore opens/saves/autosaves/recovers voxel projects, the
+ * Sculpt workspace edits them (voxel/voxelStore.ts + three/VoxelSculpt.tsx), and the Convert-to-CAD
+ * handoff stages the surface mesh as a MeshDoc for the existing reconstruct path (docs/adr/0010). */
 export interface VoxelDoc {
   readonly kind: "voxel";
   name?: string;
@@ -78,9 +79,9 @@ export interface VoxelDoc {
   cells: number[];
 }
 
-/** A persisted document: a parametric CadDocument or a generated MeshDoc. A
- * CadDocument carries no `kind` (back-compat: an absent `kind` ⇒ parametric). */
-export type PersistedDoc = CadDocument | MeshDoc;
+/** A persisted document: a parametric CadDocument, a generated MeshDoc, or a voxel
+ * sculpt. A CadDocument carries no `kind` (back-compat: an absent `kind` ⇒ parametric). */
+export type PersistedDoc = CadDocument | MeshDoc | VoxelDoc;
 
 /** Discriminate a persisted document as a mesh document. */
 export function isMeshDoc(doc: PersistedDoc): doc is MeshDoc {
@@ -97,8 +98,9 @@ export type SelectionMode = "face" | "edge" | "vertex" | "body";
 
 /** Top-level editor mode (Fusion-style workspace). Reconfigures the ribbon + side
  * panels to that mode's tools. Transient UI state (not serialized). `simulate` is
- * the authority over the `simulating` flag. */
-export type Workspace = "design" | "assemble" | "simulate";
+ * the authority over the `simulating` flag; `sculpt` hosts the voxel tools (the
+ * voxel DOCUMENT itself lives in voxel/voxelStore.ts, like activeMeshDoc for mesh). */
+export type Workspace = "design" | "assemble" | "simulate" | "sculpt";
 
 /** A picked B-rep entity, by the kernel's persistent id (SPEC-4 FR-16).
  * `body` selects a whole solid (id = the part's body index, 0 for a single

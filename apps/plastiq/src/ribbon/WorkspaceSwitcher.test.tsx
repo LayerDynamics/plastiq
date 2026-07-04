@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 // WorkspaceSwitcher — component test (jsdom + RTL, real store). Smoke: renders the
-// three-option select. Unit: reflects the current workspace. Integration: changing
-// the select drives store.workspace.
+// four-option select (Design/Assemble/Simulate + the ADR-0010 Sculpt workspace).
+// Unit: reflects the current workspace. Integration: changing the select drives
+// store.workspace.
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
@@ -16,10 +17,11 @@ afterEach(() => {
 });
 
 describe("WorkspaceSwitcher — smoke", () => {
-  it("renders the workspace select with Design/Assemble/Simulate", () => {
+  it("renders the workspace select with Design/Assemble/Simulate/Sculpt", () => {
     render(<WorkspaceSwitcher />);
     const sel = screen.getByTestId("workspace-switcher") as HTMLSelectElement;
-    expect(sel.querySelectorAll("option")).toHaveLength(3);
+    const options = [...sel.querySelectorAll("option")].map((o) => o.value);
+    expect(options).toEqual(["design", "assemble", "simulate", "sculpt"]);
   });
 });
 

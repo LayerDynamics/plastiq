@@ -128,6 +128,20 @@ export const RIBBON: Record<Workspace, RibbonTab[]> = {
       ],
     },
   ],
+  // Voxel sculpting (ADR-0010): New Sculpt opens a default grid; Add/Erase are the
+  // click tools; Output hands the surface mesh off (Convert-to-CAD via the mesh
+  // reconstruct path, or a GLB download). Undo/redo route to the sculpt history.
+  sculpt: [
+    {
+      id: "sculpt",
+      title: "Sculpt",
+      panels: [
+        { title: "Sculpt", items: [a("voxel-new"), a("voxel-add"), a("voxel-erase")] },
+        { title: "Output", items: [a("voxel-convert-cad"), a("voxel-export-glb")] },
+        { title: "Edit", items: [a("undo"), a("redo")] },
+      ],
+    },
+  ],
 };
 
 /** Short display labels for the ribbon (the catalog labels are sentence-style for

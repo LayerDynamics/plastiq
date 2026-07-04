@@ -1,5 +1,8 @@
-// The top-left workspace switcher (Fusion-style): flip Design / Assemble / Simulate.
-// A sketch is a contextual environment, so leaving the workspace finishes it first.
+// The top-left workspace switcher (Fusion-style): flip Design / Assemble / Simulate /
+// Sculpt. A sketch is a contextual environment, so leaving the workspace finishes it
+// first. Sculpt hosts the voxel tools (ADR-0010); the voxel DOCUMENT itself is
+// opened/closed by the project flows (New Sculpt / Open / New), not by this switch —
+// switching away keeps the sculpt open exactly as a mesh document survives switches.
 
 import { useCadStore } from "../store/store.js";
 import { useSketchStore } from "../sketch/sketchStore.js";
@@ -9,6 +12,7 @@ const WORKSPACES: { id: Workspace; label: string }[] = [
   { id: "design", label: "Design" },
   { id: "assemble", label: "Assemble" },
   { id: "simulate", label: "Simulate" },
+  { id: "sculpt", label: "Sculpt" },
 ];
 
 export function WorkspaceSwitcher(): React.JSX.Element {

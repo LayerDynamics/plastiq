@@ -10,9 +10,13 @@
 
 import { useCadStore } from "../store/store.js";
 import { useProjectsStore } from "../persistence/projectsStore.js";
+import { useVoxelStore } from "../voxel/voxelStore.js";
+import { voxelDocToMesh } from "../voxel/doc.js";
+import { voxelMeshToGlbBase64 } from "../voxel/glb.js";
+import { exportMeshGlb } from "../mesh/exportGlb.js";
 import { booleanBodyFeature, loftFeature, sweepFeature } from "../viewport/dressup.js";
 import type { Profile } from "../sketch/profile.js";
-import type { SelectionMode } from "../store/types.js";
+import type { MeshDoc, SelectionMode } from "../store/types.js";
 import { CONTEXT_ACTIONS } from "../three/contextmenu/config.js";
 import type { ContextTarget } from "../three/contextmenu/contextSelection.js";
 
@@ -30,6 +34,7 @@ export interface ActionDef {
 }
 
 const cad = (): ReturnType<typeof useCadStore.getState> => useCadStore.getState();
+const vox = (): ReturnType<typeof useVoxelStore.getState> => useVoxelStore.getState();
 const always = (): boolean => true;
 
 /** A rectangle inside the seeded box footprint, so an appended Extrude/Cut has a
@@ -252,20 +257,21 @@ const RIBBON_ONLY: ActionDef[] = [
     enabled: hasExporter,
     run: () => void exportFile("iges", "iges", "application/iges", "IGES"),
   },
-  // EDIT
+  // EDIT — routed: while a voxel sculpt is open its edit history is the live one
+  // (the parametric history still exists underneath but is not what Undo means then).
   {
     id: "undo",
     label: () => "Undo",
     icon: "↶",
-    enabled: () => cad().past.length > 0,
-    run: () => cad().undo(),
+    enabled: () => (voxelMode() ? vox().past.length > 0 : cad().past.length > 0),
+    run: () => (voxelMode() ? vox().undo() : cad().undo()),
   },
   {
     id: "redo",
     label: () => "Redo",
     icon: "↷",
-    enabled: () => cad().future.length > 0,
-    run: () => cad().redo(),
+    enabled: () => (voxelMode() ? vox().future.length > 0 : cad().future.length > 0),
+    run: () => (voxelMode() ? vox().redo() : cad().redo()),
   },
   // SELECTION MODE
   ...(["face", "edge", "vertex", "body"] as const).map(
@@ -305,11 +311,89 @@ const CONTEXT_DEFS: Record<string, ActionDef> = Object.fromEntries(
   ]),
 );
 
+// --- Voxel-sculpt actions (ADR-0010 wiring) ------------------------------------
+// The Sculpt workspace's tool set. All voxel-scoped `enabled` predicates read the
+// voxel store directly (like meshMode below); the sidebar/topbar subscribe to it so
+// greying/highlighting stay live.
+
+/** Stage the open sculpt's SURFACE mesh as a mesh document — the exact `MeshDoc`
+ * shape the AI panel's MeshConvertSection consumes — so "Convert to CAD (STEP)"
+ * runs the SAME mesh→B-rep reconstruct path a generated mesh uses (ADR-0010).
+ * Mirrors that section's own post-convert behaviour: the staged doc is a fresh
+ * UNTITLED document; the original voxel project is left untouched on disk. */
+function stageVoxelForConvert(): void {
+  const doc = vox().doc;
+  if (!doc || doc.cells.length === 0) return;
+  const glb = voxelMeshToGlbBase64(voxelDocToMesh(doc));
+  const name = doc.name ?? useProjectsStore.getState().currentName;
+  const meshDoc: MeshDoc = { kind: "mesh", name, glb, source: { mode: "voxel", providerId: "voxel-sculpt" } };
+  vox().close();
+  useProjectsStore.setState({
+    activeMeshDoc: meshDoc,
+    currentId: null,
+    currentName: name,
+    status: "sculpt surface staged as a mesh — run “Convert to CAD (STEP)” in the AI panel",
+  });
+  cad().setWorkspace("design"); // the mesh view + convert panel live outside Sculpt
+}
+
+const VOXEL_ACTIONS: ActionDef[] = [
+  {
+    id: "voxel-new",
+    label: () => "New Sculpt",
+    icon: "⬚",
+    // The Sculpt entry point: always available outside mesh mode (the doc-mode gate
+    // below disables it there); in voxel mode it starts a fresh untitled sculpt.
+    enabled: always,
+    run: () => useProjectsStore.getState().newVoxelProject(),
+  },
+  {
+    id: "voxel-add",
+    label: () => "Add voxels",
+    icon: "⊞",
+    enabled: () => voxelMode(),
+    active: () => voxelMode() && vox().tool === "add",
+    run: () => vox().setTool("add"),
+  },
+  {
+    id: "voxel-erase",
+    label: () => "Erase voxels",
+    icon: "⊟",
+    enabled: () => voxelMode(),
+    active: () => voxelMode() && vox().tool === "erase",
+    run: () => vox().setTool("erase"),
+  },
+  {
+    id: "voxel-convert-cad",
+    label: () => "Convert to CAD",
+    icon: "⇄",
+    enabled: () => voxelMode() && (vox().doc?.cells.length ?? 0) > 0,
+    run: () => stageVoxelForConvert(),
+  },
+  {
+    id: "voxel-export-glb",
+    label: () => "Export GLB",
+    icon: "⤓",
+    enabled: () => voxelMode() && (vox().doc?.cells.length ?? 0) > 0,
+    run: () => {
+      const doc = vox().doc;
+      if (!doc || doc.cells.length === 0) return;
+      const file = exportMeshGlb(voxelMeshToGlbBase64(voxelDocToMesh(doc)), doc.name ?? "sculpt");
+      cad().setStatus(`exported ${file}`);
+    },
+  },
+];
+
 /** True when a generated MESH document is open. In that mode the live document is a
  * triangle mesh, not a B-rep CadDocument, so B-rep feature operations and the parametric
  * STEP/IGES/glTF export are no-ops — SPEC-6 FR-18 requires the UI to reflect that rather
  * than offer them. (Mesh documents get their own GLB export in the GenerationPanel.) */
 export const meshMode = (): boolean => useProjectsStore.getState().activeMeshDoc != null;
+
+/** True when a voxel sculpt is open (ADR-0010). Like mesh mode, the live document is
+ * not a B-rep CadDocument, so B-rep ops are disabled-not-hidden (FR-18); the
+ * voxel-legal set (sculpt tools, surface-mesh export, Convert-to-CAD) stays live. */
+export const voxelMode = (): boolean => useVoxelStore.getState().doc != null;
 
 /** Actions that remain meaningful while a mesh document is open: editor-state only, not
  * B-rep feature operations. An ALLOWLIST (not a blocklist) so any action added later is
@@ -323,18 +407,37 @@ const MESH_SAFE_IDS: ReadonlySet<string> = new Set([
   "selmode-body",
 ]);
 
-/** Augment a parametric/B-rep action so it is disabled while a mesh document is open. */
-function gateForMeshMode(a: ActionDef): ActionDef {
-  if (MESH_SAFE_IDS.has(a.id)) return a;
+/** Actions that remain meaningful while a voxel sculpt is open: the mesh-safe
+ * editor-state set plus the voxel tool set itself. Same allowlist discipline. */
+const VOXEL_SAFE_IDS: ReadonlySet<string> = new Set([
+  ...MESH_SAFE_IDS,
+  "voxel-new",
+  "voxel-add",
+  "voxel-erase",
+  "voxel-convert-cad",
+  "voxel-export-glb",
+]);
+
+/** Augment an action so it is disabled while a document mode it doesn't apply to is
+ * open: B-rep/parametric ops grey out on a mesh document AND on a voxel sculpt; the
+ * voxel tools grey out on a mesh document (their own `enabled` already scopes them). */
+function gateForDocMode(a: ActionDef): ActionDef {
+  const meshSafe = MESH_SAFE_IDS.has(a.id);
+  const voxelSafe = VOXEL_SAFE_IDS.has(a.id);
+  if (meshSafe && voxelSafe) return a;
   const base = a.enabled;
-  return { ...a, enabled: (ctx) => !meshMode() && base(ctx) };
+  return {
+    ...a,
+    enabled: (ctx) => (meshSafe || !meshMode()) && (voxelSafe || !voxelMode()) && base(ctx),
+  };
 }
 
-/** Every action by id — context-menu actions + ribbon-only actions, each gated so B-rep
- * operations + parametric export are unavailable on a mesh document (FR-18). */
+/** Every action by id — context-menu actions + ribbon-only ops + the voxel tool set,
+ * each gated so operations that don't apply to the open document KIND are unavailable
+ * (disabled, never hidden or silently no-oping — FR-18). */
 export const ACTIONS: Record<string, ActionDef> = Object.fromEntries(
-  [...Object.values(CONTEXT_DEFS), ...RIBBON_ONLY].map((a) => {
-    const gated = gateForMeshMode(a);
+  [...Object.values(CONTEXT_DEFS), ...RIBBON_ONLY, ...VOXEL_ACTIONS].map((a) => {
+    const gated = gateForDocMode(a);
     return [gated.id, gated];
   }),
 );

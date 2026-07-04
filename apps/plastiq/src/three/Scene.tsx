@@ -20,11 +20,13 @@ import { RightClickDropdownGizmo } from "./gizmos/rightClickDropdown.gizmo.js";
 import { SketchCamera } from "./SketchCamera.js";
 import { Section } from "./Section.js";
 import { Assembly, type InstanceBody } from "./Assembly.js";
+import { VoxelSculpt } from "./VoxelSculpt.js";
 import type { DatumPlane } from "@plastiq/cad";
 import { GRID_CENTER, GRID_CELL } from "./colors.js";
 import { buildPart, buildMeshBody, disposePart, type BuiltPart, type BuiltMeshBody } from "../viewport/buildMesh.js";
 import { applyPlacement, findPlacement, placementFromFeature } from "../viewport/placement.js";
 import { useCadStore } from "../store/store.js";
+import { useVoxelStore } from "../voxel/voxelStore.js";
 import type { TransferMesh } from "../worker/protocol.js";
 import type { MeshBody } from "../mesh/meshBody.js";
 
@@ -68,6 +70,9 @@ export function Scene({
 }): React.JSX.Element {
   const camera = useThree((s) => s.camera);
   const controls = useThree((s) => s.controls) as OrbitLike | null;
+  // The open voxel sculpt (ADR-0010), or null. Non-null swaps the scene to the
+  // voxel branch below, exactly as builtBodies does for a mesh document.
+  const voxelDoc = useVoxelStore((s) => s.doc);
 
   // three-stdlib's OrbitControls calls `domElement.releasePointerCapture(id)` on
   // pointerup even though it never calls setPointerCapture — so for any pointerup
@@ -172,6 +177,28 @@ export function Scene({
       delete vp.setView;
     };
   }, [camera, controls]);
+
+  // A voxel sculpt (ADR-0010): the standard stage, the VoxelSculpt component (surface
+  // mesh + sculpt tools + hover preview), and NONE of the B-rep editor surfaces —
+  // mirroring the mesh-document branch below (FR-18). LEFT is the sculpt button, so
+  // orbit moves to RIGHT (rotate) + MIDDLE (pan); there is no context menu here.
+  if (voxelDoc) {
+    return (
+      <>
+        <ambientLight intensity={0.55} />
+        <directionalLight intensity={1.1} position={[0.3, -0.4, 0.6]} />
+        <directionalLight intensity={0.35} color={0x88aaff} position={[-0.3, 0.3, 0.2]} />
+        <gridHelper args={[0.4, 40, GRID_CENTER, GRID_CELL]} rotation={[Math.PI / 2, 0, 0]} />
+        <VoxelSculpt />
+        <OrbitControls
+          makeDefault
+          enableDamping
+          target={[0, 0, 0.02]}
+          mouseButtons={{ RIGHT: THREE.MOUSE.ROTATE, MIDDLE: THREE.MOUSE.PAN }}
+        />
+      </>
+    );
+  }
 
   // A mesh document is display-only triangle geometry (decision 20): render the bodies
   // with the standard light rig + grid + orbit, but NONE of the B-rep editor surfaces
