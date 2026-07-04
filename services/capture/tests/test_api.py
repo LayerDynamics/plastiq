@@ -69,6 +69,24 @@ def test_mismatched_point_cloud_is_400():
     asyncio.run(run())
 
 
+def test_too_many_points_is_422(monkeypatch):
+    # the CAPTURE_MAX_POINTS cap (main.MAX_POINTS) rejects oversized clouds before any MLX work;
+    # shrink it so the test payload stays tiny
+    from app import main as app_main
+
+    monkeypatch.setattr(app_main, "MAX_POINTS", 64)
+    pts = [[0.0, 0.0, 1.0]] * 65
+
+    async def run():
+        async with _client() as c:
+            r = await c.post("/capture", json={"points": pts, "normals": pts})
+            assert r.status_code == 422
+            r = await c.post("/complete", json={"points": pts})
+            assert r.status_code == 422
+
+    asyncio.run(run())
+
+
 def test_complete_submit_poll_result_end_to_end(monkeypatch):
     # keep the lazily-trained demo model fast for the test
     monkeypatch.setenv("CAPTURE_COMPLETION_ITERS", "120")

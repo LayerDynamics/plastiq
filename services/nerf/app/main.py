@@ -18,6 +18,7 @@ import asyncio
 import base64
 import io
 import json
+import logging
 import os
 
 import numpy as np
@@ -28,6 +29,10 @@ from pydantic import BaseModel, Field
 
 from .engine.jobs import JobState, JobStore
 from .engine.pipeline import train_and_export
+from .logging_setup import setup_logging
+
+setup_logging()
+logger = logging.getLogger(__name__)
 
 # Input caps — a single unauthenticated /train must not be able to exhaust memory/compute.
 MAX_IMAGES = 300  # posed views per job (matches the browser UI cap)
@@ -49,6 +54,19 @@ store = JobStore()
 # default by the same parity; set both in any non-localhost deployment.
 _API_KEY = os.environ.get("NERF_API_KEY")
 _MAX_CONCURRENT = int(os.environ.get("NERF_MAX_CONCURRENT_JOBS", "2"))
+
+# Startup config summary (env-derived; the key itself is NEVER logged) — one line to grep for.
+logger.info(
+    "plastiq-nerf configured: cors_origins=%s (NERF_CORS_ORIGINS), auth=%s (NERF_API_KEY), "
+    "max_concurrent_jobs=%d (NERF_MAX_CONCURRENT_JOBS), caps: images=%d dim=%dpx grid=%d iters=%d",
+    _origins,
+    "bearer" if _API_KEY else "open (dev)",
+    _MAX_CONCURRENT,
+    MAX_IMAGES,
+    MAX_IMAGE_DIM,
+    MAX_GRID_RES,
+    MAX_ITERS,
+)
 
 
 def require_auth(authorization: str | None = Header(default=None)) -> None:
@@ -84,11 +102,14 @@ def _decode_images(images_b64: list[str]) -> np.ndarray:
         try:
             img = Image.open(io.BytesIO(base64.b64decode(b))).convert("RGB")
         except Exception as e:  # noqa: BLE001 — includes PIL DecompressionBombError
+            logger.warning("rejected /train submit: image %d is not a decodable/safe PNG/JPEG (%s)", i, e)
             raise HTTPException(status_code=400, detail=f"image {i} is not a decodable/safe PNG/JPEG: {e}") from e
         if max(img.size) > MAX_IMAGE_DIM:
+            logger.warning("rejected /train submit: image %d exceeds %dpx on a side", i, MAX_IMAGE_DIM)
             raise HTTPException(status_code=400, detail=f"image {i} exceeds {MAX_IMAGE_DIM}px on a side")
         arrs.append(np.asarray(img, dtype=np.float32) / 255.0)
     if arrs and any(a.shape != arrs[0].shape for a in arrs):
+        logger.warning("rejected /train submit: images do not share one height/width")
         raise HTTPException(status_code=400, detail="all images must share the same height/width")
     return np.asarray(arrs)
 
@@ -104,17 +125,26 @@ async def submit_train(body: TrainBody, _: None = Depends(require_auth)) -> JobV
         try:
             transforms = json.loads(body.transforms_json)
         except (json.JSONDecodeError, ValueError) as e:
+            logger.warning("rejected /train submit: transforms_json is not valid JSON")
             raise HTTPException(status_code=400, detail="transforms_json is not valid JSON") from e
     else:
         transforms = body.transforms_json
     if not isinstance(transforms, dict) or "frames" not in transforms:
+        logger.warning("rejected /train submit: transforms_json is not a transforms.json object with frames")
         raise HTTPException(status_code=400, detail="transforms_json must be a transforms.json object with frames")
     if body.method not in ("neus", "nerf"):
+        logger.warning("rejected /train submit: unknown method %r", body.method)
         raise HTTPException(status_code=400, detail="method must be 'neus' or 'nerf'")
     if store.running_count() >= _MAX_CONCURRENT:
+        logger.warning(
+            "rejected /train submit: %d jobs already in flight (cap %d)", store.running_count(), _MAX_CONCURRENT
+        )
         raise HTTPException(status_code=429, detail="too many training jobs in flight; retry shortly")
     images = _decode_images(body.images)
     if len(images) != len(transforms["frames"]):
+        logger.warning(
+            "rejected /train submit: %d images but %d frames", len(images), len(transforms["frames"])
+        )
         raise HTTPException(
             status_code=400,
             detail=f"{len(images)} images but {len(transforms['frames'])} frames — they must be parallel",

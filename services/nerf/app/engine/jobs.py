@@ -13,11 +13,14 @@ The background task is retained on the Job so the event loop cannot GC it mid-fl
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from enum import Enum
+
+logger = logging.getLogger(__name__)
 
 
 class JobState(str, Enum):
@@ -51,16 +54,23 @@ class JobStore:
         job = Job(id=uuid.uuid4().hex)
         self._jobs[job.id] = job
         job.task = asyncio.create_task(self._run(job, work))
+        logger.info("job %s submitted", job.id)
         return job
 
     async def _run(self, job: Job, work: Callable[[], Awaitable[dict]]) -> None:
         job.state = JobState.running
+        started = time.monotonic()
+        logger.info("job %s started", job.id)
         try:
             job.result = await work()
             job.state = JobState.completed
+            logger.info("job %s completed in %.2fs", job.id, time.monotonic() - started)
         except Exception as e:  # noqa: BLE001 — any failure is surfaced to the client via /result
             job.error = str(e)
             job.state = JobState.failed
+            logger.error(
+                "job %s failed after %.2fs: %s", job.id, time.monotonic() - started, e, exc_info=True
+            )
         finally:
             job.finished_at = time.monotonic()
 

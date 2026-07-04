@@ -83,10 +83,24 @@ structural fingerprint — see [`docs/adr/0002`](../../docs/adr/0002-brepnet-cle
 
 ## Run locally
 
+One command (repo root) starts **all three** Plastiq services — reconstruct :8000, capture
+:8001, nerf :8002 — creating any missing conda env from its `environment.yml` first, with
+name-prefixed logs and clean Ctrl-C shutdown:
+
+```bash
+just services          # scripts/dev-services.sh; `just services-stop` frees stray listeners
+```
+
+Or run just this service manually:
+
 ```bash
 mamba env create -f environment.yml          # one-time (pythonocc-core is conda-forge only)
 mamba run -n plastiq-reconstruct uvicorn app.main:app --port 8000
 ```
+
+Job lifecycle (submit/start/complete/fail + duration) and rejected submits are logged via
+Python `logging` (INFO default — `RECONSTRUCT_LOG_LEVEL` overrides). Terminal jobs are evicted
+by TTL + a max-count cap (`app/jobs.py`), so the in-memory store stays bounded between restarts.
 
 ## Test (real OCCT, no mocks)
 
@@ -99,8 +113,10 @@ cylinder / sphere / cone fits → watertight analytic solids; `auto` classificat
 a box is not misread as a primitive); surface-of-revolution stepped shafts; CSG box−hole /
 box+boss / rotated-base / two-hole solids; freeform faces + `freeform_capped_solid` + the
 **fitted/auto freeform integration** (a domed box → a freeform-capped solid, `freeform_faces>0`);
-and the full `POST /reconstruct` → poll → `result` flow over the ASGI app (incl. a CORS
-preflight) with real GLB fixtures.
+the bounded submit→poll job store (TTL + cap eviction — `test_jobs.py`); and the full
+`POST /reconstruct` → poll → `result` flow over the ASGI app (incl. a CORS preflight) with
+real GLB fixtures. The suite also runs in CI on ubuntu (see `.github/workflows/ci.yml`) with
+one platform-numerics deselect documented there.
 
 ## Docker / deploy
 

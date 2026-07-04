@@ -27,12 +27,30 @@ completion** (`/complete`, a partial scan → full mesh via a conditional occupa
 completion model is trained on a synthetic family by default; set `CAPTURE_COMPLETION_CHECKPOINT` to a
 checkpoint trained on a real dataset (ShapeNet-style) for general objects.
 
+Point clouds are capped at **200 000 points** per submit (422 above it; `CAPTURE_MAX_POINTS`
+overrides) — the MLX fit evaluates every point each iteration, so the cap bounds one request's
+memory/compute.
+
 ## Run locally (Apple Silicon)
+
+One command (repo root) starts **all three** Plastiq services — reconstruct :8000, capture
+:8001, nerf :8002 — creating any missing conda env from its `environment.yml` first, with
+name-prefixed logs and clean Ctrl-C shutdown:
+
+```bash
+just services          # scripts/dev-services.sh; `just services-stop` frees stray listeners
+```
+
+Or run just this service manually:
 
 ```bash
 mamba env create -f environment.yml          # conda-forge + pip mlx
 mamba run -n plastiq-capture uvicorn app.main:app --port 8001
 ```
+
+Job lifecycle (submit/start/complete/fail + duration) and rejected submits are logged via
+Python `logging` (INFO default — `CAPTURE_LOG_LEVEL` overrides). Terminal jobs are evicted by
+TTL + a max-count cap (`app/jobs.py`), so the in-memory store stays bounded between restarts.
 
 ## Test (real MLX training on the M4 Max)
 
@@ -42,7 +60,8 @@ mamba run -n plastiq-capture python -m pytest -q
 
 Covers (no mocks): `app/geometry.py` depth→points/normals; the **MLX SDF fit + marching cubes on a
 sphere** (`test_sdf_mlx.py`, `test_pipeline.py` — real training, ~6 s); the submit→poll job contract
-(`test_jobs.py`); and the full ASGI `/capture` flow (`test_api.py`, gated on `fastapi`+`mlx`).
++ bounded-store eviction (`test_jobs.py`); and the full ASGI `/capture` flow incl. the point-count
+cap 422 (`test_api.py`, gated on `fastapi`+`mlx`).
 
 ## Scope
 

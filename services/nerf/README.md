@@ -54,10 +54,24 @@ into the existing "Convert to CAD" (mesh → B-rep) path. Base URL configured by
 
 ## Run locally (Apple Silicon)
 
+One command (repo root) starts **all three** Plastiq services — reconstruct :8000, capture
+:8001, nerf :8002 — creating any missing conda env from its `environment.yml` first, with
+name-prefixed logs and clean Ctrl-C shutdown:
+
+```bash
+just services          # scripts/dev-services.sh; `just services-stop` frees stray listeners
+```
+
+Or run just this service manually:
+
 ```bash
 mamba env create -f environment.yml          # conda-forge + pip mlx
 mamba run -n plastiq-nerf uvicorn app.main:app --port 8002
 ```
+
+Job lifecycle (submit/start/complete/fail + duration) and rejected submits are logged via
+Python `logging` (INFO default — `NERF_LOG_LEVEL` overrides); the startup line summarizes the
+CORS/auth/cap config without ever printing the API key.
 
 ## Test (real MLX training on the M4 Max)
 

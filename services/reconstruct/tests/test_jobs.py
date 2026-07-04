@@ -1,40 +1,60 @@
-"""M7 — the submit→poll job contract (no FastAPI needed, so it runs anywhere). Proves the JobStore
-state machine: queued → running → completed, and failures surface as `failed` + an error; terminal
-jobs are bounded (TTL + max-count eviction — same pattern as services/nerf), the background task is
-retained, and `remove`/`running_count` behave."""
+"""The submit→poll job store (no FastAPI, just the asyncio state machine).
+
+A submitted job runs as a background task: queued/running → completed (with its result) on success,
+or → failed (capturing the error string) on exception. Unknown ids are None. Terminal jobs are
+bounded (TTL + max-count eviction — same pattern as services/nerf) so the store cannot grow without
+bound until restart. This is the contract the HTTP layer (test_api) exposes; testing it directly
+keeps the state machine honest without a server.
+"""
 
 import asyncio
 
 from app.jobs import JobState, JobStore
 
 
-async def _drive(work) -> object:
-    store = JobStore()
-    job = await store.submit(work)
-    for _ in range(500):
-        j = store.get(job.id)
-        if j and j.state in (JobState.completed, JobState.failed):
-            return j
-        await asyncio.sleep(0.001)
-    return store.get(job.id)
+async def _drain(store: JobStore, job_id: str, tries: int = 200) -> None:
+    for _ in range(tries):
+        job = store.get(job_id)
+        if job and job.state in (JobState.completed, JobState.failed):
+            return
+        await asyncio.sleep(0.01)
 
 
-def test_submit_poll_completes_with_result():
-    async def work() -> dict:
-        return {"faces": 42}
+def test_job_runs_to_completion_with_result():
+    async def run():
+        store = JobStore()
 
-    job = asyncio.run(_drive(work))
-    assert job.state == JobState.completed
-    assert job.result == {"faces": 42}
+        async def work() -> dict:
+            return {"step": "ISO-10303-21..."}
+
+        job = await store.submit(work)
+        assert job.state in (JobState.queued, JobState.running)
+        await _drain(store, job.id)
+        done = store.get(job.id)
+        assert done is not None
+        assert done.state == JobState.completed
+        assert done.result == {"step": "ISO-10303-21..."}
+        assert done.error is None
+
+    asyncio.run(run())
 
 
-def test_failed_work_is_surfaced():
-    async def work() -> dict:
-        raise ValueError("fit diverged")
+def test_job_failure_captures_the_error():
+    async def run():
+        store = JobStore()
 
-    job = asyncio.run(_drive(work))
-    assert job.state == JobState.failed
-    assert "fit diverged" in (job.error or "")
+        async def work() -> dict:
+            raise RuntimeError("reconstruction blew up")
+
+        job = await store.submit(work)
+        await _drain(store, job.id)
+        done = store.get(job.id)
+        assert done is not None
+        assert done.state == JobState.failed
+        assert done.result is None
+        assert "reconstruction blew up" in (done.error or "")
+
+    asyncio.run(run())
 
 
 def test_unknown_job_is_none():
@@ -106,14 +126,6 @@ def test_remove_and_running_count():
         assert store.remove(job.id) is None  # idempotent
 
     asyncio.run(run())
-
-
-async def _drain(store: JobStore, job_id: str, tries: int = 200) -> None:
-    for _ in range(tries):
-        job = store.get(job_id)
-        if job and job.state in (JobState.completed, JobState.failed):
-            return
-        await asyncio.sleep(0.01)
 
 
 async def _aresult(value: dict) -> dict:

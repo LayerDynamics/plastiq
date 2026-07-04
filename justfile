@@ -76,3 +76,16 @@ app-docker-build:
 # Run the self-host image on http://localhost:8080.
 app-docker-run:
     docker run --rm -p 8080:80 plastiq-web
+
+# --- Python services (local) ---------------------------------------------------
+# The three self-hosted services: reconstruct :8000 (mesh→B-rep/STEP), capture :8001
+# (point cloud→mesh, MLX), nerf :8002 (posed images→mesh, MLX). Conda envs are
+# created from each service's environment.yml on first run. Ctrl-C stops all three.
+
+# Start all three services with prefixed logs (creates missing envs first).
+services:
+    ./scripts/dev-services.sh
+
+# Kill any service still listening on :8000/:8001/:8002.
+services-stop:
+    ./scripts/dev-services.sh stop

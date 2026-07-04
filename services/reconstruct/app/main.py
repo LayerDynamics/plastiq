@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import logging
 
 import os
 
@@ -22,7 +23,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from .jobs import JobState, JobStore
+from .logging_setup import setup_logging
 from .pipeline import reconstruct
+
+setup_logging()
+logger = logging.getLogger(__name__)
 
 app = FastAPI(title="plastiq-reconstruct", version="0.1.0")
 
@@ -39,6 +44,9 @@ app.add_middleware(
 )
 
 store = JobStore()
+
+# Startup config summary (env-derived, no secrets) — one line an operator can grep for.
+logger.info("plastiq-reconstruct configured: cors_origins=%s (RECONSTRUCT_CORS_ORIGINS)", _origins)
 
 
 class SubmitBody(BaseModel):
@@ -64,8 +72,10 @@ async def submit_reconstruction(body: SubmitBody) -> JobView:
     try:
         data = base64.b64decode(body.glb_base64, validate=True)
     except Exception as e:  # noqa: BLE001
+        logger.warning("rejected /reconstruct submit: invalid base64 GLB (%s)", e)
         raise HTTPException(status_code=400, detail=f"invalid base64 GLB: {e}") from e
     if not data:
+        logger.warning("rejected /reconstruct submit: empty GLB payload")
         raise HTTPException(status_code=400, detail="empty GLB payload")
 
     file_type = body.file_type
