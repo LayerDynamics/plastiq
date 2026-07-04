@@ -38,7 +38,6 @@ vi.mock("./providers/registry.js", () => ({
     model: "fake-model",
     supportsVision: false,
     supportsTools: true,
-    // eslint-disable-next-line @typescript-eslint/require-await
     async *stream(req: ChatStreamRequest) {
       // Snapshot: the agent loop keeps mutating the same messages array after the turn.
       providerControl.requests.push({ ...req, messages: [...req.messages] });

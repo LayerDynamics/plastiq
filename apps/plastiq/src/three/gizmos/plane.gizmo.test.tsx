@@ -3,7 +3,7 @@
 // live sketch session (e2e).
 
 import { afterEach, describe, expect, it } from "vitest";
-import * as THREE from "three";
+import type * as THREE from "three";
 import ReactThreeTestRenderer from "@react-three/test-renderer";
 
 import { PlaneGizmo } from "./plane.gizmo.js";
