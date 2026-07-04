@@ -77,6 +77,9 @@ export interface ChatStreamRequest {
  * OpenAICompatAdapter (R1.2), LlamaMlxAdapter (llama-mlx-server, reuses the OpenAI
  * transport). `supportsVision`/`supportsTools` gate the UI (FR-10b/FR-5b). */
 export interface ChatProvider {
+  /** Which adapter produced this provider: `anthropic` (AnthropicAdapter),
+   * `openai-compatible` (OpenAICompatAdapter — OpenAI/Ollama/proxy), or
+   * `llama-mlx` (LlamaMlxAdapter — llama-mlx-server on the OpenAI transport). */
   readonly id: "anthropic" | "openai-compatible" | "llama-mlx";
   readonly model: string;
   readonly supportsVision: boolean;
