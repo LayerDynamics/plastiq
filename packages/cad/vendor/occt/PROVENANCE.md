@@ -31,9 +31,9 @@ written to `packages/cad/`; move it here, overwriting these files.
 ## The symbol list (occt.build.yml) — three layers
 
 `occt.build.yml` lists every symbol that must be bound. It was derived and then
-**verified by running the full test suite against the trimmed wasm** (288 unit +
-15 browser E2E), which surfaces any missing symbol as an embind
-`UnboundTypeError`. Three layers are required:
+**verified by running the full test suite against the trimmed wasm** (1474
+unit/integration + 69 browser E2E as of 2026-07-03), which surfaces any missing
+symbol as an embind `UnboundTypeError`. Three layers are required:
 
 1. **Leaf API classes/enums** the kernel calls via `oc.X` or holds as a return
    value (`BRepPrimAPI_MakeBox`, `gp_Pnt`, `Poly_Triangulation`, the STEP/IGES

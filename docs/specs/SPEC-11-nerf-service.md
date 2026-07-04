@@ -83,5 +83,5 @@ imports it, `NerfCaptureSection` (GenerationPanel) drives it, the produced `Mesh
 "photos3d"`) flows into the existing "Convert to CAD" reconstruct path. **Reachability is structural**
 (import chain `GenerationPanel → nerf.ts → @plastiq/nerf`, matching the reconstruct precedent — the
 unit test mocks `trainNerf`, the `.tsx` is e2e-only) — **no longer a tested island.** The documented
-`plastiq-nerf` conda env (from `environment.yml`) is created and the full suite — **43 tests incl. the
-real submit→poll→GLB FastAPI test — passes there.** N0–N12 complete.
+`plastiq-nerf` conda env (from `environment.yml`) is created and the full suite — **53 tests incl. the
+real submit→poll→GLB FastAPI test — passes there** (53 as of 2026-07-03; 43 at N12). N0–N12 complete.

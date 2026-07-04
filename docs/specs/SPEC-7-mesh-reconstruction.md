@@ -7,7 +7,7 @@ surface-intersection topology tail for the analytic-rim sagitta case remains fut
 **Owner:** LayerDynamics
 **Depends on:** SPEC-6 (AI generation — the creative path that produces mesh documents), `@plastiq/cad` (STEP I/O, `importStep`)
 **Supersedes / relates to:** reverses two SPEC-6 decisions by explicit user direction — §13 "Mesh→B-rep reconstruction = out of scope" and the no-server identity (see memory `mesh-to-brep-server-decision`).
-**Grounded in (this session, all verified):** `docs/research/2026-06-20-mesh-to-brep-reconstruction/Report-Final.md` + `Agent{1..4}Findings.md`; `docs/investigations/2026-06-20-r6-curved-reconstruction-and-tail.md`; the shipped `services/reconstruct/**` (verified against a live `pythonocc-core` conda env, **67 pytest passing** as of the 2026-06-21 reconciliation) and `apps/plastiq/src/ai/reconstruct.ts`.
+**Grounded in (this session, all verified):** `docs/research/2026-06-20-mesh-to-brep-reconstruction/Report-Final.md` + `Agent{1..4}Findings.md`; `docs/investigations/2026-06-20-r6-curved-reconstruction-and-tail.md`; the shipped `services/reconstruct/**` (verified against a live `pythonocc-core` conda env, **93 pytest passing** as of 2026-07-03; 67 at the 2026-06-21 reconciliation) and `apps/plastiq/src/ai/reconstruct.ts`.
 
 ---
 

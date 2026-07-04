@@ -4,6 +4,29 @@
 **Branch audited:** `code-review-fixes` (17 commits ahead of `main`, plus 3 uncommitted modified files)
 **Method:** `/lore:deep-code-investigation` — six parallel read-only investigation agents (editor app, cad+sim kernel, Expanse packages, Python services, desktop+benchmark, distribution/ops), every load-bearing claim independently re-verified against the actual code with `file:line` evidence, and **all test suites run live this session** rather than trusted from docs.
 
+> **Resolution (2026-07-03, same session).** This audit was acted on immediately.
+> A verified sub-agent swarm resolved the P0–P3 items on branch `code-review-fixes`
+> (each fix committed individually after the orchestrator re-ran its tests):
+> ground/fixed now lowers to the sim manifest (§1.1); the full joint vocabulary is
+> implemented-or-loud across all four backends with rapier's rotated-hinge and
+> MuJoCo's loop-closure fixed (§1.3–1.4); `extrudeToFace` is a true up-to-face trim
+> (§1.2); the residual OCCT leaks, poisoned init memos, and hull perf are fixed
+> (§2.1); the NeRF client authenticates and the capture service got a browser client
+> + panel (§1.5–1.6); a **PolyForm Noncommercial** LICENSE, THIRD-PARTY-NOTICES, and
+> OCCT license text landed (§3.1); the desktop shell is wired and the lockfile CI
+> break is closed (§3.2/§5); a self-host Docker/nginx path + `docs/deploy.md` exist
+> (§3.3); the app-shell got an error boundary, capability guard, unsaved-changes
+> prompt, ⌘S, delete-confirm, and a loading overlay (§2); the coverage gate now
+> measures the React layer (§7); the BOM panel and a full **voxel-sculpt mode** are
+> mounted (§6); services got bounded job stores, logging, and a Python CI job (§4);
+> the open Medium/Low review findings are cleared (§8.1); and the docs are
+> reconciled (§7, this pass). Final gate: workspace typecheck + lint clean, **1474
+> vitest** passed (3 skipped), **69 Playwright e2e** passed, services **93 / 28 / 53**
+> pytest, `cargo check` clean, production build clean. Remaining by design: the
+> operator-only benchmark run (official GT access) and the empty future-scaffold
+> dirs. Individual `§`-references above point into the original findings, preserved
+> verbatim below.
+
 ---
 
 ## 0. Executive summary
