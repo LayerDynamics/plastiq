@@ -6,7 +6,7 @@ import { defineConfig } from "vite";
 // - @plastiq/sim resolves its wasm via import.meta.url; opencascade.js ships its
 //   own wasm loader — both must stay un-pre-bundled.
 // - fs.allow ../.. lets Vite serve the wasm artifacts from the repo root
-//   (packages/sim/src/pkg + the opencascade.js dist). From apps/plastiq the
+//   (packages/sim/vendor/mujoco + the opencascade.js dist). From apps/plastiq the
 //   workspace root is still two levels up, so ../.. remains correct.
 // - @plastiq/cad's OCCT init has a `import("opencascade.js/dist/node.js")` branch
 //   for Node/CI. The browser never takes it (isNode() === false), but rollup

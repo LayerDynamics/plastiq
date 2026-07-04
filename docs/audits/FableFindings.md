@@ -190,13 +190,13 @@ Yet it is already load-bearing in two bad ways: the `apps/*` workspace glob make
 
 - **README architecture is stale**: "a pnpm workspace of one app and two owned packages" (`README.md:24-32`) omits `packages/nerf` (a third owned package and a runtime dep of the app), `services/capture`, and `services/nerf` entirely.
 - **README overstates "STEP/IGES/glTF interchange"** (`README.md:37`): IGES and glTF are **export-only** (`packages/cad/src/io/index.ts:20,41,59,94` — no `importIges`/`importGltf` exists). Review.md #26, still open.
-- **Plan checkboxes contradict shipped code**: `docs/plans/2026-06-21-expanse-ref-integrations.md` leaves M1, M2, M4, M5, M6 tasks unchecked though all are implemented and tested; `docs/plans/2026-06-22-nerf-service.md` leaves N0–N7 unchecked though SPEC-11 §6 itself declares "N0–N12 complete."
+- **Plan checkboxes contradict shipped code**: `docs/plans/2026-06-21-expanse-ref-integrations.md` leaves M1, M2, M4, M5, M6 tasks unchecked though all are implemented and tested; `docs/plans/2026-06-22-nerf-service.md` leaves N0–N7 unchecked though SPEC-11 §6 itself declares "N0–N12 complete." *(Fixed 2026-07-03: both plans reconciled against the tree — every shipped task checked with delivered-as notes; M4.5's UI half left open as genuinely unshipped, M6.2 recorded as deferred per ADR 0006.)*
 - **Stale counts**: SPEC-11 claims "43 tests" vs current 53; SPEC-7 "67 pytest" (date-qualified) vs current 86; `packages/cad/vendor/occt/PROVENANCE.md:33-34` claims "288 unit + 15 browser E2E" vs current 1134/71.
 - **SPEC-11 §5 frozen contract table** is missing the shipped `DELETE /jobs/{id}` endpoint — violating its own "must not diverge without updating the client + this spec together" rule.
-- **Ghost references**: `.gitignore:20-22` and `apps/plastiq/vite.config.ts:9` both reference `packages/sim/src/pkg`, which no longer exists (sim wasm lives at `packages/sim/vendor/mujoco/`).
+- **Ghost references**: `.gitignore:20-22` and `apps/plastiq/vite.config.ts:9` both reference `packages/sim/src/pkg`, which no longer exists (sim wasm lives at `packages/sim/vendor/mujoco/`). *(Fixed 2026-07-03: both comments now point at `packages/sim/vendor/mujoco/`.)*
 - **Coverage-config stale exclusions** (Review.md #7, the one open High): `vitest.config.ts:47` blanket-excludes `**/*.tsx` (the entire React/R3F layer is invisible to the coverage floor; e2e covers behavior but the gate can't see it); `:48` excludes `apps/*/src/viewport/SceneController.ts` **which does not exist** (verified); `:65` excludes `three/contextmenu/snapshot.ts` although `snapshot.test.ts` exists and runs in the node suite (verified) — contradicting the exclusion's own "only runs in a real browser" comment.
-- `benchmark/harness/cadbench_harness/cli.py:4-5` docstring omits the registered `render` command (`cli.py:12,27`).
-- **Internal audit documents tracked at repo root** (`Missing.md`, `Review.md`, `Expanse.md` — 85 KB combined), unreferenced by the README: a stranger cloning the public repo lands on three internal working documents.
+- `benchmark/harness/cadbench_harness/cli.py:4-5` docstring omits the registered `render` command (`cli.py:12,27`). *(Fixed 2026-07-03: `render` added to the docstring.)*
+- **Internal audit documents tracked at repo root** (`Missing.md`, `Review.md`, `Expanse.md` — 85 KB combined), unreferenced by the README: a stranger cloning the public repo lands on three internal working documents. *(Resolved 2026-07-03: all root audit docs — including this file — relocated to `docs/audits/`.)*
 
 ---
 
@@ -277,7 +277,7 @@ Yet it is already load-bearing in two bad ways: the `apps/*` workspace glob make
 4. **Should capture get a UI**, or is "external tool workflow" its permanent positioning? (SPEC-10 says the latter; §1.6.)
 5. **Is rapier's rotated-hinge limitation acceptable** for a selectable backend, or should selection be constrained? — §1.4.
 6. **CADGenBench ground truth** — pursue official access or scale self-authored fixtures? — §9.
-7. **Root audit docs** (`Missing.md`, `Review.md`, `Expanse.md`) — keep at root, move to `docs/`, or drop from the public tree? — §7.
+7. **Root audit docs** (`Missing.md`, `Review.md`, `Expanse.md`) — keep at root, move to `docs/`, or drop from the public tree? — §7. *(Answered 2026-07-03: moved to `docs/audits/`.)*
 
 ---
 

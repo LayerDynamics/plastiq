@@ -7,6 +7,7 @@ every "shipped" claim against the actual code with `file:line` evidence, and **r
 suites** rather than trusting wiring alone.
 **Output location:** repo root (`/Users/ryanoboyle/cad-studio/Missing.md`) — the plain reading
 of "root of the folder structure." (The alternative reading, `docs/`, was not chosen.)
+*(Moved to `docs/audits/Missing.md` on 2026-07-03 in the documentation-reconciliation pass.)*
 
 ---
 

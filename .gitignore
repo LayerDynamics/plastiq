@@ -18,8 +18,8 @@ playwright-report/
 test-results/
 *.tsbuildinfo
 
-# NOTE: packages/sim/src/pkg/ is NOT ignored — the @plastiq/sim WASM is a
-# frozen prebuilt artifact and MUST be committed (it is not rebuilt in this repo).
+# NOTE: packages/sim/vendor/mujoco/ is NOT ignored — the @plastiq/sim WASM is a
+# vendored prebuilt artifact and MUST be committed (it is not rebuilt in this repo).
 ref/
 benchmark/cadgenbench
 

@@ -2,7 +2,7 @@
 
 Each subcommand module exposes ``add_subparser(subparsers)`` registering a
 ``handler(args) -> int``. Registered commands: ``score-fixtures``, ``sanity``,
-``run``, ``validate``, ``package``, ``score``.
+``run``, ``validate``, ``package``, ``score``, ``render``.
 """
 from __future__ import annotations
 

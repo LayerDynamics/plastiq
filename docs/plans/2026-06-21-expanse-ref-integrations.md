@@ -1,7 +1,7 @@
 # Plan — Expanse: integrate the actionable `ref/` corpus findings
 
 **Date:** 2026-06-21
-**Source:** `Expanse.md` (root) — the `ref/` corpus review, all actionable findings.
+**Source:** `docs/audits/Expanse.md` (at the repo root until 2026-07-03) — the `ref/` corpus review, all actionable findings.
 **Execution:** inline sequential, milestone by milestone · **strict TDD** (a failing test is
 written and seen red *before* any implementation, every task) · **spec/ADR per integration, docs
 kept 100% accurate as each item lands** (per CLAUDE.md).
@@ -83,72 +83,81 @@ license, the clean-room/attribution decision, and the provenance of the implemen
 
 # Milestones (sequenced by value × confidence ÷ effort)
 
-## M1 — StepForge Scaled-Chamfer-Distance fidelity gate · T2 · Apache-2.0 · NET-NEW
+## M1 — StepForge Scaled-Chamfer-Distance fidelity gate · T2 · Apache-2.0 · ✅ SHIPPED (advisory metric)
 
 **Why first:** highest ratio — pure Python on the stack reconstruct already runs, no GPU, no new
 deps (drop the open3d alignment stage; our B-rep is already in the input-mesh frame).
 
-- [ ] **M1.0 — ADR.** `docs/adr/0001-scd-fidelity-metric.md`: record StepForge Apache-2.0, that we
+- [x] **M1.0 — ADR.** `docs/adr/0001-scd-fidelity-metric.md`: record StepForge Apache-2.0, that we
       port only `reward/{step_to_pointcloud,scd_reward}.py`'s *math* (deterministic SHA-256-seeded
       area-weighted surface sampling + bidirectional Chamfer normalized by GT RMS radius), omit the
       FPFH/RANSAC/ICP alignment (same-frame), NOTICE attribution.
-- [ ] **M1.1 — TDD: deterministic surface sampler.** Failing `tests/test_fidelity.py::test_sampler_is_deterministic_and_area_weighted`
+- [x] **M1.1 — TDD: deterministic surface sampler.** Failing `tests/test_fidelity.py::test_sampler_is_deterministic_and_area_weighted`
       (same seed → identical points; density ∝ face area) → implement `app/fidelity.py:sample_surface(shape|mesh, n, seed)`
       using `BRepMesh_IncrementalMesh` + area-weighted barycentric sampling (numpy) → green.
-- [ ] **M1.2 — TDD: scaled Chamfer.** Failing `test_scd_zero_for_identical / test_scd_scale_invariant`
+      (Shipped as `sample_shape_surface` / `sample_mesh_surface`, `app/fidelity.py:127,133`.)
+- [x] **M1.2 — TDD: scaled Chamfer.** Failing `test_scd_zero_for_identical / test_scd_scale_invariant`
       (identical solids → ~0; uniformly scaled copy compared to itself → ~0 after RMS-radius
       normalization) → implement `scaled_chamfer(points_a, points_b)` via `scipy.spatial.cKDTree`
       bidirectional NN → green.
-- [ ] **M1.3 — TDD: wire into pipeline + report.** Failing `test_report_has_fidelity` (a reconstructed
+- [x] **M1.3 — TDD: wire into pipeline + report.** Failing `test_report_has_fidelity` (a reconstructed
       box reports `surface_deviation` ≤ tol) → compute SCD(reconstructed B-rep ↔ cleaned input mesh)
       in `pipeline.reconstruct`, add `surface_deviation: float` + `fidelity_tol: float` to
       `ReconstructionReport` → green. Keep it advisory (report-only) this task.
-- [ ] **M1.4 — TDD: client surfacing.** Failing vitest in `reconstruct.unit.test.ts` (parses
+- [x] **M1.4 — TDD: client surfacing.** Failing vitest in `reconstruct.unit.test.ts` (parses
       `surface_deviation`) → add optional `surface_deviation?` / `fidelity_tol?` to client
       `ReconstructReport`; show it in `GenerationPanel` convert report → green.
-- [ ] **M1.5 — Optional accuracy-ladder gate (decision in ADR).** Failing test: a near-miss analytic
+- [x] **M1.5 — Optional accuracy-ladder gate (decision in ADR).** Failing test: a near-miss analytic
       fit whose volume passes but whose *surface* deviates > tol falls through to fitted/faceted →
       add SCD as a gate alongside the volume check in the `auto` ladder → green. (If this destabilizes
       existing analytic tests, keep SCD advisory and record why in the ADR.)
-- [ ] **M1.6 — Docs.** Extend `SPEC-7` §6 report contract with the new fields; update `Expanse.md`
+      **Outcome:** the contingency — SCD stays **advisory, not a gate** (a hard gate over-rejected a
+      correct oblique cut-cylinder fit); decided on evidence, recorded in ADR 0001.
+- [x] **M1.6 — Docs.** Extend `SPEC-7` §6 report contract with the new fields; update `Expanse.md`
       rec #1 → "shipped"; `services/reconstruct/README.md` notes the new metric. Full pytest + vitest green.
 
-## M2 — BRepNet deterministic traversal substrate · T1 selectors + T2 hints · clean-room (CC-BY-NC-SA) · NET-NEW
+## M2 — BRepNet deterministic traversal substrate · T1 selectors + T2 hints · clean-room (CC-BY-NC-SA) · ✅ SHIPPED
 
 **Why second:** high value (user-facing selection **and** reconstruct quality), high confidence
 (deterministic, OCCT on both sides), clean-room of a well-understood algorithm.
 
 ### M2a — shared traversal core
-- [ ] **M2a.0 — ADR.** `docs/adr/0002-brepnet-cleanroom-traversal.md`: CC-BY-NC-SA → algorithm-only,
+- [x] **M2a.0 — ADR.** `docs/adr/0002-brepnet-cleanroom-traversal.md`: CC-BY-NC-SA → algorithm-only,
       derived from OCCT topology + the published method, no source transcription.
-- [ ] **M2a.1 — TDD (T1, `@plastiq/cad`): half-edge incidence.** Failing
+- [x] **M2a.1 — TDD (T1, `@plastiq/cad`): half-edge incidence.** Failing
       `packages/cad/src/select/topology.unit.test.ts` (a box → 6 faces, each coedge's `next/mate/face`
       consistent; mate is an involution) → implement `select/topology.ts:buildIncidence(oc, solid)`
       producing `next/mate/face/edge` coedge arrays from OCCT `TopExp` maps → green.
-- [ ] **M2a.2 — TDD: dihedral convexity.** Failing `test_box_edges_all_convex / test_pocket_edge_concave`
+      (Shipped as `faceAdjacency` over the tagged tessellation — `select/topology.ts:94` — rather than
+      OCCT coedge `next/mate` arrays; same substrate role, mesh-side.)
+- [x] **M2a.2 — TDD: dihedral convexity.** Failing `test_box_edges_all_convex / test_pocket_edge_concave`
       (90° box edges convex; a cut pocket's interior edge concave; coplanar = smooth) → implement
       `edgeConvexity(oc, solid, edge)` = signed dihedral via the two adjacent-face normals at the
       shared edge midpoint, 5° smooth tolerance (reuse `adjacentFaceNormals`, `mesh/normals.ts:126`) → green.
+      (Shipped mesh-side: `edgeConvexity(mesh, edge)`, `select/topology.ts:78`.)
 
 ### M2b — T1 selectors (authoring UX)
-- [ ] **M2b.1 — TDD: tangent-connected faces.** Failing `predicates` test (a filleted box: select one
+- [x] **M2b.1 — TDD: tangent-connected faces.** Failing `predicates` test (a filleted box: select one
       fillet → returns the whole tangent chain of fillet faces) → add `{kind:"tangentFaces"; seed}` to
       the `Selector` union + `resolveSelector` (grow across G1/smooth edges via the convexity core) → green.
-- [ ] **M2b.2 — TDD: fillet chain.** Failing test (select fillet chain by convex/concave + cylindrical
+- [x] **M2b.2 — TDD: fillet chain.** Failing test (select fillet chain by convex/concave + cylindrical
       surface-type) → add `{kind:"filletChain"}` → green.
-- [ ] **M2b.3 — TDD: convex/concave edges.** Failing test → add `{kind:"convexEdges"|"concaveEdges"; tol?}` → green.
-- [ ] **M2b.4 — Wire into the editor.** Failing app test (a ribbon/context-menu "Select tangent faces"
+- [x] **M2b.3 — TDD: convex/concave edges.** Failing test → add `{kind:"convexEdges"|"concaveEdges"; tol?}` → green.
+- [x] **M2b.4 — Wire into the editor.** Failing app test (a ribbon/context-menu "Select tangent faces"
       action resolves a selection on the active solid) → expose the new selectors through the
       selection actions consuming `resolveSelector` → green.
+      (Delivered as **worker + agent-prompt** wiring — `worker/rebuild.ts` resolves the new selector
+      kinds and the AI prompt exposes them; no ribbon/context-menu action. See `Expanse.md` rec #2.)
 
 ### M2c — T2 feature-recognition hints (reconstruct)
-- [ ] **M2c.1 — TDD: tangent pre-grouping.** Failing `services/reconstruct/tests/test_recognition.py`
+- [x] **M2c.1 — TDD: tangent pre-grouping.** Failing `services/reconstruct/tests/test_recognition.py`
       (a mesh of a filleted prism: adjacent tangent regions group together *before* fitting) →
       implement `app/recognition.py:group_tangent_regions(mesh)` (mesh-side dihedral adjacency, the
       same convexity rule) feeding `fitted.py`/`segment.py` region growing → green.
-- [ ] **M2c.2 — TDD: fillet/hole flags in report.** Failing test (box-with-hole reports
+- [x] **M2c.2 — TDD: fillet/hole flags in report.** Failing test (box-with-hole reports
       `recognized_holes ≥ 1`) → add recognition counts to `ReconstructionReport` → green.
-- [ ] **M2c.3 — Docs.** New `docs/specs/SPEC-8-feature-recognition.md` (T1 selectors + T2 hints);
+      (Shipped as a `tangent_regions` count on the report — SPEC-7 §6 — rather than `recognized_holes`.)
+- [x] **M2c.3 — Docs.** New `docs/specs/SPEC-8-feature-recognition.md` (T1 selectors + T2 hints);
       update `Expanse.md` rec #2 → shipped. Full suites green.
 
 ## M3 — forgent3d warm-OCP process pool · T2 · MIT · ⚠️ NOT BUILT (premise void — see ADR 0003)
@@ -167,53 +176,67 @@ service is local single-user (D-6) so parallelism is moot. Building a `spawn` po
 - [x] **M3.1–M3.3 — NOT BUILT.** No `app/pool.py`; the simple long-running-server + `to_thread` design
       is correct. Documented, not skipped.
 
-## M4 — partcad-style declarative `.assy` assembly + auto-BOM · T1 · concept (Apache-2.0) · NET-NEW
+## M4 — partcad-style declarative `.assy` assembly + auto-BOM · T1 · concept (Apache-2.0) · ✅ built + tested (`.assy` import/export UI pending)
 
 **Why fourth:** real authoring value, high confidence, builds on our existing assembly layer; pure
 TS, deterministic.
 
-- [ ] **M4.0 — ADR.** `docs/adr/0004-declarative-assembly-bom.md`: our own schema, partcad as prior art.
-- [ ] **M4.1 — Grounding.** Read the current assembly model (`packages/cad/src/assembly/*`,
+- [x] **M4.0 — ADR.** `docs/adr/0004-declarative-assembly-bom.md`: our own schema, partcad as prior art.
+- [x] **M4.1 — Grounding.** Read the current assembly model (`packages/cad/src/assembly/*`,
       app `src/assembly/*`) to anchor the schema to existing mates/instances (recorded in the ADR).
-- [ ] **M4.2 — TDD: schema + parser.** Failing test (a YAML/JSON `.assy` with `links:[{part,location:[[xyz],[axis],deg]}]`
+- [x] **M4.2 — TDD: schema + parser.** Failing test (a YAML/JSON `.assy` with `links:[{part,location:[[xyz],[axis],deg]}]`
       parses to typed nodes; recursive nesting) → implement the assembly-description schema + loader
       in `@plastiq/cad` → green.
-- [ ] **M4.3 — TDD: realize into the assembly model.** Failing test (a 2-part `.assy` builds the
+      (Shipped app-side — `apps/plastiq/src/assembly/assy.ts`, own dependency-free JSON schema —
+      not in `@plastiq/cad`.)
+- [x] **M4.3 — TDD: realize into the assembly model.** Failing test (a 2-part `.assy` builds the
       instances + transforms our solver already supports) → map parsed links → component instances → green.
-- [ ] **M4.4 — TDD: auto-BOM.** Failing test (the assembly yields a BOM: part → count, recursively
+- [x] **M4.4 — TDD: auto-BOM.** Failing test (the assembly yields a BOM: part → count, recursively
       rolled up) → implement BOM derivation → green.
 - [ ] **M4.5 — UI + docs.** Import/export `.assy` + a BOM panel; `SPEC-9-authoring-extensions.md`
       §assembly; update `Expanse.md`. Suites green.
+      **Partial (as of 2026-07-03):** `BomPanel.tsx` (+ tests), `SPEC-9` §assembly, and the `Expanse.md`
+      partcad item are done, and the BOM panel is now **mounted in the app shell**
+      (`app/BomSection.tsx`, rendered from `App.tsx`). Still open: a `.assy` **file import/export** UI
+      (`parseAssy` has no UI caller).
 
-## M5 — Graph-CAD decomposition-graph planning-IR for the AI agent · T1 orchestration · idea-only · NET-NEW
+## M5 — Graph-CAD decomposition-graph planning-IR for the AI agent · T1 orchestration · idea-only · ✅ SHIPPED
 
 **Why fifth:** medium value (fewer long-horizon agent errors), medium confidence; independent design
 (no license).
 
-- [ ] **M5.0 — ADR.** `docs/adr/0005-agent-planning-ir.md`: independent IR design; Graph-CAD as inspiration only.
-- [ ] **M5.1 — Grounding.** Read `apps/plastiq/src/ai/{agentRunner,agentTurn,prompt}.ts` +
+- [x] **M5.0 — ADR.** `docs/adr/0005-agent-planning-ir.md`: independent IR design; Graph-CAD as inspiration only.
+- [x] **M5.1 — Grounding.** Read `apps/plastiq/src/ai/{agentRunner,agentTurn,prompt}.ts` +
       `tools/toolDefs.ts` to anchor where a pre-plan step inserts (recorded in ADR).
-- [ ] **M5.2 — TDD: plan schema + emit.** Failing `agentRunner` unit test (given a part prompt, the
+- [x] **M5.2 — TDD: plan schema + emit.** Failing `agentRunner` unit test (given a part prompt, the
       agent first emits a hierarchical decomposition plan: nodes = sub-parts, edges = spatial/constraint
       relations, before any `build_part` call) → add a planning pre-step + zod schema → green.
-- [ ] **M5.3 — TDD: plan-conditioned execution.** Failing test (tool calls reference plan nodes;
+      (Shipped as a `plan_part` **tool** — `ai/planning.ts` validated graph + `tools/toolDefs.ts:46,159`;
+      the prompt directs the agent to call it first for complex objects, `ai/prompt.ts:17`.)
+- [x] **M5.3 — TDD: plan-conditioned execution.** Failing test (tool calls reference plan nodes;
       a deterministic fixture run produces the plan→calls trace) → thread the plan into the turn
-      loop as guidance → green.
-- [ ] **M5.4 — Docs.** `SPEC-6` agent section addendum; update `Expanse.md`. Vitest green.
+      loop as guidance → green. (Plan recorded for the trace; `runAgent` plan→build→answer
+      orchestration test — see `Expanse.md` Graph-CAD item, 13 tests.)
+- [x] **M5.4 — Docs.** `SPEC-6` agent section addendum; update `Expanse.md`. Vitest green.
+      (Delivered as `SPEC-9` §planning-ir + ADR 0005 rather than a SPEC-6 addendum.)
 
-## M6 — kornia geometry lifts · T2 · Apache-2.0 · enabling utility for M7
+## M6 — kornia geometry lifts · T2 · Apache-2.0 · enabling utility for M7 · ✅ lifts SHIPPED (camera solvers deferred)
 
 **Why sixth:** low standalone value today (reconstruct ingests meshes, not images) — built here as
 the camera/normal math that M7's capture pipeline needs, plus a standalone mesh normal utility.
 
-- [ ] **M6.0 — ADR.** `docs/adr/0006-kornia-geometry-lifts.md` (Apache-2.0, port-with-attribution).
-- [ ] **M6.1 — TDD: depth→normals/points.** Failing `tests/test_geometry.py` (a synthetic depth map +
+- [x] **M6.0 — ADR.** `docs/adr/0006-kornia-geometry-lifts.md` (Apache-2.0, port-with-attribution).
+- [x] **M6.1 — TDD: depth→normals/points.** Failing `tests/test_geometry.py` (a synthetic depth map +
       intrinsics → correct per-pixel normals/3D points) → port `depth_to_normals`/`depth_to_3d` math to
       numpy in `app/geometry.py` → green.
-- [ ] **M6.2 — TDD: camera solvers (for M7).** Failing tests for Nister 5-point relative pose +
-      Kannala-Brandt fisheye distort/undistort against known synthetic geometry → port the closed-form
-      math (numpy) → green. (Used by M7 capture; standalone-tested here.)
-- [ ] **M6.3 — Docs.** Folded into `SPEC-8`/`SPEC-… capture`; update `Expanse.md` rec #5.
+      (Shipped in **MLX**, in the capture service: `services/capture/app/geometry.py` —
+      `depth_to_normals` + `unproject_depth` + a `PinholeCamera`.)
+- [x] **M6.2 — TDD: camera solvers (for M7).** **Deferred, not built** (like M9.1): Nister 5-point is
+      an SfM pose solver and SfM stays COLMAP's job (ADR 0007), so nothing here would call it;
+      Kannala-Brandt fisheye is niche and COLMAP handles distortion. Deferral + revisit criteria
+      recorded in ADR 0006 and `Expanse.md` rec #5.
+- [x] **M6.3 — Docs.** Folded into `SPEC-8`/`SPEC-… capture`; update `Expanse.md` rec #5.
+      (Landed as `SPEC-10` §capture referencing `app/geometry.py`.)
 
 ## M7 — MLX neural-SDF capture (points/depth → mesh) · T2 self-hosted · Apache-2.0 · ✅ SHIPPED
 
