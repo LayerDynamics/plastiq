@@ -1,0 +1,13 @@
+{
+  "name": "@plastiq/capture",
+  "version": "0.1.0",
+  "private": true,
+  "license": "SEE LICENSE IN LICENSE",
+  "type": "module",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "description": "Browser client for Plastiq's MLX capture/completion service (services/capture): submit an oriented point cloud (/capture) or a partial scan (/complete), poll, and receive a GLB that feeds the MeshDoc → reconstruct (mesh → B-rep) path. Includes the ASCII PLY/XYZ/JSON point-cloud parsers.",
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  }
+}

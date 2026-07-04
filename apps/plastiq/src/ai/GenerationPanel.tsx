@@ -15,11 +15,14 @@ import { toProviderSettings, type AiSettings } from "./settings.js";
 import { runGeneration } from "./runGeneration.js";
 import { reconstructMesh, stepToImportDocument } from "./reconstruct.js";
 import { captureFromPhotos } from "./nerf.js";
+import { meshFromPartialScan, meshFromPointCloud } from "./capture.js";
+import { parsePointCloud, MIN_POINTS, type ParsedPointCloud } from "@plastiq/capture";
 import {
   checkServiceHealth,
   providerEndpoint,
   serviceUnreachableMessage,
   translateProviderError,
+  CAPTURE_DEFAULT_BASE_URL,
   NERF_DEFAULT_BASE_URL,
   RECONSTRUCT_DEFAULT_BASE_URL,
   type ProviderEndpoint,
@@ -35,6 +38,7 @@ import { UsageMeter, type UsageSnapshot } from "./usage.js";
 import { createMesh } from "./tools/createMesh.js";
 import type { GenImage } from "./meshgen/types.js";
 import type { ChatMessage, ContentPart } from "./providers/types.js";
+import type { MeshDoc } from "../store/types.js";
 
 /** An image the user attached to a prompt, with a stable id so the creative img3d route
  * (create_mesh) can reference it via resolveImage. */
@@ -431,6 +435,181 @@ function NerfCaptureSection(): React.JSX.Element {
       )}
       {error && (
         <div data-testid="nerf-error" className="text-[10px] text-[#fb9]">
+          {error}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Cap on points per scan — bounds the JSON POST body (each point serializes to ~40–70 bytes, so
+ * 200k oriented points ≈ 15–25 MB) and keeps the server-side SDF fit tractable. The server floor
+ * is MIN_POINTS (its 400 below 16 points); this is the client-side ceiling. */
+const MAX_CAPTURE_POINTS = 200_000;
+
+/** SPEC-10 (browser client, 2026-07-03) — build a mesh from a point-cloud scan via the
+ * @plastiq/capture service. The user picks a `.ply`/`.xyz`/`.json` scan file, parsed client-side
+ * into the service's raw-array schema; two modes map to the two endpoints: **Capture** (`/capture`,
+ * needs an ORIENTED cloud — points + normals) and **Complete** (`/complete`, a partial points-only
+ * scan filled into a full mesh). The returned GLB is persisted as a MeshDoc and the new project is
+ * OPENED (createMeshProject only persists), so the panel switches to MeshConvertSection — the scan
+ * flows into the existing "Convert to CAD" (mesh → B-rep) path, exactly like the NeRF capture. The
+ * base URL comes from settings (captureBaseURL); the job can run minutes, so it is abortable. */
+function CaptureScanSection(): React.JSX.Element {
+  const [cloud, setCloud] = useState<ParsedPointCloud | null>(null);
+  const [fileName, setFileName] = useState<string | null>(null);
+  const [mode, setMode] = useState<"capture" | "complete">("capture");
+  const [busy, setBusy] = useState(false);
+  const [status, setStatus] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
+
+  const onFile = useCallback(
+    async (f?: File): Promise<void> => {
+      if (!f || busy) return;
+      setError(null);
+      try {
+        const parsed = parsePointCloud(f.name, await fileToText(f));
+        setCloud(parsed);
+        setFileName(f.name);
+        // A points-only file can never feed /capture (the server 400s without normals) — flip to
+        // the mode that can consume it instead of letting the submit fail later.
+        if (!parsed.normals) setMode("complete");
+      } catch (e) {
+        setCloud(null);
+        setFileName(null);
+        setError(e instanceof Error ? e.message : String(e));
+      }
+    },
+    [busy],
+  );
+
+  const run = useCallback(async (): Promise<void> => {
+    if (!cloud || busy) return;
+
+    // Client-side pre-checks BEFORE the round-trip: the server's own floor (main.py 400s under
+    // 16 points), the browser-memory ceiling, and /capture's oriented-cloud requirement. The
+    // parsers already guarantee Nx3 finite values and parallel normals.
+    if (cloud.points.length < MIN_POINTS) {
+      setError(`Too few points (${cloud.points.length}); the service needs at least ${MIN_POINTS}.`);
+      return;
+    }
+    if (cloud.points.length > MAX_CAPTURE_POINTS) {
+      setError(`Too many points (${cloud.points.length}); the cap is ${MAX_CAPTURE_POINTS}.`);
+      return;
+    }
+    if (mode === "capture" && !cloud.normals) {
+      setError("This file has no normals — Capture needs an oriented cloud (x y z nx ny nz). Switch to Complete, or export normals.");
+      return;
+    }
+
+    const controller = new AbortController();
+    abortRef.current = controller;
+    setBusy(true);
+    setError(null);
+    setStatus("checking service…");
+    const baseURL = useAiStore.getState().settings?.captureBaseURL;
+    // Pre-flight GET /health (short timeout) BEFORE the minutes-long fit, so a down service
+    // fails in seconds with a "start it with …" hint.
+    const healthBase = (baseURL ?? CAPTURE_DEFAULT_BASE_URL).replace(/\/+$/, "");
+    if (!(await checkServiceHealth(healthBase))) {
+      setError(serviceUnreachableMessage("capture", healthBase));
+      setStatus(null);
+      setBusy(false);
+      abortRef.current = null;
+      return;
+    }
+    setStatus("submitting…");
+    try {
+      const deps = { persist: (doc: MeshDoc) => useProjectsStore.getState().createMeshProject(doc) };
+      const opts = { ...(baseURL ? { baseURL } : {}), signal: controller.signal, onState: (s: string) => setStatus(s) };
+      const { meshDocId } =
+        mode === "capture"
+          ? await meshFromPointCloud({ points: cloud.points, normals: cloud.normals! }, deps, opts, "Scanned mesh")
+          : await meshFromPartialScan({ points: cloud.points }, deps, opts, "Completed scan");
+      // Open the new mesh project so the panel switches to MeshConvertSection ("Convert to CAD").
+      await useProjectsStore.getState().open(meshDocId);
+      setCloud(null);
+      setFileName(null);
+      setStatus(null);
+    } catch (e) {
+      if (e instanceof DOMException && e.name === "AbortError") setStatus("cancelled");
+      else setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+      abortRef.current = null;
+    }
+  }, [cloud, mode, busy]);
+
+  const cancel = useCallback(() => abortRef.current?.abort(), []);
+
+  return (
+    <div data-testid="capture-scan" className="flex flex-col gap-1 rounded border border-[#1b2230] bg-black/20 p-2">
+      <div className="text-[10px] text-[#9ab]">Scan to mesh (point cloud → mesh → CAD)</div>
+      <div className="flex flex-wrap items-center gap-2 text-[10px] text-[#9ab]">
+        <label className="cursor-pointer rounded border border-[#2a3444] bg-[#10141c] px-2 py-1 hover:bg-[#16202c]">
+          <input
+            data-testid="capture-file-input"
+            type="file"
+            accept=".ply,.xyz,.json"
+            className="hidden"
+            disabled={busy}
+            onChange={(e) => void onFile(e.target.files?.[0])}
+          />
+          {fileName ? "Replace scan" : "Scan file (.ply/.xyz/.json)"}
+        </label>
+        {fileName && cloud && (
+          <span data-testid="capture-file-name" className="max-w-[11rem] truncate text-[#cde]">
+            {fileName} ({cloud.points.length} pts{cloud.normals ? ", normals" : ""})
+          </span>
+        )}
+        <div data-testid="capture-mode" className="flex overflow-hidden rounded border border-[#2a3444]">
+          <button
+            type="button"
+            data-testid="capture-mode-capture"
+            onClick={() => setMode("capture")}
+            disabled={busy}
+            className={`px-2 py-0.5 ${mode === "capture" ? "bg-[#14253a] text-[#bfe]" : "bg-[#10141c] text-[#789]"}`}
+          >
+            Capture (oriented)
+          </button>
+          <button
+            type="button"
+            data-testid="capture-mode-complete"
+            onClick={() => setMode("complete")}
+            disabled={busy}
+            className={`px-2 py-0.5 ${mode === "complete" ? "bg-[#14253a] text-[#bfe]" : "bg-[#10141c] text-[#789]"}`}
+          >
+            Complete partial scan
+          </button>
+        </div>
+        <button
+          type="button"
+          data-testid="capture-run-btn"
+          onClick={() => void run()}
+          disabled={busy || !cloud}
+          className="rounded border border-[#3a5a7a] bg-[#14253a] px-2 py-1 text-[#bfe] hover:bg-[#1a2f48] disabled:opacity-40"
+        >
+          {busy ? (mode === "capture" ? "Capturing…" : "Completing…") : mode === "capture" ? "Build mesh" : "Complete scan"}
+        </button>
+        {busy && (
+          <button
+            type="button"
+            data-testid="capture-cancel-btn"
+            onClick={cancel}
+            className="rounded border border-[#7a3a3a] bg-[#2a1414] px-2 py-1 text-[#fbb] hover:bg-[#341a1a]"
+          >
+            Cancel
+          </button>
+        )}
+      </div>
+      {status && (
+        <div data-testid="capture-status" className="text-[10px] text-[#789]">
+          {status}
+        </div>
+      )}
+      {error && (
+        <div data-testid="capture-error" className="text-[10px] text-[#fb9]">
           {error}
         </div>
       )}
@@ -876,6 +1055,7 @@ export function GenerationPanel(): React.JSX.Element {
             </div>
           )}
           <NerfCaptureSection />
+          <CaptureScanSection />
           <CreativeKeyField />
           {/* Full provider/model/base-URL/key configuration (FR-4/FR-5/FR-5b) — collapsed
               by default so the prompt stays the focus; the first-run chooser only sets the

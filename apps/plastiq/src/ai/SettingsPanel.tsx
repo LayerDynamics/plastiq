@@ -4,8 +4,8 @@
 // preset (Anthropic / local Ollama / OpenAI-compatible), choose a model from the curated
 // catalog (Appendix A) OR type a free-text override, set the base URL (also the hosted-proxy
 // seam — FR-5), the BYO API key, the creative mesh-gen (fal) key + proxy URL, and the
-// self-hosted reconstruction / NeRF service URLs (+ the optional NeRF API key for a
-// NERF_API_KEY-protected deployment). The tool-capability preflight warning (FR-5b) is
+// self-hosted reconstruction / NeRF / capture service URLs (+ the optional NeRF API key for
+// a NERF_API_KEY-protected deployment). The tool-capability preflight warning (FR-5b) is
 // SURFACED here so a non-tool model isn't silently accepted. Persists via the aiStore.
 
 import { useMemo, useState } from "react";
@@ -55,6 +55,7 @@ export function SettingsPanel(props: { onClose?: () => void }): React.JSX.Elemen
   const [reconstructBaseURL, setReconstructBaseURL] = useState(settings?.reconstructBaseURL ?? "");
   const [nerfBaseURL, setNerfBaseURL] = useState(settings?.nerfBaseURL ?? "");
   const [nerfApiKey, setNerfApiKey] = useState(settings?.nerfApiKey ?? "");
+  const [captureBaseURL, setCaptureBaseURL] = useState(settings?.captureBaseURL ?? "");
   const [meshGenBaseURL, setMeshGenBaseURL] = useState(settings?.meshGenBaseURL ?? "");
   const [saved, setSaved] = useState(false);
 
@@ -89,6 +90,7 @@ export function SettingsPanel(props: { onClose?: () => void }): React.JSX.Elemen
       ...(reconstructBaseURL.trim() ? { reconstructBaseURL: reconstructBaseURL.trim() } : {}),
       ...(nerfBaseURL.trim() ? { nerfBaseURL: nerfBaseURL.trim() } : {}),
       ...(nerfApiKey.trim() ? { nerfApiKey: nerfApiKey.trim() } : {}),
+      ...(captureBaseURL.trim() ? { captureBaseURL: captureBaseURL.trim() } : {}),
       ...(meshGenBaseURL.trim() ? { meshGenBaseURL: meshGenBaseURL.trim() } : {}),
     };
     void save(next).then(() => {
@@ -214,6 +216,17 @@ export function SettingsPanel(props: { onClose?: () => void }): React.JSX.Elemen
         }}
         type="password"
         placeholder="(blank = open dev service)"
+      />
+
+      <Field
+        testid="settings-capture-url"
+        label="Capture service URL (point cloud→mesh)"
+        value={captureBaseURL}
+        onChange={(v) => {
+          setCaptureBaseURL(v);
+          setSaved(false);
+        }}
+        placeholder="http://localhost:8001"
       />
 
       <Field

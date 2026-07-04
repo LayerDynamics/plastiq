@@ -6,9 +6,10 @@
 // `{type:"error"}` relay (agentRunner.ts) or a thrown Error. `translateProviderError`
 // maps the common failure classes to a friendly, actionable line — the raw message is
 // kept alongside so the UI can show it collapsed/secondary. `checkServiceHealth` is the
-// pre-flight GET /health (short timeout) for the reconstruction (SPEC-6 R6.6) and NeRF
-// (SPEC-11 N11) services, both of which expose /health; it gates job submission so a
-// down service fails in ~3 s with a "start it with …" hint instead of a raw fetch error.
+// pre-flight GET /health (short timeout) for the reconstruction (SPEC-6 R6.6), NeRF
+// (SPEC-11 N11), and capture/completion (SPEC-10) services, all of which expose /health;
+// it gates job submission so a down service fails in ~3 s with a "start it with …" hint
+// instead of a raw fetch error.
 
 import { MODEL_CATALOG } from "./providers/models.js";
 import type { AiSettings } from "./settings.js";
@@ -90,6 +91,8 @@ export function translateProviderError(raw: string, endpoint: ProviderEndpoint):
 export const RECONSTRUCT_DEFAULT_BASE_URL = "http://localhost:8000";
 /** Client default of the NeRF photo-capture service (@plastiq/nerf). */
 export const NERF_DEFAULT_BASE_URL = "http://localhost:8002";
+/** Client default of the point-cloud capture/completion service (@plastiq/capture). */
+export const CAPTURE_DEFAULT_BASE_URL = "http://localhost:8001";
 
 /** GET `<baseURL>/health` with a short timeout. True iff the service answered 2xx.
  * Any failure (refused, DNS, timeout, non-2xx) is "unreachable" — the caller shows a
@@ -113,10 +116,12 @@ export async function checkServiceHealth(
 
 /** The "service unreachable" line for a section's error slot, with the documented dev
  * start command (services/<name>/README). */
-export function serviceUnreachableMessage(service: "reconstruct" | "nerf", baseURL: string): string {
+export function serviceUnreachableMessage(service: "reconstruct" | "nerf" | "capture", baseURL: string): string {
   const [what, env, port] =
     service === "reconstruct"
       ? ["Reconstruction service", "plastiq-reconstruct", "8000"]
-      : ["NeRF capture service", "plastiq-nerf", "8002"];
+      : service === "nerf"
+        ? ["NeRF capture service", "plastiq-nerf", "8002"]
+        : ["Capture/completion service", "plastiq-capture", "8001"];
   return `${what} unreachable at ${baseURL} — start it with: mamba run -n ${env} uvicorn app.main:app --port ${port} (in services/${service}).`;
 }

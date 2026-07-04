@@ -26,6 +26,10 @@ export interface AiSettings {
   /** Base URL of the self-hosted NeRF / photo-capture service (SPEC-11 N11) — posed photos →
    * surface mesh; absent ⇒ the @plastiq/nerf client default (http://localhost:8002). */
   nerfBaseURL?: string;
+  /** Base URL of the self-hosted capture/completion service (SPEC-10) — oriented point cloud →
+   * watertight mesh (/capture) and partial-scan completion (/complete); absent ⇒ the
+   * @plastiq/capture client default (http://localhost:8001). */
+  captureBaseURL?: string;
   /** API key for a key-protected NeRF service deployment (its `NERF_API_KEY`) — sent as
    * `Authorization: Bearer <key>` on every request (SPEC-11 §5); absent ⇒ no auth header
    * (the open dev default, matching the other self-hosted services). */

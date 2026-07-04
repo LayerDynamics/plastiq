@@ -65,6 +65,9 @@ importers:
       '@plastiq/cad':
         specifier: workspace:*
         version: link:../../packages/cad
+      '@plastiq/capture':
+        specifier: workspace:*
+        version: link:../../packages/capture
       '@plastiq/nerf':
         specifier: workspace:*
         version: link:../../packages/nerf
@@ -144,6 +147,8 @@ importers:
       opencascade.js:
         specifier: 2.0.0-beta.b5ff984
         version: 2.0.0-beta.b5ff984(ws@8.21.0)
+
+  packages/capture: {}
 
   packages/nerf: {}
 
