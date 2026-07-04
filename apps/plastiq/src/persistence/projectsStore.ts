@@ -76,28 +76,45 @@ function errMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
-/** The document to persist for the OPEN project: the live voxel sculpt when one is
- * open (voxel mode), else the parametric editor document. Deep-copied either way so
- * a stored document never aliases live state (toDocument already clones). */
+/** The document to persist for the OPEN project: the open mesh document when one
+ * is active (mesh mode, SPEC-6 decision 20), else the live voxel sculpt when one is
+ * open (voxel mode), else the parametric editor document. Deep-copied in every case
+ * so a stored document never aliases live state (toDocument already clones). Without
+ * the mesh branch, save()/autosave on an open mesh project would clobber its stored
+ * GLB with the (empty) parametric editor document. */
 function liveDocument(): PersistedDoc {
+  const mesh = useProjectsStore.getState().activeMeshDoc;
+  if (mesh) return structuredClone(mesh);
   const voxel = useVoxelStore.getState().doc;
   return voxel ? structuredClone(voxel) : useCadStore.getState().toDocument();
 }
 
 /** Wrap a document for the recovery-snapshot machinery (persistence/recovery.ts),
  * which is typed over CadDocument and walks `doc.features` for import-payload
- * compaction. A voxel sculpt rides in an envelope with empty features/params: the
- * compaction pass no-ops over it, JSON round-trips it verbatim, and
- * {@link voxelOfRecoveryDoc} unwraps it on recover. Parametric docs pass through. */
+ * compaction. A voxel sculpt or a mesh document rides in an envelope with empty
+ * features/params: the compaction pass no-ops over it, JSON round-trips it verbatim
+ * (a MeshDoc is plain JSON — kind/name/glb/source), and {@link voxelOfRecoveryDoc} /
+ * {@link meshOfRecoveryDoc} unwrap it on recover. Parametric docs pass through.
+ * Passing a MeshDoc through UNwrapped would make writeRecovery throw (it iterates
+ * `doc.features`, absent on a MeshDoc) and report "recovery snapshot failed". */
 function toRecoveryDoc(doc: PersistedDoc): CadDocument {
-  if (!isVoxelDoc(doc)) return doc as CadDocument;
-  return { features: [], params: {}, voxel: doc } as CadDocument;
+  if (isVoxelDoc(doc)) return { features: [], params: {}, voxel: doc } as CadDocument;
+  if (isMeshDoc(doc)) return { features: [], params: {}, mesh: doc } as CadDocument;
+  return doc as CadDocument;
 }
 
 /** The voxel document inside a recovery snapshot's envelope, or null. */
 export function voxelOfRecoveryDoc(doc: CadDocument): VoxelDoc | null {
   const v = (doc as { voxel?: unknown }).voxel;
   return isVoxelDoc(v) ? v : null;
+}
+
+/** The mesh document inside a recovery snapshot's envelope, or null. */
+export function meshOfRecoveryDoc(doc: CadDocument): MeshDoc | null {
+  const m = (doc as { mesh?: unknown }).mesh;
+  return typeof m === "object" && m !== null && isMeshDoc(m as PersistedDoc)
+    ? (m as MeshDoc)
+    : null;
 }
 
 /** Enter/leave the Sculpt workspace to match the document kind being opened, so a
@@ -289,9 +306,10 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
     }
     set({ status: "saving…" });
     try {
-      // Kind-aware: persists the live voxel sculpt when one is open, else the
-      // parametric document (liveDocument). Voxel projects get viewport thumbnails
-      // exactly like parametric ones — the same canvas shows the sculpt.
+      // Kind-aware: persists the open mesh document when one is active, else the
+      // live voxel sculpt, else the parametric document (liveDocument). Mesh and
+      // voxel projects get viewport thumbnails exactly like parametric ones — the
+      // same canvas shows the mesh (from its GLB) or the sculpt.
       await store.save(currentId, liveDocument(), thumbnail?.() ?? null);
       await get().refresh();
       set({ status: "saved" });
@@ -370,15 +388,24 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
     if (!snap) return;
     set({ busy: true });
     const voxel = voxelOfRecoveryDoc(snap.doc);
+    const mesh = meshOfRecoveryDoc(snap.doc);
     if (voxel) {
       // A crashed voxel sculpt (ADR-0010): reopen it in the voxel store + workspace.
       useVoxelStore.getState().open(voxel);
       syncWorkspace(true);
       set({ activeMeshDoc: null });
+    } else if (mesh) {
+      // A crashed mesh project (SPEC-6 decision 20): restore it as activeMeshDoc —
+      // the viewport re-renders it from its GLB; the parametric editor stays out of
+      // the loop, exactly as open() routes a mesh project.
+      useVoxelStore.getState().close();
+      syncWorkspace(false);
+      set({ activeMeshDoc: mesh });
     } else {
       useVoxelStore.getState().close();
       syncWorkspace(false);
       useCadStore.getState().loadDocument(snap.doc);
+      set({ activeMeshDoc: null }); // a stale open mesh doc must not shadow the recovered editor doc
     }
     set({
       currentId: snap.currentId,
