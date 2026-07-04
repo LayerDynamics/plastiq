@@ -8,8 +8,7 @@ import * as THREE from "three";
 import { useThree } from "@react-three/fiber";
 import { useCadStore } from "../../store/store.js";
 import { useSketchStore } from "../../sketch/sketchStore.js";
-import { Picker } from "../../viewport/pick.js";
-import { GpuPicker } from "../gpuPick.js";
+import { useSharedPickers } from "../sharedPickers.js";
 import type { BuiltPart } from "../../viewport/buildMesh.js";
 import { resolveContextTarget, type RightClickHit } from "./contextSelection.js";
 import { buildMenuSections } from "./contextOptions.js";
@@ -31,8 +30,9 @@ export function useCanvasRightClick(part: BuiltPart | null): void {
   // Long-lived helpers + a ref so the listener always sees the latest part.
   const partRef = useRef<BuiltPart | null>(part);
   partRef.current = part;
-  const picker = useRef(new Picker());
-  const gpu = useRef(new GpuPicker());
+  // Picker + GpuPicker shared with the Picking layer (one GPU-id render target /
+  // id-mesh build between them); ref-count-released on unmount.
+  const pickers = useSharedPickers();
 
   useEffect(() => {
     const el = gl.domElement;
@@ -94,14 +94,14 @@ export function useCanvasRightClick(part: BuiltPart | null): void {
 
       const p = partRef.current;
       if (!p) return { hit: null, worldPoint: fallbackPoint(v) };
-      const surface = picker.current.pickPoint(p, v, camera);
+      const surface = pickers.picker.pickPoint(p, v, camera);
       const worldPoint: [number, number, number] = surface
         ? [surface.x, surface.y, surface.z]
         : fallbackPoint(v);
       const mode = useCadStore.getState().selMode;
-      let hit: RightClickHit | null = picker.current.pick(p, v, camera, mode);
-      if (!hit && (mode === "face" || mode === "body") && gpu.current.rayHitsPart(p, camera, ndc)) {
-        const id = gpu.current.pick(gl, camera, p, ndc);
+      let hit: RightClickHit | null = pickers.picker.pick(p, v, camera, mode);
+      if (!hit && (mode === "face" || mode === "body") && pickers.gpu.rayHitsPart(p, camera, ndc)) {
+        const id = pickers.gpu.pick(gl, camera, p, ndc);
         if (id != null) hit = { kind: mode, id };
       }
       return { hit, worldPoint };
@@ -161,6 +161,6 @@ export function useCanvasRightClick(part: BuiltPart | null): void {
     };
   }, [gl, camera, controls, invalidate]);
 
-  // Free the GPU-id render target when the menu layer unmounts.
-  useEffect(() => () => gpu.current.dispose(), []);
+  // The shared GPU-id render target is freed by useSharedPickers when the LAST
+  // consumer (this menu layer or the Picking layer) unmounts.
 }

@@ -7,10 +7,10 @@ import { useEffect, useRef } from "react";
 import * as THREE from "three";
 import { useThree } from "@react-three/fiber";
 import { useCadStore } from "../store/store.js";
-import { Picker, boxSelect, ndcRect } from "../viewport/pick.js";
+import { boxSelect, ndcRect } from "../viewport/pick.js";
 import { applyHighlight } from "../viewport/highlight.js";
 import { nextMeasure } from "../viewport/measure.js";
-import { GpuPicker } from "./gpuPick.js";
+import { useSharedPickers } from "./sharedPickers.js";
 import type { BuiltPart } from "../viewport/buildMesh.js";
 import type { Pick, SelectionMode } from "../store/types.js";
 
@@ -132,8 +132,9 @@ export function Picking({ part }: { part: BuiltPart | null }): null {
   const hoverRef = useRef<Pick | null>(null);
   // The first world point banked by the measure tool, awaiting its second click.
   const measureFirstRef = useRef<THREE.Vector3 | null>(null);
-  const picker = useRef(new Picker());
-  const gpu = useRef(new GpuPicker());
+  // Picker + GpuPicker shared with the right-click context menu (one GPU-id
+  // render target / id-mesh build between them); ref-count-released on unmount.
+  const pickers = useSharedPickers();
 
   // Reapply highlight from the store picks + local hover (orange selection).
   const refreshHighlight = (): void => {
@@ -147,7 +148,7 @@ export function Picking({ part }: { part: BuiltPart | null }): null {
   useEffect(() => {
     const gpuPickFace = (ndc: { x: number; y: number }): number | null => {
       const p = partRef.current;
-      return p ? gpu.current.pick(gl, camera, p, ndc) : null;
+      return p ? pickers.gpu.pick(gl, camera, p, ndc) : null;
     };
     (globalThis as { __plastiqGpuPick?: (x: number, y: number) => number | null }).__plastiqGpuPick =
       (x, y) => gpuPickFace({ x, y });
@@ -248,7 +249,7 @@ export function Picking({ part }: { part: BuiltPart | null }): null {
       }
       const ndc = ndcFrom(e.clientX, e.clientY);
       const mode = useCadStore.getState().selMode;
-      let next = picker.current.pick(p, new THREE.Vector2(ndc.x, ndc.y), camera, mode);
+      let next = pickers.picker.pick(p, new THREE.Vector2(ndc.x, ndc.y), camera, mode);
       if (!next) next = screenNearest(p, mode, ndc); // edge/vertex near-miss → hover it
       if (
         (next?.id ?? null) !== (hoverRef.current?.id ?? null) ||
@@ -300,7 +301,7 @@ export function Picking({ part }: { part: BuiltPart | null }): null {
       // second click resolves the distance + axis deltas. This suppresses normal
       // selection while measuring is active.
       if (store.measuring) {
-        const wp = picker.current.pickPoint(p, new THREE.Vector2(ndc.x, ndc.y), camera);
+        const wp = pickers.picker.pickPoint(p, new THREE.Vector2(ndc.x, ndc.y), camera);
         if (!wp) return; // clicked empty space — keep waiting for a point on the part
         const step = nextMeasure(measureFirstRef.current, wp);
         measureFirstRef.current = step.first;
@@ -308,10 +309,10 @@ export function Picking({ part }: { part: BuiltPart | null }): null {
         return;
       }
       const mode = store.selMode;
-      let hit = picker.current.pick(p, new THREE.Vector2(ndc.x, ndc.y), camera, mode);
+      let hit = pickers.picker.pick(p, new THREE.Vector2(ndc.x, ndc.y), camera, mode);
       // GPU-id fallback for face/body when the triangle raycast misses (NFR-4).
-      if (!hit && (mode === "face" || mode === "body") && gpu.current.rayHitsPart(p, camera, ndc)) {
-        const id = gpu.current.pick(gl, camera, p, ndc);
+      if (!hit && (mode === "face" || mode === "body") && pickers.gpu.rayHitsPart(p, camera, ndc)) {
+        const id = pickers.gpu.pick(gl, camera, p, ndc);
         if (id != null) hit = { kind: mode, id };
       }
       // Screen-space fallback for thin edge/vertex targets (click near them).
@@ -345,8 +346,8 @@ export function Picking({ part }: { part: BuiltPart | null }): null {
     };
   }, [gl, camera, controls]);
 
-  // Free the GPU-id render target when the picking layer unmounts.
-  useEffect(() => () => gpu.current.dispose(), []);
+  // The shared GPU-id render target is freed by useSharedPickers when the LAST
+  // consumer (this layer or the right-click menu) unmounts.
 
   return null;
 }

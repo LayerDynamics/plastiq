@@ -158,3 +158,35 @@ describe("lineHint — H/V inference (FR-17)", () => {
     expect(lineHint({ u: 0, v: 0 }, { u: 0.05, v: 0.05 })).toBeNull();
   });
 });
+
+describe("degenerate (near-zero-length) segments — epsilon guards", () => {
+  it("lineHint: a 1e-12-long axis-direction segment yields NO hint (was: H/V)", () => {
+    // Pre-epsilon, `du !== 0` let float noise through: these returned
+    // "horizontal"/"vertical" for segments that are really just a point.
+    expect(lineHint({ u: 0, v: 0 }, { u: 1e-12, v: 0 })).toBeNull();
+    expect(lineHint({ u: 0, v: 0 }, { u: 0, v: 1e-12 })).toBeNull();
+  });
+
+  it("lineHint: an exactly-zero segment still yields no hint", () => {
+    expect(lineHint({ u: 0.02, v: 0.03 }, { u: 0.02, v: 0.03 })).toBeNull();
+  });
+
+  it("segmentHint: a 1e-12 noise segment yields no spurious tangent (no ~0 division)", () => {
+    const m: SketchModel = {
+      plane: "XY",
+      points: [{ id: "c", u: 0.05, v: 0.05 }],
+      entities: [{ id: "circ", kind: "circle", center: "c", radius: 0.0224 }],
+      constraints: [],
+    };
+    // Float-noise direction (1,2) from the origin: the infinite line through it
+    // passes ≈0.02236 from the centre — within 5% of r. The pre-epsilon code
+    // divided the cross product by len ≈ 2.24e-12 and reported a tangent hint
+    // for a segment that is really just a point.
+    expect(segmentHint(m, { u: 0, v: 0 }, { u: 1e-12, v: 2e-12 })).toBeNull();
+  });
+
+  it("segmentHint: an exactly-zero segment still yields no hint", () => {
+    const m: SketchModel = { plane: "XY", points: [], entities: [], constraints: [] };
+    expect(segmentHint(m, { u: 0.01, v: 0.01 }, { u: 0.01, v: 0.01 })).toBeNull();
+  });
+});

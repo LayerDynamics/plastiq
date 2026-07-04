@@ -17,7 +17,13 @@ export function ActionButton({
   variant?: "row" | "chip";
 }): React.JSX.Element | null {
   const def = ACTIONS[id];
-  if (!def) return null;
+  if (!def) {
+    // An unknown id is a wiring bug (a ribbon/workspace config naming an action
+    // the registry doesn't define) — surface it in dev builds instead of the
+    // button silently vanishing. Production still just renders nothing.
+    if (import.meta.env.DEV) console.warn(`[ribbon] unknown action id: "${id}"`);
+    return null;
+  }
   const enabled = def.enabled(ctx);
   const active = def.active?.(ctx) ?? false;
   const label = RIBBON_LABELS[id] ?? def.label(ctx);

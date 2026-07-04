@@ -12,12 +12,17 @@ export interface Hit {
   id: string;
 }
 
-/** Distance (px) from point `p` to segment `a`→`b`. */
-function distToSegment(p: Px, a: Px, b: Px): number {
+/** Distance (px) from point `p` to segment `a`→`b`. Exported for direct unit
+ * tests of the degenerate-segment guard (hitTest can't observe it — a degenerate
+ * line's coincident endpoints always win the point rank first). */
+export function distToSegment(p: Px, a: Px, b: Px): number {
   const dx = b.x - a.x;
   const dy = b.y - a.y;
   const len2 = dx * dx + dy * dy;
-  if (len2 === 0) return Math.hypot(p.x - a.x, p.y - a.y);
+  // Degenerate (near-zero-length) segment → treat as a point instead of dividing
+  // by ~0. Epsilon follows the sketch module's length guards (model.ts uses
+  // `len < 1e-9`); len2 is a SQUARED px length, hence 1e-18.
+  if (len2 < 1e-18) return Math.hypot(p.x - a.x, p.y - a.y);
   let t = ((p.x - a.x) * dx + (p.y - a.y) * dy) / len2;
   t = Math.max(0, Math.min(1, t));
   return Math.hypot(p.x - (a.x + t * dx), p.y - (a.y + t * dy));

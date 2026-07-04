@@ -13,6 +13,15 @@ import { useGizmoPresence } from "./presence.js";
 
 const SIZE = 0.12; // 120 mm — comfortably larger than a centimetre-scale part
 
+// Source quad for the outline's <edgesGeometry>, hoisted to a module singleton
+// (it's a fixed size). Inline `new THREE.PlaneGeometry(...)` in the JSX changed
+// the args identity every render, making r3f rebuild the EdgesGeometry each
+// render from a fresh, never-disposed PlaneGeometry. With a stable arg, r3f
+// builds the EdgesGeometry once per mount and disposes it on unmount; this one
+// small shared source quad intentionally lives for the app's lifetime (same as
+// the other gizmos' constant-args geometries).
+const OUTLINE_SOURCE = new THREE.PlaneGeometry(SIZE, SIZE);
+
 export function PlaneGizmo(): React.JSX.Element | null {
   const active = useSketchStore((s) => s.active);
   const plane = useSketchStore((s) => s.model.plane);
@@ -48,7 +57,7 @@ export function PlaneGizmo(): React.JSX.Element | null {
       </mesh>
       {/* Plane outline. */}
       <lineSegments>
-        <edgesGeometry args={[new THREE.PlaneGeometry(SIZE, SIZE)]} />
+        <edgesGeometry args={[OUTLINE_SOURCE]} />
         <lineBasicMaterial color={ACCENT_BLUE} transparent opacity={0.5} />
       </lineSegments>
     </group>
