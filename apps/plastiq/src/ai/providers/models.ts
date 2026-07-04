@@ -33,6 +33,9 @@ export interface CatalogEntryWithModels extends ProviderCatalogEntry {
 
 const claude = (id: string, label: string): ModelInfo => ({ id, label, supportsTools: true, supportsVision: true });
 const ollamaModel = (id: string, label: string): ModelInfo => ({ id, label, supportsTools: true, supportsVision: false });
+// llama-mlx-server grammar-backs tool calls, so even small MLX models emit
+// well-formed build_part calls — tools are reliable regardless of size.
+const mlxModel = (id: string, label: string): ModelInfo => ({ id, label, supportsTools: true, supportsVision: false });
 
 export const MODEL_CATALOG: Record<string, CatalogEntryWithModels> = {
   anthropic: {
@@ -70,6 +73,23 @@ export const MODEL_CATALOG: Record<string, CatalogEntryWithModels> = {
     defaultBaseURL: "https://api.openai.com/v1",
     // OpenAI model ids move fast — left to the free-text override + preflight.
     models: [],
+  },
+  "llama-mlx": {
+    key: "llama-mlx",
+    providerId: "llama-mlx",
+    label: "llama-mlx-server (local MLX)",
+    // Auth is on by default; the Bearer key is minted into the macOS Keychain.
+    needsKey: true,
+    defaultBaseURL: "http://127.0.0.1:11543/v1",
+    // The server auto-discovers MLX models on disk (HF cache, LM Studio); these
+    // are common mlx-community picks. Any served model works via the free-text
+    // override + preflight.
+    models: [
+      mlxModel("mlx-community/Qwen2.5-14B-Instruct-4bit", "Qwen2.5 14B (quality)"),
+      mlxModel("mlx-community/Qwen2.5-7B-Instruct-4bit", "Qwen2.5 7B (balanced)"),
+      mlxModel("mlx-community/Qwen2.5-3B-Instruct-4bit", "Qwen2.5 3B (fast)"),
+      mlxModel("mlx-community/Qwen2.5-0.5B-Instruct-4bit", "Qwen2.5 0.5B (dev/smoke)"),
+    ],
   },
 };
 

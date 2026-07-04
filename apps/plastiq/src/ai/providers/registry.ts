@@ -7,6 +7,7 @@
 import type { ChatProvider } from "./types.js";
 import { AnthropicAdapter } from "./anthropic.js";
 import { OpenAICompatAdapter } from "./openaiCompatible.js";
+import { LlamaMlxAdapter, LLAMA_MLX_DEFAULT_BASE_URL } from "./llama-mlx.js";
 import { MODEL_CATALOG, preflightModel, type ProviderId } from "./models.js";
 
 export interface ProviderSettings {
@@ -29,6 +30,14 @@ export function buildProvider(s: ProviderSettings): ChatProvider {
       apiKey: s.apiKey ?? "",
       model: s.model,
       ...(s.baseURL ? { baseURL: s.baseURL } : {}),
+    });
+  }
+  if (s.providerId === "llama-mlx") {
+    return new LlamaMlxAdapter({
+      apiKey: s.apiKey,
+      model: s.model,
+      supportsVision: caps.supportsVision,
+      baseURL: s.baseURL ?? MODEL_CATALOG[s.providerKey]?.defaultBaseURL ?? LLAMA_MLX_DEFAULT_BASE_URL,
     });
   }
   const baseURL = s.baseURL ?? MODEL_CATALOG[s.providerKey]?.defaultBaseURL ?? "http://localhost:11434/v1";

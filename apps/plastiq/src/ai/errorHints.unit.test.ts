@@ -64,6 +64,29 @@ describe("translateProviderError — mappings", () => {
     expect(hint?.friendly).not.toContain("ollama serve");
   });
 
+  it("fetch failure on a local llama-mlx endpoint (:11543) → the llama-mlx start + CORS hint", () => {
+    const llamaMlxEndpoint: ProviderEndpoint = {
+      label: "llama-mlx-server (local MLX)",
+      baseURL: "http://127.0.0.1:11543/v1",
+    };
+    const hint = translateProviderError("TypeError: Failed to fetch", llamaMlxEndpoint);
+    expect(hint?.friendly).toContain("Can't reach llama-mlx-server (local MLX) at http://127.0.0.1:11543/v1");
+    expect(hint?.friendly).toContain("just serve");
+    expect(hint?.friendly).toContain("CORS");
+    expect(hint?.friendly).not.toContain("ollama serve");
+  });
+
+  it("resolves the llama-mlx catalog label + default :11543/v1 endpoint", () => {
+    const ep = providerEndpoint({
+      providerKey: "llama-mlx",
+      providerId: "llama-mlx",
+      model: "mlx-community/Qwen2.5-3B-Instruct-4bit",
+      apiKeys: {},
+    });
+    expect(ep.label).toBe("llama-mlx-server (local MLX)");
+    expect(ep.baseURL).toBe("http://127.0.0.1:11543/v1");
+  });
+
   it("401 → API-key guidance pointing at Provider settings", () => {
     const hint = translateProviderError("401 Incorrect API key provided", hostedEndpoint);
     expect(hint?.friendly).toContain("unauthorized");

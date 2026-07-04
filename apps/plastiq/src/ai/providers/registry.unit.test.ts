@@ -19,6 +19,16 @@ describe("R1.4 model catalog (Appendix A)", () => {
     expect(MODEL_CATALOG.ollama!.needsKey).toBe(false);
     expect(MODEL_CATALOG.ollama!.defaultBaseURL).toBe("http://localhost:11434/v1");
   });
+
+  it("lists the local llama-mlx-server preset (keyed, :11543)", () => {
+    const entry = MODEL_CATALOG["llama-mlx"]!;
+    expect(entry.providerId).toBe("llama-mlx");
+    expect(entry.needsKey).toBe(true);
+    expect(entry.defaultBaseURL).toBe("http://127.0.0.1:11543/v1");
+    expect(entry.models.map((m) => m.id)).toContain("mlx-community/Qwen2.5-3B-Instruct-4bit");
+    // grammar-backed tool calls ⇒ even small MLX models are tool-capable (no warning).
+    expect(entry.models.every((m) => m.supportsTools)).toBe(true);
+  });
 });
 
 describe("R1.4 tool-capability preflight", () => {
@@ -52,6 +62,18 @@ describe("R1.4 registry — builds the right adapter from settings", () => {
     expect(p.id).toBe("openai-compatible");
     expect(p.model).toBe("qwen2.5");
     expect(p.supportsVision).toBe(false);
+    expect(p.supportsTools).toBe(true);
+  });
+
+  it("builds a llama-mlx adapter from llama-mlx settings", () => {
+    const p = buildProvider({
+      providerKey: "llama-mlx",
+      providerId: "llama-mlx",
+      model: "mlx-community/Qwen2.5-3B-Instruct-4bit",
+      apiKey: "mlx-key",
+    });
+    expect(p.id).toBe("llama-mlx");
+    expect(p.model).toBe("mlx-community/Qwen2.5-3B-Instruct-4bit");
     expect(p.supportsTools).toBe(true);
   });
 });

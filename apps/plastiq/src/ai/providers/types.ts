@@ -74,9 +74,10 @@ export interface ChatStreamRequest {
 }
 
 /** A streaming, tool-calling chat backend. Implementations: AnthropicAdapter (R1.3),
- * OpenAICompatAdapter (R1.2). `supportsVision`/`supportsTools` gate the UI (FR-10b/FR-5b). */
+ * OpenAICompatAdapter (R1.2), LlamaMlxAdapter (llama-mlx-server, reuses the OpenAI
+ * transport). `supportsVision`/`supportsTools` gate the UI (FR-10b/FR-5b). */
 export interface ChatProvider {
-  readonly id: "anthropic" | "openai-compatible";
+  readonly id: "anthropic" | "openai-compatible" | "llama-mlx";
   readonly model: string;
   readonly supportsVision: boolean;
   readonly supportsTools: boolean;

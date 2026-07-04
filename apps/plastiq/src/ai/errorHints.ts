@@ -54,15 +54,27 @@ function isLocalOllama(baseURL: string): boolean {
   return /(localhost|127\.0\.0\.1):11434/.test(baseURL);
 }
 
+/** True when the endpoint is a local llama-mlx-server (default bind :11543). It gets
+ * its own start hint, and a note that the server needs CORS enabled (or same-origin/
+ * proxy hosting) since llama-mlx-server ships none. */
+function isLocalLlamaMlx(baseURL: string): boolean {
+  return /(localhost|127\.0\.0\.1):11543/.test(baseURL);
+}
+
 /** Map a raw provider failure to an actionable message, or null when the failure isn't
  * one of the common classes (the caller shows the raw message as before). */
 export function translateProviderError(raw: string, endpoint: ProviderEndpoint): ErrorHint | null {
   if (CONNECTION_RE.test(raw)) {
-    const ollamaHint = isLocalOllama(endpoint.baseURL)
-      ? " Start Ollama with `ollama serve`, then pull the model (e.g. `ollama pull qwen2.5`)."
-      : "";
+    let startHint = "";
+    if (isLocalOllama(endpoint.baseURL)) {
+      startHint = " Start Ollama with `ollama serve`, then pull the model (e.g. `ollama pull qwen2.5`).";
+    } else if (isLocalLlamaMlx(endpoint.baseURL)) {
+      startHint =
+        " Start it with `just serve --model <mlx-model>`; a browser also needs the server reachable" +
+        " same-origin or via a proxy (llama-mlx-server sends no CORS headers).";
+    }
     return {
-      friendly: `Can't reach ${endpoint.label} at ${endpoint.baseURL} — is it running?${ollamaHint}`,
+      friendly: `Can't reach ${endpoint.label} at ${endpoint.baseURL} — is it running?${startHint}`,
       raw,
     };
   }
