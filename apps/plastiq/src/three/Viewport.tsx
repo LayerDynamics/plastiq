@@ -20,6 +20,7 @@ import { createCoalescer } from "./coalesce.js";
 import { useSketchStore } from "../sketch/sketchStore.js";
 import { explodeInstances } from "../viewport/explode.js";
 import { ViewCubeOverlay } from "../viewport/ViewCube.js";
+import { LoadingOverlay } from "./LoadingOverlay.js";
 import { findClashes, type InstanceBox } from "../viewport/interference.js";
 import { Simulator } from "../sim/simulator.js";
 import { applyJointDrives, type AssemblyModel, type Quat, type Vec3 } from "../assembly/model.js";
@@ -474,6 +475,10 @@ export function Viewport(): React.JSX.Element {
           in the sidebar's Inspect panel (ViewControl + the fit-view action). No
           floating panel sits over the cube. */}
       <ViewCubeOverlay />
+      {/* Wasm-boot / long-rebuild affordance (Review #17): shows immediately for
+          the initial "loading" state and after 300 ms for a "building" rebuild
+          (LoadingOverlay reads the same status this component sets above). */}
+      <LoadingOverlay />
       {measuring && (
         <div
           data-testid="measure-readout"

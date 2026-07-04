@@ -17,6 +17,11 @@ export function ProjectsMenu(): React.JSX.Element {
   const remove = useProjectsStore((s) => s.remove);
 
   const [openList, setOpenList] = useState(false);
+  // Two-step delete (Review #17): the ✕ ARMS a per-row confirm instead of
+  // deleting outright (no shared confirm modal exists outside the AI panels'
+  // job-specific PaidJobConfirmModal; an inline pair matches these compact
+  // rows). Toggling the list disarms any pending confirm.
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
 
   const onSaveAs = (): void => {
     const name = window.prompt(
@@ -58,7 +63,10 @@ export function ProjectsMenu(): React.JSX.Element {
         type="button"
         data-testid="project-open"
         className={btn}
-        onClick={() => setOpenList((v) => !v)}
+        onClick={() => {
+          setOpenList((v) => !v);
+          setConfirmDeleteId(null);
+        }}
       >
         Open ▾
       </button>
@@ -103,14 +111,41 @@ export function ProjectsMenu(): React.JSX.Element {
                 >
                   ✎
                 </button>
-                <button
-                  type="button"
-                  title="Delete"
-                  className="invisible rounded px-1 text-xs text-[#789] hover:text-[#ff6b6b] group-hover:visible"
-                  onClick={() => void remove(p.id)}
-                >
-                  ✕
-                </button>
+                {confirmDeleteId === p.id ? (
+                  <span className="flex items-center gap-1">
+                    <button
+                      type="button"
+                      data-testid="project-delete-confirm"
+                      title="Confirm delete"
+                      className="rounded px-1 text-xs font-semibold text-[#ff6b6b] hover:bg-[#2a1518]"
+                      onClick={() => {
+                        setConfirmDeleteId(null);
+                        void remove(p.id);
+                      }}
+                    >
+                      Delete?
+                    </button>
+                    <button
+                      type="button"
+                      data-testid="project-delete-cancel"
+                      title="Cancel delete"
+                      className="rounded px-1 text-xs text-[#789] hover:text-[#cfe]"
+                      onClick={() => setConfirmDeleteId(null)}
+                    >
+                      ✕
+                    </button>
+                  </span>
+                ) : (
+                  <button
+                    type="button"
+                    data-testid="project-delete"
+                    title="Delete"
+                    className="invisible rounded px-1 text-xs text-[#789] hover:text-[#ff6b6b] group-hover:visible"
+                    onClick={() => setConfirmDeleteId(p.id)}
+                  >
+                    ✕
+                  </button>
+                )}
               </div>
             ))
           )}
