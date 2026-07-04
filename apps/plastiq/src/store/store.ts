@@ -272,40 +272,88 @@ function reconcileRollback(features: EditorFeature[], anchorId: string | null): 
   return idx >= 0 ? idx : null;
 }
 
+/** The store's data fields (everything in CadStore that isn't an action).
+ * Mapped by hand (not TS `Pick` — this module shadows that name with the
+ * selection Pick type). */
+type CadStateKey =
+  | "features"
+  | "params"
+  | "nextSeq"
+  | "assembly"
+  | "mateMode"
+  | "matePicks"
+  | "assemblyResult"
+  | "jointDrive"
+  | "simulating"
+  | "simPaused"
+  | "simTicks"
+  | "simStepReq"
+  | "simRewindReq"
+  | "past"
+  | "future"
+  | "selectedFeatureId"
+  | "selMode"
+  | "picks"
+  | "status"
+  | "workspace"
+  | "activeFeatureEdit"
+  | "gizmoMode"
+  | "measuring"
+  | "measureResult"
+  | "errorFeatureId"
+  | "selectionRefs"
+  | "massProps"
+  | "section"
+  | "explodeFactor"
+  | "interferences"
+  | "interferenceReq"
+  | "rollbackIndex"
+  | "rollbackBeforeId";
+type CadState = { [K in CadStateKey]: CadStore[K] };
+
+/** One authority for the store's initial data state: `create` seeds from it and
+ * `reset()` restores it, so the two can never drift apart (Review #23). A fresh
+ * object per call — `assembly`/`selectionRefs` are mutable containers. */
+function initialCadState(): CadState {
+  return {
+    features: [],
+    params: {},
+    nextSeq: 1,
+    assembly: emptyAssembly(),
+    mateMode: false,
+    matePicks: [],
+    assemblyResult: null,
+    jointDrive: {},
+    simulating: false,
+    simPaused: false,
+    simTicks: 0,
+    simStepReq: 0,
+    simRewindReq: 0,
+    past: [],
+    future: [],
+    selectedFeatureId: null,
+    selMode: "face",
+    picks: [],
+    status: "loading",
+    workspace: "design",
+    activeFeatureEdit: null,
+    gizmoMode: "translate",
+    measuring: false,
+    measureResult: null,
+    errorFeatureId: null,
+    selectionRefs: { faces: {}, edges: {} },
+    massProps: null,
+    section: null,
+    explodeFactor: 0,
+    interferences: null,
+    interferenceReq: 0,
+    rollbackIndex: null,
+    rollbackBeforeId: null,
+  };
+}
+
 export const useCadStore = create<CadStore>((set, get) => ({
-  features: [],
-  params: {},
-  nextSeq: 1,
-  assembly: emptyAssembly(),
-  mateMode: false,
-  matePicks: [],
-  assemblyResult: null,
-  jointDrive: {},
-  simulating: false,
-  simPaused: false,
-  simTicks: 0,
-  simStepReq: 0,
-  simRewindReq: 0,
-  past: [],
-  future: [],
-  selectedFeatureId: null,
-  selMode: "face",
-  picks: [],
-  status: "loading",
-  workspace: "design",
-  activeFeatureEdit: null,
-  gizmoMode: "translate",
-  measuring: false,
-  measureResult: null,
-  errorFeatureId: null,
-  selectionRefs: { faces: {}, edges: {} },
-  massProps: null,
-  section: null,
-  explodeFactor: 0,
-  interferences: null,
-  interferenceReq: 0,
-  rollbackIndex: null,
-  rollbackBeforeId: null,
+  ...initialCadState(),
 
   addFeature: (f) => {
     const seq = get().nextSeq;
@@ -719,39 +767,8 @@ export const useCadStore = create<CadStore>((set, get) => ({
     });
   },
 
-  reset: () =>
-    set({
-      features: [],
-      params: {},
-      nextSeq: 1,
-      assembly: emptyAssembly(),
-      mateMode: false,
-      matePicks: [],
-      assemblyResult: null,
-      jointDrive: {},
-      simulating: false,
-      simPaused: false,
-      simTicks: 0,
-      simStepReq: 0,
-      simRewindReq: 0,
-      past: [],
-      future: [],
-      selectedFeatureId: null,
-      picks: [],
-      status: "loading",
-      workspace: "design",
-      activeFeatureEdit: null,
-      gizmoMode: "translate",
-      measuring: false,
-      measureResult: null,
-      errorFeatureId: null,
-      selectionRefs: { faces: {}, edges: {} },
-      massProps: null,
-      section: null,
-      explodeFactor: 0,
-      interferences: null,
-      interferenceReq: 0,
-      rollbackIndex: null,
-      rollbackBeforeId: null,
-    }),
+  // Restore the initial data state, keeping the user's selection-mode choice
+  // (reset() has always merged around selMode; face/edge/vertex is a UI
+  // preference, not document state).
+  reset: () => set({ ...initialCadState(), selMode: get().selMode }),
 }));
