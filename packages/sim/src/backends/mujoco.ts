@@ -10,14 +10,27 @@
 //   - Fixed bodies (mass 0) become no-joint children of the worldbody (static, and
 //     they double as the collision ground).
 //   - A spanning tree is grown breadth-first from the fixed roots over the
-//     constraint graph; each tree edge becomes the child's joint:
-//       hinge → <joint type="hinge"> with pivot + axis in the CHILD's local frame,
-//       fixed → no joint (the child is rigidly welded into its parent).
+//     constraint graph; each tree edge becomes the child's joint(s), with pivots +
+//     axes expressed in the CHILD's local frame:
+//       hinge       → <joint type="hinge">
+//       slider      → <joint type="slide">
+//       cylindrical → a slide + a hinge on the same axis (2 DOF)
+//       ball        → <joint type="ball">
+//       planar      → two orthogonal in-plane slides + a hinge about the normal
+//       fixed       → no joint (the child is rigidly welded into its parent).
 //   - A dynamic body reached by no constraint becomes a free body (<freejoint>).
-//   - A constraint that would close a loop (a non-tree edge) cannot be a tree joint;
-//     a fixed loop-closer becomes a <weld> equality, a hinge loop-closer is dropped
-//     with a warning (MuJoCo has no single-axis hinge equality). No fixture exercises
-//     loops, and the kernel emits trees, so this is a graceful-degradation path.
+//   - A constraint that would close a loop (a non-tree edge) cannot be a tree joint
+//     and becomes an <equality> instead:
+//       fixed  → <weld>
+//       hinge  → TWO <connect> point equalities at two points along the hinge axis
+//                (pinning two points of the axis line locks every relative DOF
+//                except rotation about that line — exactly a hinge)
+//       ball   → ONE <connect> at the joint origin
+//       slider → <weld>, an APPROXIMATION that sacrifices the slide DOF (warned at
+//                spawn + documented in engine.ts — MuJoCo has no equality that
+//                frees one translation, and <connect> pins points)
+//       cylindrical/planar → no MuJoCo equality can express them; spawn THROWS
+//                (implemented-or-loud, never a silently different mechanism).
 //
 // Geometry: each convex-hull collider becomes a <mesh> asset (MuJoCo builds the
 // convex hull from the vertex cloud). All pieces of one body share a density so the
@@ -37,8 +50,22 @@ import type {
   PhysicsPose,
   PhysicsSnapshot,
 } from "../engine.js";
-import { hullVolume, type ManifestBody, type SimManifest } from "../manifest.js";
-import { conjugate, localAnchor, localAxis, quatMul, type SimQuat, type SimVec3 } from "../frame.js";
+import {
+  hullVolume,
+  type ManifestBody,
+  type ManifestConstraintKind,
+  type SimManifest,
+} from "../manifest.js";
+import {
+  axisBasis,
+  conjugate,
+  localAnchor,
+  localAxis,
+  normalizeAxis,
+  quatMul,
+  type SimQuat,
+  type SimVec3,
+} from "../frame.js";
 
 // The factory's resolved module (MjModel/MjData classes, mj_* functions, enums).
 // The package types its data arrays as `any`, so this stays loosely typed.
@@ -57,7 +84,7 @@ const STATIC_DENSITY = 1000;
 // A tree edge: the constraint that attaches a child body to its parent.
 interface TreeEdge {
   other: number;
-  kind: "hinge" | "fixed";
+  kind: ManifestConstraintKind;
   origin: SimVec3;
   axis: SimVec3;
 }
@@ -70,19 +97,17 @@ export function buildMjcf(manifest: SimManifest, timestep: number): string {
   const idToIndex = new Map<string, number>();
   bodies.forEach((b, i) => idToIndex.set(b.id, i));
 
-  // Constraint graph (undirected): resolve body refs to indices; warn-and-drop a
-  // constraint that names a missing body (matches the other backends — a dangling
-  // ref degrades gracefully rather than failing the spawn).
+  // Constraint graph (undirected): resolve body refs to indices. parseManifest
+  // rejects dangling refs before any backend runs — this throw is defensive.
   const adjacency: TreeEdge[][] = bodies.map(() => []);
-  const edges: { a: number; b: number; kind: "hinge" | "fixed"; origin: SimVec3; axis: SimVec3 }[] = [];
+  const edges: { a: number; b: number; kind: ManifestConstraintKind; origin: SimVec3; axis: SimVec3 }[] = [];
   for (const c of manifest.constraints) {
     const ai = idToIndex.get(c.bodyA);
     const bi = idToIndex.get(c.bodyB);
     if (ai === undefined || bi === undefined) {
-      console.warn(
-        `mujoco: dropping ${c.kind} constraint — missing body (bodyA='${c.bodyA}'${ai === undefined ? " [missing]" : ""}, bodyB='${c.bodyB}'${bi === undefined ? " [missing]" : ""})`,
+      throw new Error(
+        `mujoco: ${c.kind} constraint references missing body '${ai === undefined ? c.bodyA : c.bodyB}'`,
       );
-      continue;
     }
     edges.push({ a: ai, b: bi, kind: c.kind, origin: c.origin, axis: c.axis });
     adjacency[ai]!.push({ other: bi, kind: c.kind, origin: c.origin, axis: c.axis });
@@ -123,15 +148,51 @@ export function buildMjcf(manifest: SimManifest, timestep: number): string {
   }
 
   // Loop-closing edges (neither endpoint is the other's tree parent) → equalities.
+  // A <connect> pins one world point of two bodies together (anchor given in
+  // body1's local frame, captured at the spawn configuration).
   const equalities: string[] = [];
+  const connectAt = (e: { a: number; b: number }, world: SimVec3): string => {
+    const b1 = bodies[e.a]!;
+    const anchor = localAnchor(world, b1.com as SimVec3, b1.orientation as SimQuat);
+    return `<connect body1="b${e.a}" body2="b${e.b}" anchor="${fmtFloats(anchor)}"/>`;
+  };
   for (const e of edges) {
     if (parent[e.a] === e.b || parent[e.b] === e.a) continue; // a tree edge
-    if (e.kind === "fixed") {
-      equalities.push(`<weld body1="b${e.a}" body2="b${e.b}"/>`);
-    } else {
-      console.warn(
-        `mujoco: hinge between '${bodies[e.a]!.id}' and '${bodies[e.b]!.id}' closes a kinematic loop; MuJoCo has no single-axis hinge equality, so this loop-closing hinge is dropped`,
-      );
+    switch (e.kind) {
+      case "fixed":
+        equalities.push(`<weld body1="b${e.a}" body2="b${e.b}"/>`);
+        break;
+      case "hinge": {
+        // Pin TWO points along the hinge axis: that locks all relative translation
+        // of the axis line while leaving rotation about it free — a hinge. The
+        // second pin sits one mechanism-scale (body distance, floored) along the
+        // axis so the tilt locking is well-conditioned.
+        const axis = normalizeAxis(e.axis);
+        const ca = bodies[e.a]!.com;
+        const cb = bodies[e.b]!.com;
+        const d = Math.max(0.05, Math.hypot(cb[0] - ca[0], cb[1] - ca[1], cb[2] - ca[2]));
+        const p2: SimVec3 = [e.origin[0] + axis[0] * d, e.origin[1] + axis[1] * d, e.origin[2] + axis[2] * d];
+        equalities.push(connectAt(e, e.origin), connectAt(e, p2));
+        break;
+      }
+      case "ball":
+        equalities.push(connectAt(e, e.origin)); // one pinned point IS a ball joint
+        break;
+      case "slider":
+        // No MuJoCo equality frees exactly one translation; a <weld> keeps the
+        // loop closed at the cost of the slide DOF. Documented approximation —
+        // warned here and in the engine.ts support matrix.
+        console.warn(
+          `mujoco: slider between '${bodies[e.a]!.id}' and '${bodies[e.b]!.id}' closes a kinematic loop; approximating it with a <weld> equality (the slide DOF is lost — see the support matrix in engine.ts)`,
+        );
+        equalities.push(`<weld body1="b${e.a}" body2="b${e.b}"/>`);
+        break;
+      default:
+        // cylindrical / planar: no MuJoCo equality (or combination) matches their
+        // DOF pattern — refuse loudly rather than simulate a different mechanism.
+        throw new Error(
+          `mujoco: a ${e.kind} constraint between '${bodies[e.a]!.id}' and '${bodies[e.b]!.id}' closes a kinematic loop, which MuJoCo's equality constraints cannot express — restructure the assembly so this joint is a tree edge, or use the ammo backend`,
+        );
     }
   }
 
@@ -175,16 +236,45 @@ export function buildMjcf(manifest: SimManifest, timestep: number): string {
       quatLocal = quatMul(conjugate(parentQ), childQ);
     }
 
-    // Joint from the edge that attached this body. Hinge pivot + axis are in the
+    // Joint(s) from the edge that attached this body. Pivots + axes are in the
     // CHILD's local frame (frame.ts helpers — identical to the maximal backends).
     let joint = "";
     const e = parentEdge[i];
     if (p === -1) {
       if (!b.fixed) joint = "<freejoint/>";
-    } else if (e && e.kind === "hinge") {
+    } else if (e && e.kind !== "fixed") {
       const pivot = localAnchor(e.origin, b.com as SimVec3, childQ);
-      const axis = localAxis(e.axis, childQ);
-      joint = `<joint type="hinge" pos="${fmtFloats(pivot)}" axis="${fmtFloats(axis)}" limited="false"/>`;
+      const hinge = (axisLocal: SimVec3): string =>
+        `<joint type="hinge" pos="${fmtFloats(pivot)}" axis="${fmtFloats(axisLocal)}" limited="false"/>`;
+      const slide = (axisLocal: SimVec3): string =>
+        `<joint type="slide" axis="${fmtFloats(axisLocal)}" limited="false"/>`;
+      switch (e.kind) {
+        case "hinge":
+          joint = hinge(localAxis(e.axis, childQ));
+          break;
+        case "slider":
+          joint = slide(localAxis(normalizeAxis(e.axis), childQ));
+          break;
+        case "cylindrical": {
+          // Slide along + hinge about the SAME axis — MuJoCo composes the two
+          // 1-DOF tree joints into the cylindrical pair.
+          const axisLocal = localAxis(normalizeAxis(e.axis), childQ);
+          joint = slide(axisLocal) + hinge(axisLocal);
+          break;
+        }
+        case "ball":
+          joint = `<joint type="ball" pos="${fmtFloats(pivot)}"/>`;
+          break;
+        case "planar": {
+          // Two orthogonal in-plane slides + a hinge about the plane normal.
+          const [u, v] = axisBasis(e.axis);
+          joint =
+            slide(localAxis(u, childQ)) +
+            slide(localAxis(v, childQ)) +
+            hinge(localAxis(normalizeAxis(e.axis), childQ));
+          break;
+        }
+      }
     }
     // fixed edge → no joint (rigidly welded into the parent)
 

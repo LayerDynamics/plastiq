@@ -428,7 +428,10 @@ export function AssemblyTree(): React.JSX.Element {
 }
 
 /** Lower the assembly to a SimManifest and download it (M4.5). Each instance
- * becomes a sim body; revolute/fixed joints become constraints. */
+ * becomes a sim body; every joint kind lowers to a constraint (revolute → hinge,
+ * prismatic → slider, cylindrical/ball/planar → themselves, fixed → fixed). The
+ * skipped-joints notice below is only reachable if a future joint kind ships
+ * without a physics-layer equivalent. */
 function ExportToSim(): React.JSX.Element {
   const setStatus = useCadStore((s) => s.setStatus);
   const onExport = async (): Promise<void> => {

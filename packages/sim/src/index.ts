@@ -22,5 +22,7 @@ export {
   type SimManifest,
   type ManifestBody,
   type ManifestConstraint,
+  type ManifestConstraintKind,
+  MANIFEST_CONSTRAINT_KINDS,
   parseManifest,
 } from "./manifest.js";

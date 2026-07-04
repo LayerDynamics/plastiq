@@ -1,9 +1,10 @@
 // Physics backends — UNIT tests, parameterized across ALL four backends. The
 // per-method CONTRACTS in isolation (not emergent physics): bodyCount bookkeeping,
-// the pose / restore guard rails, idempotent dispose, and warn-and-still-spawn for a
-// dangling constraint. These hold identically for every backend, so they run once
-// per backend off one table. (Backend-SPECIFIC unit logic — MuJoCo's MJCF mapping,
-// its WeakMap restore — lives in mujoco.unit.test.ts.)
+// the pose / restore guard rails, idempotent dispose, and the defensive throw for a
+// constraint naming a missing body (parseManifest rejects those upstream; a raw
+// spawn() must still fail loudly, never warn-and-drop). These hold identically for
+// every backend, so they run once per backend off one table. (Backend-SPECIFIC unit
+// logic — MuJoCo's MJCF mapping, its WeakMap restore — lives in mujoco.unit.test.ts.)
 
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
@@ -69,13 +70,14 @@ describe.each(NAMES)("backend unit contracts: %s", (name) => {
     expect(() => e.dispose()).not.toThrow();
   });
 
-  it("spawn() warns ONCE and still spawns every body when a constraint is dangling", () => {
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  it("spawn() THROWS (defensively) for a constraint naming a missing body — never warn-and-drop", () => {
+    // parseManifest/isSimManifest reject dangling refs before spawn; feeding one
+    // straight to the backend must still fail loudly with a precise message
+    // (the backend names itself and the missing body).
     const e = backend.createEngine(1 / 60);
-    expect(e.spawn(missingBodyManifest())).toBe(2); // both bodies present
-    expect(warn).toHaveBeenCalledTimes(1);
-    expect(warn.mock.calls[0]![0]).toContain("nonexistent");
-    expect(warn.mock.calls[0]![0]).toContain(name); // the backend names itself in the warning
+    expect(() => e.spawn(missingBodyManifest())).toThrow(
+      new RegExp(`^${name}: hinge constraint references missing body 'nonexistent'`),
+    );
     e.dispose();
   });
 });

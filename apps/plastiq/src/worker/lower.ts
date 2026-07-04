@@ -2,10 +2,11 @@
 // AssemblyModel onto the @plastiq/cad lowering path (Component hierarchy →
 // exportForSim + lowerJoints). Every instance becomes one body posed into the
 // COM frame (a grounded instance — the editor's "Fix" toggle — becomes a static
-// body); lowerable joints (revolute → hinge, fixed → fixed) become
-// constraints; non-lowerable kinds (prismatic/cylindrical/ball/planar) are
-// skipped with a logged note (no physics-layer equivalent). Runs in the geometry
-// worker (needs OCCT).
+// body); every joint kind lowers to a constraint (revolute → hinge,
+// prismatic → slider, cylindrical → cylindrical, ball → ball, planar → planar,
+// fixed → fixed). The isLowerable guard (and the skippedJoints report) remains
+// as the extension point should a future joint kind arrive without a
+// physics-layer equivalent. Runs in the geometry worker (needs OCCT).
 
 import {
   Component,
@@ -28,7 +29,9 @@ const DEFAULT_MATERIAL = "structural-steel";
 /** Result of a lowering attempt: the manifest + any joints that couldn't lower. */
 export interface LowerResult {
   manifest: SimManifest;
-  /** Joint ids skipped because their kind has no physics-layer equivalent. */
+  /** Joint ids skipped because their kind has no physics-layer equivalent.
+   * Every CURRENT joint kind lowers, so this is empty today — it stays as the
+   * report channel for any future non-lowerable kind. */
   skippedJoints: string[];
   /** The shared part's local centre of mass (for the simulate render-back). */
   localCom: Vec3;
@@ -36,8 +39,8 @@ export interface LowerResult {
 
 /**
  * Lower an assembly (instances of one shared `solid` + their joints) to a
- * SimManifest. Each instance → a body at its world pose; revolute/fixed joints →
- * constraints. Throws if there are no instances.
+ * SimManifest. Each instance → a body at its world pose; every joint → a
+ * constraint. Throws if there are no instances.
  */
 export function lowerAssembly(
   oc: Occt,
@@ -68,7 +71,8 @@ export function lowerAssembly(
     root.addChild(comp);
   }
 
-  // Lower the joints the V1 sim vocabulary supports; record the rest.
+  // Lower the joints. Every current kind is lowerable; the guard stays as the
+  // defensive report path for any future kind without a sim equivalent.
   const skippedJoints: string[] = [];
   const bindings: JointBinding[] = [];
   for (const j of assembly.joints) {

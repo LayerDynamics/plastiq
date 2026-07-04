@@ -5,18 +5,20 @@
 // cross-method consistency end-to-end. The shared prediction/constraint-frame suites
 // run this backend alongside the others; this file is the MuJoCo-focused pipeline.
 
-import { beforeAll, describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 
 import { MujocoBackend } from "./mujoco.js";
 import type { PhysicsEngine } from "../engine.js";
 import {
   S,
   fixedJointManifest,
+  fourBarManifest,
   freeBodyManifest,
   hingeManifest,
   restManifest,
 } from "./fixtures.js";
 import type { SimManifest } from "../manifest.js";
+import { quatRotate, type SimQuat, type SimVec3 } from "../frame.js";
 
 let backend: MujocoBackend;
 
@@ -87,6 +89,41 @@ describe("mujoco backend — integration", () => {
 
     for (let i = 0; i < 30; i++) e.step();
     expect(e.pose(0).position[2]).toBeCloseTo(forward, 9); // replay matches the first run
+    e.dispose();
+  });
+
+  it("four-bar linkage: the loop-closing hinge CONSTRAINS (bodies stay pinned, no drop warning)", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const e = backend.createEngine(1 / 240);
+    e.spawn(fourBarManifest());
+    expect(warn).not.toHaveBeenCalled(); // the loop hinge is expressed, not dropped
+    warn.mockRestore();
+
+    // The loop-closing hinge pins coupler↔rocker at world [0.4, 0, 0.4] (spawn
+    // config). Track that pin as a MATERIAL point of each body: it must stay
+    // coincident while the linkage swings under gravity.
+    const pinW: SimVec3 = [0.4, 0, 0.4];
+    const couplerLocal: SimVec3 = [pinW[0] - 0.2, pinW[1] - 0, pinW[2] - 0.4]; // coupler COM [0.2,0,0.4]
+    const rockerLocal: SimVec3 = [pinW[0] - 0.4, pinW[1] - 0, pinW[2] - 0.5]; // rocker COM [0.4,0,0.5]
+    const worldPin = (index: number, local: SimVec3): SimVec3 => {
+      const p = e.pose(index);
+      const r = quatRotate(p.orientation as SimQuat, local);
+      return [p.position[0] + r[0], p.position[1] + r[1], p.position[2] + r[2]];
+    };
+
+    let maxGap = 0;
+    let maxSwing = 0;
+    const couplerStart = e.pose(2).position;
+    for (let i = 0; i < 240; i++) {
+      e.step();
+      const a = worldPin(2, couplerLocal); // coupler
+      const b = worldPin(3, rockerLocal); // rocker
+      maxGap = Math.max(maxGap, Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]));
+      const c = e.pose(2).position;
+      maxSwing = Math.max(maxSwing, Math.hypot(c[0] - couplerStart[0], c[2] - couplerStart[2]));
+    }
+    expect(maxSwing).toBeGreaterThan(0.02); // the linkage genuinely articulated…
+    expect(maxGap).toBeLessThan(0.01); // …while the loop pin held throughout
     e.dispose();
   });
 

@@ -89,7 +89,9 @@ export function restManifest(): SimManifest {
   };
 }
 
-/** Two bodies + a hinge whose bodyB names a body that does not exist. */
+/** Two bodies + a hinge whose bodyB names a body that does not exist. Rejected
+ * by parseManifest/isSimManifest; fed straight to a backend's spawn() it must
+ * trip the defensive missing-body throw. */
 export function missingBodyManifest(): SimManifest {
   return {
     version: 1,
@@ -100,6 +102,98 @@ export function missingBodyManifest(): SimManifest {
       { id: "b", mass: 1, com: [0.1, 0, 0], orientation: [0, 0, 0, 1], colliders: [boxHull(0.05)] },
     ],
     constraints: [{ kind: "hinge", bodyA: "a", bodyB: "nonexistent", origin: [0.05, 0, 0], axis: [0, 1, 0] }],
+  };
+}
+
+/** A four-bar linkage in the XZ plane, all hinge axes +Y: ground → crank
+ * (hinge at [0,0,0.6]) → coupler (hinge at [0,0,0.4]) → rocker (hinge at
+ * [0.4,0,0.4]) → back to ground (hinge at [0.4,0,0.6] — the LOOP-CLOSING edge).
+ * The BFS tree reaches crank+rocker from ground and coupler from crank, so the
+ * coupler–rocker hinge closes the kinematic loop. Gravity leans +X so the
+ * parallelogram starts OFF its hanging equilibrium and genuinely swings. */
+export function fourBarManifest(): SimManifest {
+  const Y: [number, number, number] = [0, 1, 0];
+  return {
+    version: 1,
+    source: "test:four-bar",
+    gravity: [3, 0, -9.81],
+    bodies: [
+      { id: "ground", mass: 0, com: [0.2, 0, 0.7], orientation: [0, 0, 0, 1], colliders: [boxHull(0.05)], fixed: true },
+      { id: "crank", mass: 1, com: [0, 0, 0.5], orientation: [0, 0, 0, 1], colliders: [boxHull(0.05)] },
+      { id: "coupler", mass: 1, com: [0.2, 0, 0.4], orientation: [0, 0, 0, 1], colliders: [boxHull(0.05)] },
+      { id: "rocker", mass: 1, com: [0.4, 0, 0.5], orientation: [0, 0, 0, 1], colliders: [boxHull(0.05)] },
+    ],
+    constraints: [
+      { kind: "hinge", bodyA: "ground", bodyB: "crank", origin: [0, 0, 0.6], axis: Y },
+      { kind: "hinge", bodyA: "crank", bodyB: "coupler", origin: [0, 0, 0.4], axis: Y },
+      { kind: "hinge", bodyA: "coupler", bodyB: "rocker", origin: [0.4, 0, 0.4], axis: Y },
+      { kind: "hinge", bodyA: "rocker", bodyB: "ground", origin: [0.4, 0, 0.6], axis: Y },
+    ],
+  };
+}
+
+/** Fixed anchor + a body 0.3 m out on a SLIDER along +X through the origin.
+ * Gravity has a +X component (drives the slide AWAY from the anchor — no
+ * contact) and a −Z component (must be resisted): the body may only translate
+ * along X, never fall or rotate. */
+export function sliderManifest(): SimManifest {
+  return {
+    version: 1,
+    source: "test:slider",
+    gravity: [2, 0, -9.81],
+    bodies: [
+      { id: "anchor", mass: 0, com: [0, 0, 0], orientation: [0, 0, 0, 1], colliders: [boxHull(0.02)], fixed: true },
+      { id: "sled", mass: 1, com: [0.3, 0, 0], orientation: [0, 0, 0, 1], colliders: [boxHull(0.05)] },
+    ],
+    constraints: [{ kind: "slider", bodyA: "anchor", bodyB: "sled", origin: [0, 0, 0], axis: [1, 0, 0] }],
+  };
+}
+
+/** Fixed anchor + a bob 0.2 m out on a BALL joint at the origin: a spherical
+ * pendulum — the bob stays a constant 0.2 m from the pivot while swinging down. */
+export function ballManifest(): SimManifest {
+  return {
+    version: 1,
+    source: "test:ball",
+    gravity: [0, 0, -9.81],
+    bodies: [
+      { id: "anchor", mass: 0, com: [0, 0, 0], orientation: [0, 0, 0, 1], colliders: [boxHull(0.02)], fixed: true },
+      { id: "bob", mass: 1, com: [0.2, 0, 0], orientation: [0, 0, 0, 1], colliders: [boxHull(0.05)] },
+    ],
+    constraints: [{ kind: "ball", bodyA: "anchor", bodyB: "bob", origin: [0, 0, 0], axis: [0, 0, 1] }],
+  };
+}
+
+/** Fixed anchor + a crank on a CYLINDRICAL joint along the world X axis, with
+ * its COM 0.1 m OFF the axis: the −Z gravity torques it around the axis (the
+ * rotation DOF), the +X component drives the free slide DOF away from the
+ * anchor, and the axis pins the COM to the y²+z² = 0.1² circle. */
+export function cylindricalManifest(): SimManifest {
+  return {
+    version: 1,
+    source: "test:cylindrical",
+    gravity: [1, 0, -9.81],
+    bodies: [
+      { id: "anchor", mass: 0, com: [0, 0, 0], orientation: [0, 0, 0, 1], colliders: [boxHull(0.02)], fixed: true },
+      { id: "crank", mass: 1, com: [0.3, 0.1, 0], orientation: [0, 0, 0, 1], colliders: [boxHull(0.05)] },
+    ],
+    constraints: [{ kind: "cylindrical", bodyA: "anchor", bodyB: "crank", origin: [0, 0, 0], axis: [1, 0, 0] }],
+  };
+}
+
+/** Fixed anchor + a puck on a PLANAR joint (normal +Z, plane z = 0.2). Gravity
+ * has in-plane X/Y components (the puck accelerates freely in the plane) and a
+ * −Z component that the plane must resist: z stays put, x and y move. */
+export function planarManifest(): SimManifest {
+  return {
+    version: 1,
+    source: "test:planar",
+    gravity: [1.5, 2.5, -9.81],
+    bodies: [
+      { id: "anchor", mass: 0, com: [0, 0, 0.2], orientation: [0, 0, 0, 1], colliders: [boxHull(0.02)], fixed: true },
+      { id: "puck", mass: 1, com: [0.15, 0, 0.2], orientation: [0, 0, 0, 1], colliders: [boxHull(0.05)] },
+    ],
+    constraints: [{ kind: "planar", bodyA: "anchor", bodyB: "puck", origin: [0, 0, 0.2], axis: [0, 0, 1] }],
   };
 }
 
@@ -123,8 +217,8 @@ export function loopFixedManifest(): SimManifest {
   };
 }
 
-/** Same triangle, but the loop-closing edge is a HINGE — which MuJoCo has no
- * equality for, so it is dropped with a warning. */
+/** Same triangle, but every edge is a HINGE — the loop-closing one lowers to a
+ * pair of <connect> point equalities on the hinge axis (MuJoCo). */
 export function loopHingeManifest(): SimManifest {
   return {
     version: 1,

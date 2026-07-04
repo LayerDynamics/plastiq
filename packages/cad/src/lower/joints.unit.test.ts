@@ -13,21 +13,35 @@ describe("joint lowering (unit)", () => {
     expect(j.axis).toEqual([0, 0, 1]);
   });
 
-  it("isLowerable is true only for revolute and fixed", () => {
-    expect(isLowerable("revolute")).toBe(true);
-    expect(isLowerable("fixed")).toBe(true);
-    for (const k of ["prismatic", "cylindrical", "ball", "planar"] as JointKind[]) {
-      expect(isLowerable(k)).toBe(false);
-    }
+  it("isLowerable is true for EVERY current joint kind (the full vocabulary lowers)", () => {
+    const all: JointKind[] = ["revolute", "prismatic", "cylindrical", "ball", "planar", "fixed"];
+    for (const k of all) expect(isLowerable(k)).toBe(true);
   });
 
-  it("lowerJoints maps revolute→hinge and fixed→fixed, copying origin/axis + bodies", () => {
-    const bindings: JointBinding[] = [
-      { joint: makeJoint("revolute", 0, 1, { origin: [0, 0, 0], axis: [1, 0, 0] }), bodyA: "a", bodyB: "b" },
-      { joint: makeJoint("fixed", 0, 1, { origin: [1, 0, 0], axis: [0, 1, 0] }), bodyA: "a", bodyB: "c" },
+  it("lowerJoints maps every kind to its manifest constraint, copying origin/axis + bodies", () => {
+    const mapping: [JointKind, string][] = [
+      ["revolute", "hinge"],
+      ["prismatic", "slider"],
+      ["cylindrical", "cylindrical"],
+      ["ball", "ball"],
+      ["planar", "planar"],
+      ["fixed", "fixed"],
     ];
+    const bindings: JointBinding[] = mapping.map(([kind], i) => ({
+      joint: makeJoint(kind, 0, 1, { origin: [i, 0, 0], axis: [0, 1, 0] }),
+      bodyA: "a",
+      bodyB: `b${i}`,
+    }));
     const cs = lowerJoints(bindings);
-    expect(cs[0]).toEqual({ kind: "hinge", bodyA: "a", bodyB: "b", origin: [0, 0, 0], axis: [1, 0, 0] });
-    expect(cs[1]).toEqual({ kind: "fixed", bodyA: "a", bodyB: "c", origin: [1, 0, 0], axis: [0, 1, 0] });
+    expect(cs).toHaveLength(6);
+    mapping.forEach(([, lowered], i) => {
+      expect(cs[i]).toEqual({
+        kind: lowered,
+        bodyA: "a",
+        bodyB: `b${i}`,
+        origin: [i, 0, 0],
+        axis: [0, 1, 0],
+      });
+    });
   });
 });

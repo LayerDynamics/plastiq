@@ -79,7 +79,7 @@ describe("lowerAssembly — assembly → SimManifest (SPEC-5 M4.5)", () => {
     expect((c as { bodyB: string }).bodyB).toBe("i1");
   });
 
-  it("skips non-lowerable joint kinds (prismatic has no V1 sim equivalent)", () => {
+  it("lowers a prismatic joint to a slider constraint (full vocabulary — nothing skipped)", () => {
     const assembly: AssemblyModel = {
       instances: [
         {
@@ -103,8 +103,33 @@ describe("lowerAssembly — assembly → SimManifest (SPEC-5 M4.5)", () => {
       ],
     };
     const { manifest, skippedJoints } = lowerAssembly(oc, box, assembly, "test:asm");
-    expect(skippedJoints).toEqual(["j1"]);
-    expect(manifest.constraints).toHaveLength(0);
+    expect(skippedJoints).toEqual([]);
+    expect(manifest.constraints).toHaveLength(1);
+    expect(manifest.constraints[0]!.kind).toBe("slider");
+    expect(isSimManifest(manifest)).toBe(true);
+  });
+
+  it("lowers cylindrical/ball/planar joints to their same-named constraints", () => {
+    const assembly: AssemblyModel = {
+      instances: [
+        {
+          id: "i0",
+          name: "A",
+          pose: { position: [0, 0, 0], orientation: [0, 0, 0, 1] },
+          fixed: true,
+        },
+        { id: "i1", name: "B", pose: { position: [mm(80), 0, 0], orientation: [0, 0, 0, 1] } },
+      ],
+      mates: [],
+      joints: [
+        { id: "j1", kind: "cylindrical", parent: "i0", child: "i1", origin: [0, 0, 0], axis: [1, 0, 0] },
+        { id: "j2", kind: "ball", parent: "i0", child: "i1", origin: [mm(40), 0, 0], axis: [0, 0, 1] },
+        { id: "j3", kind: "planar", parent: "i0", child: "i1", origin: [0, 0, 0], axis: [0, 0, 1] },
+      ],
+    };
+    const { manifest, skippedJoints } = lowerAssembly(oc, box, assembly, "test:asm");
+    expect(skippedJoints).toEqual([]);
+    expect(manifest.constraints.map((c) => c.kind)).toEqual(["cylindrical", "ball", "planar"]);
     expect(isSimManifest(manifest)).toBe(true);
   });
 

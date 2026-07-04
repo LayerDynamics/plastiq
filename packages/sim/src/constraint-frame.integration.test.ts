@@ -86,13 +86,12 @@ function dynamicChainManifest(): SimManifest {
 }
 
 const BACKENDS: BackendName[] = ["rapier", "cannon", "ammo", "mujoco"];
-// rapier-compat's single-axis `JointData.revolute` can't express a world-axis hinge
-// between differently-oriented bodies (see the LIMITATION note in rapier.ts), so the
-// rotated-hinge correctness check covers only the backends that get the world-axis
-// hinge right: the per-body-axis maximal backends (cannon/ammo) and MuJoCo, whose
-// native tree joint expresses it directly. rapier's hinge for identity-oriented
-// bodies is covered by prediction.integration.test.ts.
-const HINGE_BACKENDS: BackendName[] = ["cannon", "ammo", "mujoco"];
+// ALL four backends now express a world-axis hinge between differently-oriented
+// bodies: cannon/ammo natively carry per-body pivots+axes, MuJoCo's tree joint is
+// body-local by construction, and rapier composes the hinge from two spherical
+// joints pinned along the axis when its single-axis revolute can't represent it
+// (see the API-limitation note in rapier.ts).
+const HINGE_BACKENDS: BackendName[] = ["rapier", "cannon", "ammo", "mujoco"];
 
 describe.each(BACKENDS)("constraint body-local frame (fixed): %s", (backend) => {
   it("a fixed joint HOLDS a rotated body's orientation (doesn't un-rotate it)", async () => {

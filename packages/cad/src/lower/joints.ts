@@ -1,10 +1,12 @@
 // Joint lowering — map the assembly's articulated joints to manifest constraints.
-// Only the kinds the physics layer supports (revolute → hinge, fixed → fixed) are
-// lowerable; the rest are reported as skipped by the caller.
+// Every JointKind now has a physics-layer equivalent: revolute → hinge,
+// prismatic → slider, cylindrical → cylindrical, ball → ball, planar → planar,
+// fixed → fixed. (isLowerable remains the guard point should a future JointKind
+// arrive without a manifest constraint to lower to.)
 
 import type { Vec3 } from "../math/index.js";
 import type { JointKind } from "../assembly/solver.js";
-import type { ManifestConstraint } from "./manifest.js";
+import type { ManifestConstraint, ManifestConstraintKind } from "./manifest.js";
 
 export interface Joint {
   readonly kind: JointKind;
@@ -25,9 +27,20 @@ export function makeJoint(
   return { kind, origin: frame.origin, axis: frame.axis };
 }
 
-/** Whether a joint kind has a physics-layer (hinge/fixed) equivalent. */
+/** The manifest constraint kind each assembly joint kind lowers to. */
+const LOWERED_KIND: Record<JointKind, ManifestConstraintKind> = {
+  revolute: "hinge",
+  prismatic: "slider",
+  cylindrical: "cylindrical",
+  ball: "ball",
+  planar: "planar",
+  fixed: "fixed",
+};
+
+/** Whether a joint kind has a physics-layer equivalent. Every current JointKind
+ * does; this stays as the extension point for any future kind that does not. */
 export function isLowerable(kind: JointKind): boolean {
-  return kind === "revolute" || kind === "fixed";
+  return kind in LOWERED_KIND;
 }
 
 export interface JointBinding {
@@ -39,7 +52,7 @@ export interface JointBinding {
 /** Lower the bound joints to manifest constraints (assumes all are lowerable). */
 export function lowerJoints(bindings: JointBinding[]): ManifestConstraint[] {
   return bindings.map((b) => ({
-    kind: b.joint.kind === "revolute" ? "hinge" : "fixed",
+    kind: LOWERED_KIND[b.joint.kind],
     bodyA: b.bodyA,
     bodyB: b.bodyB,
     origin: [b.joint.origin[0], b.joint.origin[1], b.joint.origin[2]],

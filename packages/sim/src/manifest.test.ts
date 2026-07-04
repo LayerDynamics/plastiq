@@ -99,12 +99,30 @@ describe("parseManifest", () => {
     expect(() => parse(m)).toThrow(/unknown kind/);
   });
 
-  it("accepts (does not reject) a constraint with a dangling body ref — that degrades at spawn", () => {
+  it("accepts every constraint kind in the vocabulary", () => {
+    const m = valid();
+    m.bodies.push({ id: "b", mass: 1, com: [0.1, 0, 0], orientation: [0, 0, 0, 1], colliders: [boxHull(0.05)] });
+    m.constraints = (["hinge", "slider", "cylindrical", "ball", "planar", "fixed"] as const).map(
+      (kind) => ({ kind, bodyA: "a", bodyB: "b", origin: [0, 0, 0], axis: [0, 0, 1] }),
+    );
+    expect(() => parse(m)).not.toThrow();
+    expect(parse(m).constraints).toHaveLength(6);
+  });
+
+  it("rejects a constraint whose body ref names no declared body (no spawn-time drop)", () => {
     const m = valid();
     m.bodies.push({ id: "b", mass: 1, com: [0.1, 0, 0], orientation: [0, 0, 0, 1], colliders: [boxHull(0.05)] });
     m.constraints = [{ kind: "hinge", bodyA: "a", bodyB: "ghost", origin: [0, 0, 0], axis: [0, 1, 0] }];
-    // String ref is structurally valid; existence is the backend's semantic check.
-    expect(() => parse(m)).not.toThrow();
+    expect(() => parse(m)).toThrow(/references missing body 'ghost'/);
+    const m2 = valid();
+    m2.constraints = [{ kind: "fixed", bodyA: "ghost", bodyB: "a", origin: [0, 0, 0], axis: [0, 0, 1] }];
+    expect(() => parse(m2)).toThrow(/references missing body 'ghost'/);
+  });
+
+  it("rejects duplicate body ids", () => {
+    const m = valid();
+    m.bodies.push({ id: "a", mass: 1, com: [0.1, 0, 0], orientation: [0, 0, 0, 1], colliders: [boxHull(0.05)] });
+    expect(() => parse(m)).toThrow(/duplicate body id 'a'/);
   });
 });
 

@@ -22,8 +22,33 @@ export interface ManifestBody {
   fixed?: boolean;
 }
 
+/**
+ * The simulated-joint vocabulary. All frames are WORLD-space at spawn:
+ *   hinge       — rotation about `axis` through `origin` (1 DOF).
+ *   slider      — translation along `axis` only (1 DOF; rotation locked).
+ *   cylindrical — rotation about AND translation along `axis` (2 DOF).
+ *   ball        — free rotation about the point `origin` (3 DOF; `axis` unused).
+ *   planar      — translation in the plane through `origin` with normal `axis`,
+ *                 plus rotation about that normal (3 DOF).
+ *   fixed       — all 6 DOF locked in the bodies' CURRENT relative pose.
+ * The kind list is additive within manifest version 1: the per-constraint kind
+ * check below rejects unknown kinds loudly, so an older parser meeting a newer
+ * manifest fails at the offending constraint with a precise message — the
+ * version gate is reserved for STRUCTURAL breaks, not vocabulary growth.
+ */
+export type ManifestConstraintKind = "hinge" | "slider" | "cylindrical" | "ball" | "planar" | "fixed";
+
+export const MANIFEST_CONSTRAINT_KINDS: readonly ManifestConstraintKind[] = [
+  "hinge",
+  "slider",
+  "cylindrical",
+  "ball",
+  "planar",
+  "fixed",
+];
+
 export interface ManifestConstraint {
-  kind: "hinge" | "fixed";
+  kind: ManifestConstraintKind;
   bodyA: string;
   bodyB: string;
   origin: [number, number, number];
@@ -98,8 +123,11 @@ export function parseManifest(json: string): SimManifest {
   if (!Array.isArray(m.bodies) || !Array.isArray(m.constraints)) {
     throw new Error("SimManifest: missing bodies/constraints");
   }
+  const bodyIds = new Set<string>();
   for (const b of m.bodies) {
     if (typeof b.id !== "string" || b.id === "") throw new Error("SimManifest: a body has no id");
+    if (bodyIds.has(b.id)) throw new Error(`SimManifest: duplicate body id '${b.id}'`);
+    bodyIds.add(b.id);
     if (typeof b.mass !== "number" || !Number.isFinite(b.mass) || b.mass < 0) {
       throw new Error(`SimManifest: body '${b.id}' has an invalid mass`);
     }
@@ -133,14 +161,21 @@ export function parseManifest(json: string): SimManifest {
     }
   }
   for (const c of m.constraints) {
-    if (c.kind !== "hinge" && c.kind !== "fixed") {
+    if (!(MANIFEST_CONSTRAINT_KINDS as readonly string[]).includes(c.kind as string)) {
       throw new Error(`SimManifest: constraint has unknown kind '${String(c.kind)}'`);
     }
-    // Structural only: the refs must be strings. Whether they resolve to a spawned
-    // body is a SEMANTIC check the backend makes at spawn (warn-and-drop), so a
-    // dangling ref degrades gracefully rather than failing the whole manifest.
     if (typeof c.bodyA !== "string" || typeof c.bodyB !== "string") {
       throw new Error("SimManifest: a constraint has a non-string body reference");
+    }
+    // Referential integrity: a constraint naming a body that is not declared is a
+    // VALIDATION failure here, not a spawn-time warn-and-drop — a backend cannot
+    // attach a joint to nothing, and silently dropping it would simulate a
+    // different mechanism than the manifest describes.
+    if (!bodyIds.has(c.bodyA)) {
+      throw new Error(`SimManifest: ${c.kind} constraint references missing body '${c.bodyA}'`);
+    }
+    if (!bodyIds.has(c.bodyB)) {
+      throw new Error(`SimManifest: ${c.kind} constraint references missing body '${c.bodyB}'`);
     }
     if (!isVec(c.origin, 3)) throw new Error(`SimManifest: ${c.kind} constraint has an invalid origin`);
     if (!isVec(c.axis, 3)) throw new Error(`SimManifest: ${c.kind} constraint has an invalid axis`);
