@@ -41,8 +41,10 @@ test("mate two parts → lower the assembly → the real sim spawns + steps it",
     { timeout: 240_000 },
   );
 
-  // Insert two instances and mate them with the kernel mate solver.
-  const firstId = await page.evaluate(() => {
+  // Insert two instances and mate them with the kernel mate solver. The first
+  // instance is grounded (addInstance sets `fixed` on instance 0 — the assembly's
+  // ground), the second is free.
+  const { groundedId, freeId } = await page.evaluate(() => {
     const store = (globalThis as { __cadStore?: StoreApi }).__cadStore!;
     const st = store.getState();
     const a = st.addInstance();
@@ -51,7 +53,7 @@ test("mate two parts → lower the assembly → the real sim spawns + steps it",
     st.addMatePick({ instanceId: a, faceId: 1, worldPoint: [0.03, 0.02, 0.03] });
     st.addMatePick({ instanceId: b, faceId: 2, worldPoint: [0.05, 0.02, 0.03] });
     st.applyMate("coincident");
-    return a;
+    return { groundedId: a, freeId: b };
   });
   await expect(page.getByTestId("instance-row")).toHaveCount(2);
 
@@ -66,16 +68,26 @@ test("mate two parts → lower the assembly → the real sim spawns + steps it",
   expect(m.bodies).toHaveLength(2); // two instances → two sim bodies
 
   // Spawn the browser-built manifest into the REAL @plastiq/sim and step it.
-  const result = await page.evaluate(async (id) => {
-    const sim = (globalThis as { __plastiqSimulate?: SimApi }).__plastiqSimulate!;
-    const count = await sim.start();
-    const z0 = sim.poseOf(id)?.position[2] ?? null;
-    sim.step(180);
-    const z1 = sim.poseOf(id)?.position[2] ?? null;
-    return { count, z0, z1 };
-  }, firstId);
+  // Track both bodies: the grounded one must stay put, the free one must fall.
+  const result = await page.evaluate(
+    async (ids) => {
+      const sim = (globalThis as { __plastiqSimulate?: SimApi }).__plastiqSimulate!;
+      const count = await sim.start();
+      const groundedZ0 = sim.poseOf(ids.groundedId)?.position[2] ?? null;
+      const freeZ0 = sim.poseOf(ids.freeId)?.position[2] ?? null;
+      sim.step(180);
+      const groundedZ1 = sim.poseOf(ids.groundedId)?.position[2] ?? null;
+      const freeZ1 = sim.poseOf(ids.freeId)?.position[2] ?? null;
+      return { count, groundedZ0, freeZ0, groundedZ1, freeZ1 };
+    },
+    { groundedId, freeId },
+  );
 
   expect(result.count).toBe(2); // both instances spawned as sim bodies
-  expect(result.z0).not.toBeNull();
-  expect(result.z1!).toBeLessThan(result.z0! - 1e-3); // the bodies fell under gravity (−Z)
+  expect(result.freeZ0).not.toBeNull();
+  expect(result.groundedZ0).not.toBeNull();
+  // The free body fell under gravity (−Z); the grounded body (instance 0, `fixed`)
+  // held its pose — proving ground/fixed lowering reaches the real sim.
+  expect(result.freeZ1!).toBeLessThan(result.freeZ0! - 1e-3);
+  expect(Math.abs(result.groundedZ1! - result.groundedZ0!)).toBeLessThan(1e-6);
 });
