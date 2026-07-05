@@ -7,11 +7,13 @@ mx = pytest.importorskip("mlx.core")
 
 from app.data_processing.dataparser import parse_transforms  # noqa: E402
 from app.data_processing.rays import generate_rays  # noqa: E402
-from tests.synthetic import look_at, make_synthetic_dataset  # noqa: E402
+from tests.synthetic import look_at, make_synthetic_dataset, opengl_to_internal  # noqa: E402
 
 
 def test_generate_rays_center_and_origin():
-    c2w = look_at(eye=(0.0, 0.0, 3.0), target=(0.0, 0.0, 0.0))  # camera at +3z looking at origin
+    # look_at now emits a standard OpenGL pose; generate_rays speaks the internal +z-forward axes, so
+    # convert exactly as parse_transforms does (OpenGL→internal) before feeding it (SPEC-13 FR-9).
+    c2w = opengl_to_internal(look_at(eye=(0.0, 0.0, 3.0), target=(0.0, 0.0, 0.0)))  # cam at +3z, at origin
     o, d = generate_rays(c2w, fx=20.0, fy=20.0, cx=11.5, cy=11.5, height=24, width=24)
     o, d = np.asarray(o), np.asarray(d)
     assert o.shape == (24 * 24, 3) and d.shape == (24 * 24, 3)
@@ -23,6 +25,8 @@ def test_generate_rays_center_and_origin():
 
 
 def test_parse_transforms_recovers_intrinsics_and_poses():
+    # `poses` are the internal +z-forward poses; the transforms.json stores their OpenGL form, so this
+    # asserts the parser's OpenGL→internal flip round-trips back to them (SPEC-13 FR-9).
     _, poses, intr, transforms = make_synthetic_dataset(n_views=4, h=16, w=16)
     out = parse_transforms(transforms)
     assert out.fx == pytest.approx(intr["fx"]) and out.cx == pytest.approx(intr["cx"])

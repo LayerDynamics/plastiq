@@ -1,0 +1,18 @@
+[project]
+name = "plastiq-photogrammetry"
+version = "0.1.0"
+description = "First-party SfM + MVS photogrammetry service for Plastiq (photos → poses + point cloud; Apple Silicon / M4 Max)"
+requires-python = ">=3.11"
+
+# Runtime deps are managed by environment.yml (MLX is pip on a conda-forge base; opencv is a
+# TEST-ONLY oracle, never imported by app/). This file is for tooling config + editable installs of
+# the `app` package.
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+pythonpath = ["."]
+
+[tool.ruff]
+line-length = 110
+target-version = "py311"

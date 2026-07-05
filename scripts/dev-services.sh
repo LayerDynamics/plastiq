@@ -1,13 +1,17 @@
 #!/usr/bin/env bash
-# One-command bring-up for the three Plastiq Python services (just services / just services-stop):
+# One-command bring-up for the Plastiq Python services (just services / just services-stop):
 #
-#   reconstruct  :8000  (mesh → B-rep + STEP,  env plastiq-reconstruct)
-#   capture      :8001  (point cloud → mesh,   env plastiq-capture, MLX/Apple Silicon)
-#   nerf         :8002  (posed images → mesh,  env plastiq-nerf,    MLX/Apple Silicon)
+#   reconstruct    :8000  (mesh → B-rep + STEP,  env plastiq-reconstruct)
+#   capture        :8001  (point cloud → mesh,   env plastiq-capture, MLX/Apple Silicon)
+#   nerf           :8002  (posed images → mesh,  env plastiq-nerf,    MLX/Apple Silicon)
+#   nurbs          :8003  (mesh → NURBS surfaces → STEP, env plastiq-nurbs, MLX/Apple Silicon)
+#   photogrammetry :8004  (photos → poses + point cloud, env plastiq-photogrammetry, MLX/Apple
+#                          Silicon) — registered below but COMMENTED until its app/main.py lands
+#                          (SPEC-13 P10.2); uncomment the SERVICES entry then.
 #
 # Each service runs `uvicorn app.main:app` inside its own conda env (created from the service's
-# environment.yml if missing). Output is line-prefixed with the service name; Ctrl-C shuts all
-# three down and frees the ports. `dev-services.sh stop` kills any stray listeners on the ports.
+# environment.yml if missing). Output is line-prefixed with the service name; Ctrl-C shuts them
+# all down and frees the ports. `dev-services.sh stop` kills any stray listeners on the ports.
 #
 # Envs are resolved by name via ~/.conda/environments.txt (the registry conda/mamba/micromamba all
 # append to), so envs created under older roots (e.g. ~/mamba/envs) still resolve.
@@ -21,6 +25,10 @@ SERVICES=(
   "reconstruct:plastiq-reconstruct:services/reconstruct:8000"
   "capture:plastiq-capture:services/capture:8001"
   "nerf:plastiq-nerf:services/nerf:8002"
+  "nurbs:plastiq-nurbs:services/nurbs:8003"
+  # photogrammetry :8004 — reserved (SPEC-13). Uncomment when services/photogrammetry/app/main.py
+  # exists (P10.2); until then it has no uvicorn target, so it stays out of the bring-up loop.
+  # "photogrammetry:plastiq-photogrammetry:services/photogrammetry:8004"
 )
 
 find_launcher() {
@@ -73,7 +81,7 @@ kill_port_listeners() {
 
 stop_all() {
   local port
-  for port in 8000 8001 8002; do
+  for port in 8000 8001 8002 8003; do
     kill_port_listeners "$port"
   done
 }

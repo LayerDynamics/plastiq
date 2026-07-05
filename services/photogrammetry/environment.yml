@@ -1,0 +1,24 @@
+# Conda env for the Plastiq photogrammetry service. MLX is Apple-Silicon-only (pip); the rest are
+# conda-forge. The SfM sparse solvers run on numpy/scipy (CPU, float64); the dense MVS raster math
+# (Gaussian pyramids, descriptor distances, plane-sweep ZNCC cost volumes) runs on MLX (the M4 Max) —
+# see docs/adr/0013 + SPEC-13. Mirrors services/nerf's shape.
+#   mamba env create -f environment.yml   # then: mamba run -n plastiq-photogrammetry ...
+name: plastiq-photogrammetry
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11
+  - numpy
+  - scipy           # sparse-LM bundle adjustment (least_squares + jac_sparsity), sparse linear algebra
+  - pillow          # image + EXIF I/O (focal prior)
+  - opencv          # TEST-ONLY oracle (SIFT / findEssentialMat / recoverPose / solvePnP / undistort) —
+                    # never imported by app/ (grep-enforced at review); see docs/adr/0013 D-1
+  - fastapi
+  - uvicorn
+  - pydantic
+  - python-multipart
+  - httpx
+  - pytest
+  - pip
+  - pip:
+      - mlx         # Apple Silicon array framework (conda-forge has no mlx) — dense raster math only

@@ -78,14 +78,17 @@ app-docker-run:
     docker run --rm -p 8080:80 plastiq-web
 
 # --- Python services (local) ---------------------------------------------------
-# The three self-hosted services: reconstruct :8000 (mesh→B-rep/STEP), capture :8001
-# (point cloud→mesh, MLX), nerf :8002 (posed images→mesh, MLX). Conda envs are
-# created from each service's environment.yml on first run. Ctrl-C stops all three.
+# The self-hosted services: reconstruct :8000 (mesh→B-rep/STEP), capture :8001
+# (point cloud→mesh, MLX), nerf :8002 (posed images→mesh, MLX), nurbs :8003
+# (mesh→NURBS surfaces→STEP, MLX), and photogrammetry :8004 (photos→poses+point
+# cloud, MLX — reserved in dev-services.sh but not brought up until its app/main.py
+# lands, SPEC-13 P10.2). Conda envs are created from each service's environment.yml
+# on first run. Ctrl-C stops them all.
 
-# Start all three services with prefixed logs (creates missing envs first).
+# Start the services with prefixed logs (creates missing envs first).
 services:
     ./scripts/dev-services.sh
 
-# Kill any service still listening on :8000/:8001/:8002.
+# Kill any service still listening on :8000/:8001/:8002/:8003 (:8004 once photogrammetry is live).
 services-stop:
     ./scripts/dev-services.sh stop
