@@ -19,6 +19,8 @@ import { cancelCapture, captureFromPhotos } from "./nerf.js";
 import type { NerfEncoding, NerfMethod } from "@plastiq/nerf";
 import { meshFromPartialScan, meshFromPointCloud } from "./capture.js";
 import { parsePointCloud, MIN_POINTS, type ParsedPointCloud } from "@plastiq/capture";
+import { cancelPhotogrammetry, denseCloudToMeshDoc, solvePhotogrammetry } from "./photogrammetry.js";
+import type { PhotogrammetryResult } from "@plastiq/photogrammetry";
 import {
   checkServiceHealth,
   providerEndpoint,
@@ -26,6 +28,7 @@ import {
   translateProviderError,
   CAPTURE_DEFAULT_BASE_URL,
   NERF_DEFAULT_BASE_URL,
+  PHOTOGRAMMETRY_DEFAULT_BASE_URL,
   RECONSTRUCT_DEFAULT_BASE_URL,
   type ProviderEndpoint,
 } from "./errorHints.js";
@@ -810,6 +813,279 @@ function NerfCaptureSection(): React.JSX.Element {
   );
 }
 
+/** SPEC-13 P11.2 — photogrammetry: unposed photos → camera poses + a dense oriented cloud, then two
+ * hand-offs to the SAME "Convert to CAD" terminus. The user picks photos; `solvePhotogrammetry` runs
+ * the SfM + MLX plane-sweep MVS solve server-side (:8004, minutes-long, abortable, Cancel DELETEs the
+ * job). On success the panel offers two routes:
+ *   (a) Poses → NeRF surface — the emitted transforms.json + undistorted frames train an MLX surface
+ *       (`captureFromPhotos` → MeshDoc), and
+ *   (b) Dense cloud → mesh — the dense oriented cloud is reconstructed to a watertight MeshDoc via the
+ *       capture service (`denseCloudToMeshDoc`).
+ * Both persist a MeshDoc and OPEN it, so the panel switches to MeshConvertSection ("Convert to CAD" —
+ * mesh → editable B-rep). Base URLs / keys come from the persisted service settings. */
+function PhotoSolveSection(): React.JSX.Element {
+  // Selected photos keep their filenames so the emitted frames can be paired back by name (the
+  // NeRF hand-off pairs images[i]↔frames[i] positionally). `data` is the base64 payload.
+  const [images, setImages] = useState<NamedImage[]>([]);
+  const [dense, setDense] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [status, setStatus] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [result, setResult] = useState<PhotogrammetryResult | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
+  /** The in-flight solve's server-side job id (from solvePhotogrammetry's onJob) — Cancel DELETEs it
+   * so the server stops solving a job nobody will collect, not just the client-side polling. */
+  const jobIdRef = useRef<string | null>(null);
+
+  const onImages = useCallback(
+    async (files: FileList | null): Promise<void> => {
+      if (!files || files.length === 0 || busy) return;
+      setError(null);
+      setResult(null);
+      if (files.length > MAX_CAPTURE_IMAGES) {
+        setError(`Too many images (${files.length}); the cap is ${MAX_CAPTURE_IMAGES}.`);
+        return;
+      }
+      setImages(
+        await Promise.all(Array.from(files).map(async (f) => ({ name: f.name, data: await fileToBase64(f) }))),
+      );
+    },
+    [busy],
+  );
+
+  const solve = useCallback(async (): Promise<void> => {
+    if (images.length < 3 || busy) return;
+    const controller = new AbortController();
+    abortRef.current = controller;
+    jobIdRef.current = null;
+    setBusy(true);
+    setError(null);
+    setResult(null);
+    setStatus("checking service…");
+    const baseURL = useAiStore.getState().settings?.photogrammetryBaseURL;
+    // Pre-flight GET /health BEFORE the minutes-long solve, so a down service fails in seconds.
+    const healthBase = (baseURL ?? PHOTOGRAMMETRY_DEFAULT_BASE_URL).replace(/\/+$/, "");
+    if (!(await checkServiceHealth(healthBase))) {
+      setError(serviceUnreachableMessage("photogrammetry", healthBase));
+      setStatus(null);
+      setBusy(false);
+      abortRef.current = null;
+      return;
+    }
+    setStatus("solving (SfM + MVS — minutes)…");
+    try {
+      const res = await solvePhotogrammetry(
+        { images: images.map((i) => i.data), names: images.map((i) => i.name), dense },
+        {
+          ...(baseURL ? { baseURL } : {}),
+          signal: controller.signal,
+          onJob: (id: string) => {
+            jobIdRef.current = id;
+          },
+        },
+      );
+      setResult(res);
+      const r = res.report;
+      setStatus(
+        `solved: ${r.images_registered}/${r.images_total} registered · ${r.sparse_points} sparse · ${r.dense_points} dense pts`,
+      );
+    } catch (e) {
+      if (e instanceof DOMException && e.name === "AbortError") setStatus("cancelled");
+      else setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+      abortRef.current = null;
+      jobIdRef.current = null;
+    }
+  }, [images, dense, busy]);
+
+  /** Cancel: abort the client-side polling immediately, then best-effort DELETE the server-side job.
+   * A failing DELETE (unreachable, already gone) must never surface — the cancel already succeeded the
+   * moment polling stopped. Base URL/auth are threaded exactly like the solve. */
+  const cancel = useCallback(async (): Promise<void> => {
+    const jobId = jobIdRef.current;
+    jobIdRef.current = null;
+    abortRef.current?.abort();
+    if (!jobId) return;
+    const baseURL = useAiStore.getState().settings?.photogrammetryBaseURL;
+    try {
+      await cancelPhotogrammetry(jobId, baseURL ? { baseURL } : {});
+    } catch {
+      // Best-effort cleanup — swallow abort-adjacent/network errors.
+    }
+  }, []);
+
+  /** Hand-off (b): reconstruct the dense oriented cloud into a watertight mesh via the capture
+   * service, then open it (→ Convert-to-CAD). */
+  const toDenseMesh = useCallback(async (): Promise<void> => {
+    if (!result?.densePly || busy) return;
+    setBusy(true);
+    setError(null);
+    setStatus("checking capture service…");
+    const captureBaseURL = useAiStore.getState().settings?.captureBaseURL;
+    const healthBase = (captureBaseURL ?? CAPTURE_DEFAULT_BASE_URL).replace(/\/+$/, "");
+    if (!(await checkServiceHealth(healthBase))) {
+      setError(serviceUnreachableMessage("capture", healthBase));
+      setStatus(null);
+      setBusy(false);
+      return;
+    }
+    setStatus("reconstructing dense mesh (minutes)…");
+    try {
+      const { meshDocId } = await denseCloudToMeshDoc(
+        result.densePly,
+        { persist: (doc) => useProjectsStore.getState().createMeshProject(doc) },
+        captureBaseURL ? { baseURL: captureBaseURL } : {},
+        "Photogrammetry mesh",
+      );
+      await useProjectsStore.getState().open(meshDocId);
+      setResult(null);
+      setImages([]);
+      setStatus(null);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }, [result, busy]);
+
+  /** Hand-off (a): train an MLX surface from the emitted poses + undistorted frames via the NeRF
+   * service, then open it (→ Convert-to-CAD). Frames go in FRAME order: the undistorted images (already
+   * frame-ordered) when present, else the original uploads paired to the emitted frames by filename. */
+  const toNerfSurface = useCallback(async (): Promise<void> => {
+    if (!result || busy) return;
+    let orderedImages: string[];
+    if (result.imagesUndistorted && result.imagesUndistorted.length > 0) {
+      orderedImages = result.imagesUndistorted;
+    } else {
+      const pairing = pairImagesToFrames(images, result.transformsJson);
+      if (!pairing.ok) {
+        setError(pairing.error);
+        return;
+      }
+      orderedImages = pairing.order.map((i) => i.data);
+    }
+    setBusy(true);
+    setError(null);
+    setStatus("checking NeRF service…");
+    const nerfBaseURL = useAiStore.getState().settings?.nerfBaseURL;
+    const healthBase = (nerfBaseURL ?? NERF_DEFAULT_BASE_URL).replace(/\/+$/, "");
+    if (!(await checkServiceHealth(healthBase))) {
+      setError(serviceUnreachableMessage("nerf", healthBase));
+      setStatus(null);
+      setBusy(false);
+      return;
+    }
+    setStatus("training surface (minutes)…");
+    try {
+      const { meshDocId } = await captureFromPhotos(
+        { transformsJson: result.transformsJson, images: orderedImages },
+        { persist: (doc) => useProjectsStore.getState().createMeshProject(doc) },
+        {
+          ...(nerfBaseURL ? { baseURL: nerfBaseURL } : {}),
+          onState: (s) => setStatus(s),
+        },
+        "Photogrammetry surface",
+      );
+      await useProjectsStore.getState().open(meshDocId);
+      setResult(null);
+      setImages([]);
+      setStatus(null);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }, [result, images, busy]);
+
+  return (
+    <div data-testid="photo-solve" className="flex flex-col gap-1 rounded border border-[#1b2230] bg-black/20 p-2">
+      <div className="text-[10px] text-[#9ab]">Photogrammetry (photos → poses + point cloud → CAD)</div>
+      <div className="text-[10px] text-[#789]">
+        Pick 20–60 overlapping photos of one object (≥60% overlap between neighbours, even lighting).
+      </div>
+      <div className="flex flex-wrap items-center gap-2 text-[10px] text-[#9ab]">
+        <label className="cursor-pointer rounded border border-[#2a3444] bg-[#10141c] px-2 py-1 hover:bg-[#16202c]">
+          <input
+            data-testid="photo-images-input"
+            type="file"
+            accept="image/*"
+            multiple
+            className="hidden"
+            disabled={busy}
+            onChange={(e) => void onImages(e.target.files)}
+          />
+          {images.length > 0 ? `Replace photos (${images.length})` : "Choose photos"}
+        </label>
+        <label className="flex items-center gap-1" title="Run dense MVS (a dense oriented cloud → mesh); off = poses only">
+          <input
+            data-testid="photo-dense"
+            type="checkbox"
+            checked={dense}
+            disabled={busy}
+            onChange={(e) => setDense(e.target.checked)}
+          />
+          dense
+        </label>
+        {!result && (
+          <button
+            data-testid="photo-solve-btn"
+            type="button"
+            disabled={busy || images.length < 3}
+            onClick={() => void solve()}
+            className="rounded border border-[#2a3444] bg-[#16202c] px-2 py-1 text-[#cfe] disabled:opacity-40 hover:bg-[#1c2a38]"
+          >
+            Solve
+          </button>
+        )}
+        {busy && (
+          <button
+            data-testid="photo-cancel-btn"
+            type="button"
+            onClick={() => void cancel()}
+            className="rounded border border-[#3a2430] bg-[#241016] px-2 py-1 text-[#fb9] hover:bg-[#2c161c]"
+          >
+            Cancel
+          </button>
+        )}
+      </div>
+      {result && (
+        <div className="flex flex-wrap items-center gap-2 text-[10px]">
+          <button
+            data-testid="photo-to-nerf-btn"
+            type="button"
+            disabled={busy}
+            onClick={() => void toNerfSurface()}
+            className="rounded border border-[#2a3444] bg-[#16202c] px-2 py-1 text-[#cfe] disabled:opacity-40 hover:bg-[#1c2a38]"
+          >
+            Poses → NeRF surface → CAD
+          </button>
+          <button
+            data-testid="photo-to-mesh-btn"
+            type="button"
+            disabled={busy || !result.densePly}
+            title={result.densePly ? undefined : "no dense cloud — re-solve with dense enabled"}
+            onClick={() => void toDenseMesh()}
+            className="rounded border border-[#2a3444] bg-[#16202c] px-2 py-1 text-[#cfe] disabled:opacity-40 hover:bg-[#1c2a38]"
+          >
+            Dense cloud → mesh → CAD
+          </button>
+        </div>
+      )}
+      {status && (
+        <div data-testid="photo-status" className="text-[10px] text-[#789]">
+          {status}
+        </div>
+      )}
+      {error && (
+        <div data-testid="photo-error" className="text-[10px] text-[#fb9]">
+          {error}
+        </div>
+      )}
+    </div>
+  );
+}
+
 /** Cap on points per scan — bounds the JSON POST body (each point serializes to ~40–70 bytes, so
  * 200k oriented points ≈ 15–25 MB) and keeps the server-side SDF fit tractable. The server floor
  * is MIN_POINTS (its 400 below 16 points); this is the client-side ceiling. */
@@ -1493,6 +1769,7 @@ export function GenerationPanel(): React.JSX.Element {
           )}
           <NerfCaptureSection />
           <CaptureScanSection />
+          <PhotoSolveSection />
           <CreativeKeyField />
           {/* Full provider/model/base-URL/key configuration (FR-4/FR-5/FR-5b) — collapsed
               by default so the prompt stays the focus; the first-run chooser only sets the

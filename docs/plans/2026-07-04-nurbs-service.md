@@ -255,16 +255,23 @@ filled patch (a whole organic blob stays faceted — a fundamental limit)"
       the result in the plan.
 
 ## U10 — reconstruct delegation (env-gated, FR-10)
-- [ ] **U10.1 — TDD delegation in `services/reconstruct`** ⏸️ **DEFERRED** (not done) — blocked on cross-session safety: `services/reconstruct` currently has ~26 uncommitted files from a concurrent session (incl. `freeform.py`/`fitted.py` that this delegation must edit); env-gated behind `RECONSTRUCT_NURBS_URL` (unset ⇒ current `MakeFilling` unchanged). Resumes when that session commits or on explicit authorization: when `RECONSTRUCT_NURBS_URL` is set, the
-      freeform stage offers each single-loop non-planar region to the nurbs service and builds the
-      region's face **from the returned §6.2 surfaces JSON locally** (reconstruct already has OCCT —
-      no STEP splicing), same mesh-polyline boundary ⇒ sews with neighbours (FR-3 property);
-      httpx with timeout; **unset/unreachable/failed ⇒ existing `MakeFilling` path, byte-for-byte
-      unchanged** (regression tests both ways). **Same change:** SPEC-7 §4.2/FR-5 note the optional
-      delegation; SPEC-12 FR-10/U10 status updated.
-- [ ] **U10.2 — Live integration test** ⏸️ **DEFERRED** (not done, with U10.1) (keyed like `RECONSTRUCT_URL` tests): nurbs service up →
-      reconstruct fits a domed box with delegation on → freeform face sourced from the fit, solid
-      still valid; reconstruct's own 93-test suite green with the env var unset.
+- [x] **U10.1 — delegation in `services/reconstruct`** ✅ **DONE 2026-07-05** (committed d220d21, live-verified;
+      the SPEC-7 **r4** §4.2/FR-5/§4.3/§D-3/R6.5 notes + SPEC-12 FR-10 landed 2026-07-05, reconciled 07-09).
+      Implemented as `app/nurbs_delegate.py` (`delegate_region_face`) + a ~3-line env-gated hook in
+      `freeform.py`'s `freeform_region_face`. When `RECONSTRUCT_NURBS_URL` is set, the freeform stage
+      offloads a single-loop non-planar region to the nurbs `/fit` (open mode, `iters=0`).
+      **Shipped approach differs from the original sketch:** rather than building the face from the §6.2
+      surfaces JSON, reconstruct reads the fitted `Geom_Surface` off the returned **STEP** and rebuilds
+      the boundary from the region's own **mesh polyline** (one straight 3D edge per rim segment + a
+      degree-1 p-curve — the §4.3 route), so the delegated face is EDGE-coincident with its neighbours
+      (not merely point-coincident) and sews (`free_edges==0`), closing SPEC-7 §D-3 for delegated
+      freeform regions. **unset/unreachable/failed ⇒ existing `MakeFilling` path, byte-for-byte
+      unchanged** (133-pass / 4-live-skip suite, env unset).
+- [x] **U10.2 — Live integration test** ✅ **DONE 2026-07-05** — `tests/test_nurbs_delegate_live.py` (5, live
+      survival): nurbs service up → reconstruct fits a domed part with delegation on → a freeform NURBS
+      face SURVIVES the mixed solid (`freeform_faces>0`, `is_solid`, `free_edges==0`); attribution
+      confirmed by disabling the local `MakeFilling` builder. `tests/test_nurbs_delegate.py` (10,
+      injected-fake HTTP) covers the fallback paths; reconstruct's full suite is green with the env unset.
 
 ## U11 — docs reconciliation (the N12 pattern)
 - [x] **U11.1** ✅ (this task, 2026-07-04) — SPEC-12 + ADR-0012 + this plan + root `README.md` + `services/nurbs/README.md` + memory reconciled to shipped state; U0–U9 marked done with real results, U10 deferred; closed-mode 17-key report superset documented; 356-test `plastiq-nurbs` suite green. **Deferred within U11.1 (outside this subtask's permitted files, so not applied):** the `docs/audits/Expanse.md` B3 cross-ref noting SPEC-12 built the fitting capability the audit called absent. Reconcile everything to shipped state: SPEC-12 milestone table + any drifted §5/§6

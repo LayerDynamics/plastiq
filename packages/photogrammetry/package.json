@@ -11,6 +11,7 @@
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "devDependencies": {
-    "@plastiq/capture": "workspace:*"
+    "@plastiq/capture": "workspace:*",
+    "@types/node": "^25.9.1"
   }
 }

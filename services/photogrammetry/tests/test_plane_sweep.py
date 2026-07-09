@@ -79,7 +79,13 @@ def test_plane_sweep_normals_agree_with_ground_truth():
 
 
 def test_plane_sweep_is_deterministic():
-    """Two runs on identical input return bitwise-identical depth/normals/valid (no RNG, D-10)."""
+    """Two runs on identical input return identical depth/normals/valid (no RNG, D-10).
+
+    ``depth``/``normals`` carry a **by-design** NaN pattern at background / unconstrained pixels (the
+    function's contract — see ``test_plane_sweep_valid_marks_confident_pixels``), so determinism is
+    asserted with ``equal_nan=True``: it requires both the finite values AND the NaN pattern to match
+    exactly across runs (the finite values are bitwise-identical; ``array_equal`` without ``equal_nan``
+    would false-negative purely because ``NaN != NaN``). ``valid`` is boolean (no NaN)."""
     s = make_synthetic_scene(n_views=8, height=96, width=96, seed=0)
     ref_idx = 4
     dmin, dmax = _gt_depth_range(s.depths[ref_idx])
@@ -87,8 +93,8 @@ def test_plane_sweep_is_deterministic():
     d1, n1, v1 = plane_sweep(ref_idx, s.images, s.poses_w2c, s.K, depth_range=(dmin, dmax))
     d2, n2, v2 = plane_sweep(ref_idx, s.images, s.poses_w2c, s.K, depth_range=(dmin, dmax))
 
-    assert np.array_equal(d1, d2)
-    assert np.array_equal(n1, n2)
+    assert np.array_equal(d1, d2, equal_nan=True)
+    assert np.array_equal(n1, n2, equal_nan=True)
     assert np.array_equal(v1, v2)
 
 

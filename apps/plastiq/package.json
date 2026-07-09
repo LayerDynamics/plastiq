@@ -18,6 +18,7 @@
     "@plastiq/capture": "workspace:*",
     "@plastiq/nerf": "workspace:*",
     "@plastiq/nurbs": "workspace:*",
+    "@plastiq/photogrammetry": "workspace:*",
     "@plastiq/recm": "workspace:*",
     "@plastiq/sim": "workspace:*",
     "@react-three/drei": "^10.7.7",

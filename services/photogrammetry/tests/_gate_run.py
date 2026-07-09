@@ -1,6 +1,8 @@
 """Ad-hoc real-photo gate driver (not a pytest test) — runs the sparse pipeline on a dataset and
 prints the report. Used to get real P7 numbers before finalizing tests/test_gate_real.py."""
-import os, sys, time
+import os
+import sys
+import time
 import numpy as np
 from PIL import Image
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))

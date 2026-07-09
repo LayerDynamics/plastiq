@@ -15,16 +15,19 @@ numpy/scipy float64 (D-9). Deterministic given the seed (D-10).
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 
 import numpy as np
 
 from app.core.features import detect_and_describe
 from app.core.match import match_image_set
-from app.emit import emit_transforms_json, write_ply_sparse
+from app.emit import emit_transforms_json, write_ply_dense, write_ply_sparse
 from app.exif import intrinsics_prior
 from app.normalize import normalize_scene
 from app.sfm import build_tracks, reconstruct, select_init_pair
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -60,6 +63,7 @@ def solve_sparse(
     self_calibrate: bool = False,
     image_names=None,
     detect_kwargs=None,
+    undistort: bool = True,
 ) -> SparseResult:
     """Run the sparse SfM pipeline on ``images`` (a list of ``(H, W, 3)`` uint8 arrays).
 
@@ -121,7 +125,7 @@ def solve_sparse(
     # --- emit ----------------------------------------------------------------------------------
     reg_names = [names[v] for v in reg]
     transforms_json = emit_transforms_json(
-        norm.poses_w2c, K, w, h, reg_names, undistort=True,
+        norm.poses_w2c, K, w, h, reg_names, undistort=undistort,
         applied_transform=norm.applied_transform,
     )
     import io
@@ -130,7 +134,8 @@ def solve_sparse(
     write_ply_sparse(buf, norm.points3d, colors)
     sparse_ply = buf.getvalue()
 
-    # --- report --------------------------------------------------------------------------------
+    # --- report (SPEC-13 FR-8 — the shape the @plastiq/photogrammetry client's PhotogrammetryReport
+    # type consumes) -----------------------------------------------------------------------------
     track_lengths = [sum(1 for v in tracks[tid] if v in sfm.poses_w2c) for tid in tids]
     report = {
         "images_total": n,
@@ -139,8 +144,30 @@ def solve_sparse(
         "sparse_points": len(tids),
         "mean_reprojection_error_px": sfm.mean_reproj,
         "mean_track_length": float(np.mean(track_lengths)) if track_lengths else 0.0,
+        # The self-calibrated shared camera (§6.2). Distortion is 0 here: the default path holds the
+        # EXIF-prior intrinsics fixed and does not estimate Brown-Conrady coefficients, and `undistort`
+        # zeroes them on the wire regardless (D-6).
+        "camera": {
+            "model": "OPENCV",
+            "w": w,
+            "h": h,
+            "fl_x": float(K[0, 0]),
+            "fl_y": float(K[1, 1]),
+            "cx": float(K[0, 2]),
+            "cy": float(K[1, 2]),
+            "k1": 0.0,
+            "k2": 0.0,
+            "p1": 0.0,
+            "p2": 0.0,
+        },
+        # The normalization similarity baked into the emitted poses/points (D-5).
+        "normalization": {
+            "applied_transform": norm.applied_transform.tolist(),
+            "scale": float(norm.scale),
+        },
         "matching": matching,
         "seed": seed,
+        "undistorted": undistort,
     }
 
     return SparseResult(
@@ -150,5 +177,153 @@ def solve_sparse(
         transforms_json=transforms_json,
         sparse_ply=sparse_ply,
         registered=reg,
+        report=report,
+    )
+
+
+@dataclass
+class SolveResult:
+    """Result of :func:`solve` — the full SPEC-13 §6.1 payload (sparse + optional dense)."""
+
+    transforms_json: str            # nerfstudio/OpenGL transforms.json (→ services/nerf)
+    sparse_ply: str                 # ASCII PLY (x y z r g b)
+    dense_ply: str | None           # ASCII PLY (x y z nx ny nz r g b) or None when dense off / empty
+    images_undistorted: list | None  # parallel undistorted images, or None when none produced
+    report: dict                    # FR-8 report (sparse fields + dense_points)
+
+
+def _view_depth_range(points3d: np.ndarray, K: np.ndarray, pose_w2c: np.ndarray, w: int, h: int):
+    """The camera-Z ``(d_min, d_max)`` span of the sparse points visible in one view, padded ±20%
+    (SPEC-13 §5.5 / P9.1). ``None`` when too few sparse points land in the frame — the caller then
+    lets ``plane_sweep`` estimate the range from the camera geometry."""
+    from app.mvs.fusion import reproject  # noqa: PLC0415 — dense-only dependency
+
+    if points3d.shape[0] == 0:
+        return None
+    us, vs, zs = reproject(points3d, K, pose_w2c)
+    inb = (zs > 0) & (us >= 0) & (us < w) & (vs >= 0) & (vs < h)
+    z = zs[inb]
+    if z.size < 4:
+        return None
+    return float(z.min()) * 0.8, float(z.max()) * 1.2
+
+
+def _dense_colors(points: np.ndarray, images: np.ndarray, K: np.ndarray, poses_w2c: np.ndarray):
+    """Per-point RGB for a dense cloud: reproject each point into the registered views and sample the
+    colour from the FIRST view that sees it in-frame (deterministic by ascending view order). Points
+    seen by no view fall back to neutral grey (200). ``images`` is ``(N, H, W, 3)`` uint8."""
+    from app.mvs.fusion import reproject  # noqa: PLC0415 — dense-only dependency
+
+    m = points.shape[0]
+    colors = np.full((m, 3), 200, dtype=np.int64)
+    assigned = np.zeros(m, dtype=bool)
+    n, h, w = images.shape[0], images.shape[1], images.shape[2]
+    for ri in range(n):
+        us, vs, zs = reproject(points, K, poses_w2c[ri])
+        ui = np.round(us).astype(np.int64)
+        vi = np.round(vs).astype(np.int64)
+        inb = (~assigned) & (zs > 0) & (ui >= 0) & (ui < w) & (vi >= 0) & (vi < h)
+        idx = np.nonzero(inb)[0]
+        if idx.size:
+            colors[idx] = images[ri, vi[idx], ui[idx], :3]
+            assigned[idx] = True
+    return colors
+
+
+def solve_dense(
+    images_arr: np.ndarray,
+    poses_w2c: np.ndarray,
+    points3d: np.ndarray,
+    K: np.ndarray,
+    *,
+    max_dense_points: int = 200_000,
+):
+    """Dense MVS orchestration: per-view plane-sweep + fusion → a coloured oriented cloud (P9, §5.5).
+
+    Each view in ``images_arr`` ``(N, H, W, 3)`` uint8 with world→camera pose ``poses_w2c`` ``(N, 3, 4)``
+    is depth-mapped by the two-stage :func:`app.mvs.plane_sweep.plane_sweep` (sparse ``points3d`` set its
+    depth range); the camera-frame normals are rotated to world (``n_world = n_cam @ R``); the maps are
+    fused (:func:`app.mvs.fusion.fuse`) into a downsampled cloud, coloured from the source images, and
+    written as an ``x y z nx ny nz r g b`` PLY.
+
+    Returns ``(dense_ply: str | None, dense_points: int, views_swept: int)``. Degradation (SPEC-13 §7):
+    a per-view sweep that raises is skipped (logged, counted); zero fused points ⇒ ``(None, 0, …)``.
+    """
+    from app.mvs.fusion import fuse  # noqa: PLC0415 — dense-only (MLX) dependency
+    from app.mvs.plane_sweep import plane_sweep  # noqa: PLC0415
+
+    images_arr = np.asarray(images_arr)
+    poses_w2c = np.asarray(poses_w2c, dtype=np.float64)
+    K = np.asarray(K, dtype=np.float64)
+    n_reg, h, w = images_arr.shape[0], images_arr.shape[1], images_arr.shape[2]
+
+    depth_maps, world_normals, valids = [], [], []
+    swept = 0
+    for ri in range(n_reg):
+        try:
+            dr = _view_depth_range(points3d, K, poses_w2c[ri], w, h)
+            depth, n_cam, valid = plane_sweep(ri, images_arr, poses_w2c, K, depth_range=dr)
+            swept += 1
+        except Exception as e:  # noqa: BLE001 — one view's failure must not sink the dense stage
+            logger.warning("dense: view %d plane-sweep failed (%s); skipping", ri, e)
+            depth = np.full((h, w), np.nan, dtype=np.float32)
+            n_cam = np.full((h, w, 3), np.nan, dtype=np.float32)
+            valid = np.zeros((h, w), dtype=bool)
+        n_world = n_cam @ poses_w2c[ri][:, :3]  # camera-frame normal → world (n_world = n_cam @ R)
+        depth_maps.append(depth)
+        world_normals.append(n_world)
+        valids.append(valid)
+
+    points, normals = fuse(
+        np.stack(depth_maps), np.stack(world_normals), np.stack(valids), poses_w2c, K,
+        max_points=max_dense_points,
+    )
+    if points.shape[0] == 0:
+        return None, 0, swept
+
+    import io  # noqa: PLC0415
+
+    colors = _dense_colors(points, images_arr, K, poses_w2c)
+    buf = io.StringIO()
+    write_ply_dense(buf, points, normals, colors)
+    return buf.getvalue(), int(points.shape[0]), swept
+
+
+def solve(
+    images,
+    *,
+    dense: bool = True,
+    max_dense_points: int = 200_000,
+    **sparse_kwargs,
+) -> SolveResult:
+    """Run the full photogrammetry solve: sparse SfM, then (``dense``) the MLX plane-sweep MVS + fusion.
+
+    The sparse half (:func:`solve_sparse`) yields poses + a sparse cloud + ``transforms.json``. When
+    ``dense`` and at least two views registered, :func:`solve_dense` depth-maps + fuses the registered
+    views into a coloured oriented cloud (``report.dense_points`` = its size; ``dense_ply=None`` when
+    that is zero — SPEC-13 §7). ``**sparse_kwargs`` are forwarded to :func:`solve_sparse` (``K``,
+    ``exif_images``, ``matching``, ``max_features``, ``seed``, ``self_calibrate``, ``image_names``, …).
+    """
+    res = solve_sparse(images, **sparse_kwargs)
+    report = dict(res.report)
+    reg = res.registered
+    dense_ply: str | None = None
+    report["dense"] = dense
+    report["dense_points"] = 0
+
+    if dense and len(reg) >= 2:
+        imgs_arr = np.stack([np.asarray(images[v])[:, :, :3] for v in reg], axis=0)  # (N,H,W,3) uint8
+        poses_arr = np.stack([res.poses_w2c[v] for v in reg], axis=0)  # (N,3,4) normalized
+        dense_ply, dense_points, swept = solve_dense(
+            imgs_arr, poses_arr, res.points3d, res.K, max_dense_points=max_dense_points,
+        )
+        report["dense_points"] = dense_points
+        report["dense_views_swept"] = swept
+
+    return SolveResult(
+        transforms_json=res.transforms_json,
+        sparse_ply=res.sparse_ply,
+        dense_ply=dense_ply,
+        images_undistorted=None,
         report=report,
     )

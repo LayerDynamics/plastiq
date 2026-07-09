@@ -41,6 +41,14 @@ export interface AiSettings {
    * `Authorization: Bearer <key>` on every request (SPEC-12 §6.1, the SPEC-11 §5 auth model
    * verbatim); absent ⇒ no auth header (the open dev default). */
   nurbsApiKey?: string;
+  /** Base URL of the self-hosted SfM+MVS photogrammetry service (SPEC-13) — unposed photos →
+   * poses (transforms.json → nerf) + a dense oriented cloud (→ capture); absent ⇒ the
+   * @plastiq/photogrammetry client default (http://localhost:8004). */
+  photogrammetryBaseURL?: string;
+  /** API key for a key-protected photogrammetry service deployment (its `PHOTOGRAMMETRY_API_KEY`) —
+   * sent as `Authorization: Bearer <key>` on every request (SPEC-13 §6.1, the SPEC-11 §5 auth model
+   * verbatim); absent ⇒ no auth header (the open dev default). */
+  photogrammetryApiKey?: string;
   /** Override the fal mesh-gen queue base URL — the hosted-proxy seam (decision 21).
    * Absent ⇒ fal's queue default. A *direct* browser→fal call needs fal CORS; the
    * proxy (empty fal key + this baseURL) is the production path. */

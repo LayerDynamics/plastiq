@@ -62,6 +62,12 @@ export function SettingsPanel(props: { onClose?: () => void }): React.JSX.Elemen
   const [nurbsBaseURL, setNurbsBaseURL] = useState(settings?.nurbsBaseURL ?? "");
   const [nurbsApiKey, setNurbsApiKey] = useState(settings?.nurbsApiKey ?? "");
   const [captureBaseURL, setCaptureBaseURL] = useState(settings?.captureBaseURL ?? "");
+  const [photogrammetryBaseURL, setPhotogrammetryBaseURL] = useState(
+    settings?.photogrammetryBaseURL ?? "",
+  );
+  const [photogrammetryApiKey, setPhotogrammetryApiKey] = useState(
+    settings?.photogrammetryApiKey ?? "",
+  );
   const [meshGenBaseURL, setMeshGenBaseURL] = useState(settings?.meshGenBaseURL ?? "");
   const [saved, setSaved] = useState(false);
 
@@ -129,6 +135,10 @@ export function SettingsPanel(props: { onClose?: () => void }): React.JSX.Elemen
       ...(nurbsBaseURL.trim() ? { nurbsBaseURL: nurbsBaseURL.trim() } : {}),
       ...(nurbsApiKey.trim() ? { nurbsApiKey: nurbsApiKey.trim() } : {}),
       ...(captureBaseURL.trim() ? { captureBaseURL: captureBaseURL.trim() } : {}),
+      ...(photogrammetryBaseURL.trim()
+        ? { photogrammetryBaseURL: photogrammetryBaseURL.trim() }
+        : {}),
+      ...(photogrammetryApiKey.trim() ? { photogrammetryApiKey: photogrammetryApiKey.trim() } : {}),
       ...(meshGenBaseURL.trim() ? { meshGenBaseURL: meshGenBaseURL.trim() } : {}),
     };
     void save(next).then(() => {
@@ -296,6 +306,29 @@ export function SettingsPanel(props: { onClose?: () => void }): React.JSX.Elemen
           setSaved(false);
         }}
         placeholder="http://localhost:8001"
+      />
+
+      <Field
+        testid="settings-photogrammetry-url"
+        label="Photogrammetry service URL (photos→poses+cloud)"
+        value={photogrammetryBaseURL}
+        onChange={(v) => {
+          setPhotogrammetryBaseURL(v);
+          setSaved(false);
+        }}
+        placeholder="http://localhost:8004"
+      />
+
+      <Field
+        testid="settings-photogrammetry-key"
+        label="Photogrammetry service API key (if it sets PHOTOGRAMMETRY_API_KEY)"
+        value={photogrammetryApiKey}
+        onChange={(v) => {
+          setPhotogrammetryApiKey(v);
+          setSaved(false);
+        }}
+        type="password"
+        placeholder="(blank = open dev service)"
       />
 
       <Field

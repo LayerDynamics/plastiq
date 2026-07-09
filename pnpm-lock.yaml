@@ -74,6 +74,9 @@ importers:
       '@plastiq/nurbs':
         specifier: workspace:*
         version: link:../../packages/nurbs
+      '@plastiq/photogrammetry':
+        specifier: workspace:*
+        version: link:../../packages/photogrammetry
       '@plastiq/recm':
         specifier: workspace:*
         version: link:../../packages/recm
@@ -165,6 +168,9 @@ importers:
       '@plastiq/capture':
         specifier: workspace:*
         version: link:../capture
+      '@types/node':
+        specifier: ^25.9.1
+        version: 25.9.1
 
   packages/recm:
     devDependencies:

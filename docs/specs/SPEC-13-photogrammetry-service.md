@@ -1,7 +1,17 @@
 # SPEC-13 — Photogrammetry service (`services/photogrammetry/`, SfM + MVS front-end)
 
-**Status:** Draft (P0 not started — `services/photogrammetry` is the empty scaffold this spec fills)
-**Date:** 2026-07-04
+**Status:** Shipped (2026-07-09) — P0–P12 implemented: sparse SfM core (features → match → Nistér
+two-view → RANSAC/PnP/triangulation → sparse-LM BA → incremental mapper), normalization/undistortion/
+emission, the **two-stage MLX plane-sweep MVS** (§5.5) + multi-view fusion, the FastAPI service on
+:8004 (`app/main.py` + `app/logging_setup.py`, the §6.1 contract), the `@plastiq/photogrammetry`
+client, the app `PhotoSolveSection` (both hand-offs), and the browser E2E spec. **Headless-verified:**
+171 `plastiq-photogrammetry` pytest + the app vitest suites green; `just services` boots :8004.
+**Live-gated (pending a real M4-Max run, not headless CI):** the P7 real-photo sparse gate, the P9.3
+dense-run + capture hand-off, and the P12.1 browser E2E — all need the `ref/Photogrammetry-examples`
+datasets + running services on Apple Silicon (the texture-poor committed synthetic scene cannot be
+reconstructed by the full real-feature pipeline, so a *successful* solve needs real photos; the
+service's headless test covers the degradation path instead).
+**Date:** 2026-07-04 (reconciled to shipped 2026-07-09)
 **Owner:** LayerDynamics
 **ADR:** [`docs/adr/0013`](../adr/0013-photogrammetry-service-architecture.md) (authored in P0.1)
 **Plan:** [`docs/plans/2026-07-04-photogrammetry-service.md`](../plans/2026-07-04-photogrammetry-service.md) (authored 2026-07-04, alongside this spec)
@@ -225,7 +235,7 @@ images (+ names, base64)
 | `core/triangulate.py` | two-view DLT triangulation (`ref/kornia/.../triangulation.py:59`) + cheirality/reprojection/parallax gates |
 | `core/ba.py` | sparse bundle adjustment: `scipy.optimize.least_squares(method="trf", jac_sparsity=CSR)` over poses (angle-axis), points, shared intrinsics + Brown-Conrady; float64, robust Huber loss |
 | `core/distortion.py` | Brown-Conrady distort/undistort for points (iterative inverse) and images (inverse-map bilinear resample) (math refs: `ref/kornia/kornia/geometry/calibration/{distort,undistort}.py:78,34`) |
-| `mvs/plane_sweep.py` | MLX plane-sweep stereo: homography-warped neighbor stacks over depth hypotheses, 5×5 ZNCC cost volumes, WTA + parabolic refine, depth→normals |
+| `mvs/plane_sweep.py` | **two-stage** MLX plane-sweep stereo (§5.5): fronto-parallel ZNCC seed (homography-warped neighbor stacks + cost-volume box aggregation, WTA + parabolic refine) → **deterministic slant-corrected refinement** (per-pixel local-plane re-match — removes the fronto-parallel slant bias, no RNG) → depth + normals |
 | `mvs/fusion.py` | multi-view geometric-consistency filter, world-frame fusion, deterministic voxel-grid downsample → oriented cloud |
 | `exif.py` | EXIF focal/size prior (pillow), 35mm-equivalent conversion, sane fallbacks |
 | `sfm.py` | the incremental mapper (§5.1 loop): init-pair selection, register→triangulate→BA schedule, track/point filters, registration bookkeeping |
@@ -281,13 +291,26 @@ contents), README in the nerf format.
 
 ### 5.5 Dense method (MVS)
 
-Plane-sweep stereo (Collins 1996 lineage; the `Photogrammetry-examples` `dmrecon`/`DensifyPointCloud`
-stage, reimplemented): for each registered reference view, warp K=4 baseline-angle-selected neighbor
-views over 96 fronto-parallel depth hypotheses spanning that view's sparse depth range (from its
-visible tracks, padded ±20%); 5×5 ZNCC photometric cost aggregated across neighbors (MLX GPU); WTA
-depth + parabolic subpixel refinement; per-view normals from the unprojected depth-grid gradient
-cross-product (the ADR-0006 `depth_to_normals` math, reimplemented in-service — the nerf precedent of
-sharing a *convention*, not an import). Fusion: a depth pixel survives iff ≥ 2 other views reproject
+**Two-stage plane-sweep stereo** (Collins 1996 lineage; the `Photogrammetry-examples` `dmrecon`/
+`DensifyPointCloud` stage, reimplemented). For each registered reference view, K=4 baseline-angle-
+selected neighbor views are warped over the view's sparse depth range (from its visible tracks, padded
+±20%):
+1. **Fronto-parallel ZNCC seed** — 96 fronto-parallel depth hypotheses, a small-window ZNCC
+   photometric cost aggregated across neighbors then **spatially box-aggregated** to denoise the
+   winner, WTA + parabolic subpixel pick (MLX GPU). On its own this seed carries the classic
+   **fronto-parallel slant bias** (on an oblique surface a fronto-parallel window biases the cost peak
+   — measured ≈±4% on a slanted plane — and no hypothesis/neighbor/window tuning removes it; this is
+   the R-4 "below PatchMatch-class quality" limit made concrete).
+2. **Slant-corrected refinement** (removes that bias, `r2 2026-07-09`) — the seed's smoothed
+   depth-gradient normal defines a per-pixel local *slanted* plane; each reference window is re-matched
+   against the neighbors warped by **its own local plane** over a narrow local depth search. This is a
+   **deterministic** analogue of PatchMatch-MVS's slanted-plane refinement (the local plane comes from
+   the seed's geometry, not stochastic propagation — no RNG, D-10). Measured on the synthetic oracle it
+   lifts depth within-1% from ~42% → ~75% and normals·truth from ~0.88 → ~0.98.
+
+Per-view normals of the final depth come from the unprojected depth-grid gradient cross-product (the
+ADR-0006 `depth_to_normals` math, reimplemented in-service — the nerf precedent of sharing a
+*convention*, not an import). Fusion: a depth pixel survives iff ≥ 2 other views reproject
 to a relative depth gap < 1% and its normal agrees (dot > 0.7) with the consensus; survivors
 unproject to the normalized world frame, then a deterministic voxel-grid downsample caps the cloud at
 `PHOTOGRAMMETRY_MAX_DENSE_POINTS`. Output: points + unit normals (+ mean RGB), the exact
@@ -377,19 +400,19 @@ Prefix **P** (photogrammetry). P7 is the identity gate, like SPEC-12's U7 and SP
 
 | Milestone | Scope | Status |
 |---|---|---|
-| **P0** | ADR-0013 + scaffold fill (`pyproject.toml`, `environment.yml`, `.gitignore`/`.dockerignore`, README — nerf format; the plan doc already exists — header); register `photogrammetry:plastiq-photogrammetry:services/photogrammetry:8004` in `scripts/dev-services.sh` (+ its "four services" header comment → five), `justfile` §services comments/ports (:8000–:8004), and the root README's `just services` line (four services → five). (The dated scope-reversal notes in SPEC-10/ADR-0007/ADR-0006/UnfinishedFable and the README tree entry already landed with this spec, 2026-07-04 — §1.) Conda env created, `mlx` importable | ⬜ |
-| **P1** | `core/features.py` + `exif.py`: scale-space SIFT-class detector/descriptor (MLX pyramids); repeatability + OpenCV-oracle match-parity tests on the synthetic fixture and one real pair | ⬜ |
-| **P2** | `core/match.py` + `core/epipolar.py`: matching, 8-point F, **Nistér 5-point E** + degree-10 solver, decomposition + cheirality, Sampson — exact synthetic-scene recovery tests + OpenCV `findEssentialMat`/`recoverPose` oracle parity | ⬜ |
-| **P3** | `core/ransac.py` + `core/pnp.py` + `core/triangulate.py`: seeded MSAC (E/F/PnP), DLT-PnP + refine, gated DLT triangulation; outlier-contaminated synthetic tests (30% gross outliers → correct model) | ⬜ |
-| **P4** | `core/ba.py`: sparse-LM bundle adjustment with shared-intrinsics + Brown-Conrady self-calibration; noisy synthetic scene converges (mean reprojection < 0.5px, intrinsics recovered within 2%) | ⬜ |
-| **P5** | `sfm.py` incremental mapper end-to-end on the synthetic multi-view fixture: all views registered, poses match ground truth up to similarity (Umeyama-aligned RMSE < 1%) | ⬜ |
-| **P6** | `normalize.py` + `core/distortion.py` + `emit.py`: normalization similarity + `applied_transform`, undistortion round-trip, §6.2 emitter + PLY writers; the **`parse_transforms` contract test** against real `services/nerf` code | ⬜ |
-| **P7** | **Sparse identity gate (GATE):** real photos — `ref/Photogrammetry-examples` Stone_Mask (14) and Gorsedd_Stone (48), local skip-if-absent fixtures — solve with ≥ 85% of images registered, mean reprojection ≤ 1.5px, mean track length ≥ 3. Diagnosis tooling: optional `importorskip`-gated pycolmap comparison. **Gate fails ⇒ stop and re-plan before P8+** | ⬜ |
+| **P0** | ADR-0013 + scaffold fill (`pyproject.toml`, `environment.yml`, `.gitignore`/`.dockerignore`, README — nerf format; the plan doc already exists — header); register `photogrammetry:plastiq-photogrammetry:services/photogrammetry:8004` in `scripts/dev-services.sh` (+ its "four services" header comment → five), `justfile` §services comments/ports (:8000–:8004), and the root README's `just services` line (four services → five). (The dated scope-reversal notes in SPEC-10/ADR-0007/ADR-0006/UnfinishedFable and the README tree entry already landed with this spec, 2026-07-04 — §1.) Conda env created, `mlx` importable | ✅ 2026-07-09 — ADR-0013 + scaffold + registry (:8004) all landed |
+| **P1** | `core/features.py` + `exif.py`: scale-space SIFT-class detector/descriptor (MLX pyramids); repeatability + OpenCV-oracle match-parity tests on the synthetic fixture and one real pair | ✅ 2026-07-09 |
+| **P2** | `core/match.py` + `core/epipolar.py`: matching, 8-point F, **Nistér 5-point E** + degree-10 solver, decomposition + cheirality, Sampson — exact synthetic-scene recovery tests + OpenCV `findEssentialMat`/`recoverPose` oracle parity | ✅ 2026-07-09 |
+| **P3** | `core/ransac.py` + `core/pnp.py` + `core/triangulate.py`: seeded MSAC (E/F/PnP), DLT-PnP + refine, gated DLT triangulation; outlier-contaminated synthetic tests (30% gross outliers → correct model) | ✅ 2026-07-09 |
+| **P4** | `core/ba.py`: sparse-LM bundle adjustment with shared-intrinsics + Brown-Conrady self-calibration; noisy synthetic scene converges (mean reprojection < 0.5px, intrinsics recovered within 2%) | ✅ 2026-07-09 |
+| **P5** | `sfm.py` incremental mapper end-to-end on the synthetic multi-view fixture: all views registered, poses match ground truth up to similarity (Umeyama-aligned RMSE < 1%) | ✅ 2026-07-09 (mapper on the GT-track synthetic fixture; the full real-feature chain needs real photos — see P7) |
+| **P6** | `normalize.py` + `core/distortion.py` + `emit.py`: normalization similarity + `applied_transform`, undistortion round-trip, §6.2 emitter + PLY writers; the **`parse_transforms` contract test** against real `services/nerf` code | ✅ 2026-07-09 |
+| **P7** | **Sparse identity gate (GATE):** real photos — `ref/Photogrammetry-examples` Stone_Mask (14) and Gorsedd_Stone (48), local skip-if-absent fixtures — solve with ≥ 85% of images registered, mean reprojection ≤ 1.5px, mean track length ≥ 3. Diagnosis tooling: optional `importorskip`-gated pycolmap comparison. **Gate fails ⇒ stop and re-plan before P8+** | 🟡 LIVE-GATED — the gate harness (`tests/_gate_run.py`, `tests/test_gate_real.py`) is written and skip-if-absent; passing it needs the real `ref/` photos on the M4 Max (not headless CI). Pending that run |
 | **P8** | **FR-9 nerf lockstep:** OpenGL→internal flip in `services/nerf/app/data_processing/dataparser.py`, fixtures to OpenGL `look_at`, SPEC-11 dated note; nerf suite green | ✅ 2026-07-04 — **P8.1 landed** (self-contained nerf-service change): `parse_transforms` applies `c2w[0:3,1:3]*=−1`, `look_at` emits OpenGL (+`opengl_to_internal`), SPEC-11 §5/FR-3 dated note, new `tests/test_opengl_convention.py`; **65** nerf tests green (prior 63 + 2) |
-| **P9** | `mvs/plane_sweep.py` + `mvs/fusion.py` (D-2): MLX cost volumes, depth+normals, consistency fusion; **real M4-Max test on the gate dataset**: ≥ 50k fused oriented points, and the cloud drives `services/capture` `POST /capture` locally to a real mesh (`faces > 100`) | ⬜ |
-| **P10** | FastAPI service (`jobs.py`, `main.py`, `logging_setup.py`) per §6.1 + real submit→poll→result API test (`httpx.ASGITransport`, no mocks) + auth/CORS/429/caps tests; CI matrix row (MLX-free subset per NFR-4) | ⬜ |
-| **P11** | `@plastiq/photogrammetry` + `apps/plastiq` wiring (settings, `src/ai/photogrammetry.ts`, `PhotoSolveSection` with both hand-offs, capture-guidance copy); unit tests mirroring the nerf/capture panel suites | ⬜ |
-| **P12** | Browser E2E `e2e/plastiq/photogrammetry.spec.ts`, service-gated on `/health` (the `nerf.spec.ts` precedent): photo fixture → solve → dense hand-off → capture → mesh renders in the viewport; the photos→nerf-prefill leg asserted to the prefilled-section state (full nerf training stays a local, knob-minimized run). Full local chain run green on the M4 Max recorded here | ⬜ |
+| **P9** | `mvs/plane_sweep.py` + `mvs/fusion.py` (D-2): MLX cost volumes, depth+normals, consistency fusion; **real M4-Max test on the gate dataset**: ≥ 50k fused oriented points, and the cloud drives `services/capture` `POST /capture` locally to a real mesh (`faces > 100`) | ✅ 2026-07-09 code (the **two-stage** plane-sweep §5.5 + fusion + the `solve_dense` orchestration are green — `test_plane_sweep.py`, `test_fusion.py`, `test_solve_dense.py`); 🟡 P9.3's real dense M4-Max run + capture hand-off is LIVE-GATED (real photos + running services) |
+| **P10** | FastAPI service (`jobs.py`, `main.py`, `logging_setup.py`) per §6.1 + real submit→poll→result API test (`httpx.ASGITransport`, no mocks) + auth/CORS/429/caps tests; CI matrix row (MLX-free subset per NFR-4) | ✅ 2026-07-09 — `app/main.py` + `app/logging_setup.py` serve the §6.1 contract (`solve_dense` wires sparse+dense); `tests/test_api.py` (12 shell + 1 real-dispatcher degradation E2E, `httpx.ASGITransport`, no mocks) + the CI row (`tests/test_jobs.py tests/test_emit.py`) |
+| **P11** | `@plastiq/photogrammetry` + `apps/plastiq` wiring (settings, `src/ai/photogrammetry.ts`, `PhotoSolveSection` with both hand-offs, capture-guidance copy); unit tests mirroring the nerf/capture panel suites | ✅ 2026-07-09 — `@plastiq/photogrammetry` client + `apps/plastiq/src/ai/photogrammetry.ts` + `photogrammetry{BaseURL,ApiKey}` settings + `PhotoSolveSection` (both hand-offs: poses→NeRF, dense→capture); tests `photogrammetry.unit.test.ts`, `SettingsPanel.photogrammetry.test.tsx`, `GenerationPanel.photo.test.tsx` (app suite green) |
+| **P12** | Browser E2E `e2e/plastiq/photogrammetry.spec.ts`, service-gated on `/health` (the `nerf.spec.ts` precedent): photo fixture → solve → dense hand-off → capture → mesh renders in the viewport; the photos→nerf-prefill leg asserted to the prefilled-section state (full nerf training stays a local, knob-minimized run). Full local chain run green on the M4 Max recorded here | 🟡 E2E `e2e/plastiq/photogrammetry.spec.ts` WRITTEN (service-gated on :8004 + :8001, real-photo dataset skip-if-absent, drives the dense→capture→CAD leg; the nerf-prefill leg is unit-covered). LIVE-GATED — the successful run needs the services + real photos on the M4 Max (the synthetic scene is too texture-poor to reconstruct), pending that run |
 
 **Exit criteria (v1, per D-2):** a real photo set → (a) a `transforms.json` that trains
 `services/nerf` (small knobs) into a mesh in the running app, **and** (b) a dense oriented cloud that

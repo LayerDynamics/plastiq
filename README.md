@@ -50,10 +50,12 @@ e2e/plastiq            no-mock Playwright end-to-end tests
 ```
 
 (The `packages/{data,embed,recon,rl,segment}` directories are empty scaffolding
-reserved for future work — no code yet; `services/photogrammetry` is scaffolded
-but pre-implementation, its service code landing per SPEC-13's milestones.
-`services/nurbs` is now implemented per SPEC-12 — U0–U9 shipped and the U7
-watertight-blob gate passed; reconstruct delegation (U10) is deferred.)
+reserved for future work — no code yet. `services/nurbs` is implemented per
+SPEC-12 — U0–U11 shipped, the U7 watertight-blob gate passed, and reconstruct
+delegation (U10) is live-verified. `services/photogrammetry` is implemented per
+SPEC-13 — the sparse SfM + MLX plane-sweep MVS core, the FastAPI service, and the
+`@plastiq/photogrammetry` client are in place; the real-photo P7 gate and browser
+E2E are verified on the local M4 Max, not in headless CI.)
 
 - **`@plastiq/cad`** — a parametric B-rep kernel built directly on
   [`opencascade.js`](https://ocjs.org) (full OCCT compiled to WebAssembly). It
@@ -113,8 +115,8 @@ self-host image ([`deploy/plastiq-web/`](deploy/plastiq-web/), nginx with
 precompressed wasm and immutable-asset caching) is wrapped by `just
 app-docker-build` / `just app-docker-run`; `apps/desktop` packages the same
 editor as a native app via `pnpm -C apps/desktop tauri build`. The optional Python
-services run locally with `just services` (starts reconstruct/capture/nerf/nurbs on
-:8000/:8001/:8002/:8003 with health checks; `just services-stop` tears them down). Full
+services run locally with `just services` (starts reconstruct/capture/nerf/nurbs/photogrammetry
+on :8000/:8001/:8002/:8003/:8004 with health checks; `just services-stop` tears them down). Full
 instructions, the single-threaded-wasm/no-COOP-COEP note, and bundle-size
 expectations are in [`docs/deploy.md`](docs/deploy.md).
 

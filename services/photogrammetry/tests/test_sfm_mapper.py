@@ -6,7 +6,6 @@ best similarity, since SfM recovers geometry only up to a similarity)."""
 from __future__ import annotations
 
 import numpy as np
-import pytest
 
 from app.sfm import build_tracks, reconstruct, select_init_pair
 from tests.synthetic import make_synthetic_scene

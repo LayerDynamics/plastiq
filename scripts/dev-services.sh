@@ -6,8 +6,7 @@
 #   nerf           :8002  (posed images → mesh,  env plastiq-nerf,    MLX/Apple Silicon)
 #   nurbs          :8003  (mesh → NURBS surfaces → STEP, env plastiq-nurbs, MLX/Apple Silicon)
 #   photogrammetry :8004  (photos → poses + point cloud, env plastiq-photogrammetry, MLX/Apple
-#                          Silicon) — registered below but COMMENTED until its app/main.py lands
-#                          (SPEC-13 P10.2); uncomment the SERVICES entry then.
+#                          Silicon) — SPEC-13 P10.2
 #
 # Each service runs `uvicorn app.main:app` inside its own conda env (created from the service's
 # environment.yml if missing). Output is line-prefixed with the service name; Ctrl-C shuts them
@@ -26,9 +25,7 @@ SERVICES=(
   "capture:plastiq-capture:services/capture:8001"
   "nerf:plastiq-nerf:services/nerf:8002"
   "nurbs:plastiq-nurbs:services/nurbs:8003"
-  # photogrammetry :8004 — reserved (SPEC-13). Uncomment when services/photogrammetry/app/main.py
-  # exists (P10.2); until then it has no uvicorn target, so it stays out of the bring-up loop.
-  # "photogrammetry:plastiq-photogrammetry:services/photogrammetry:8004"
+  "photogrammetry:plastiq-photogrammetry:services/photogrammetry:8004"
 )
 
 find_launcher() {
@@ -81,7 +78,7 @@ kill_port_listeners() {
 
 stop_all() {
   local port
-  for port in 8000 8001 8002 8003; do
+  for port in 8000 8001 8002 8003 8004; do
     kill_port_listeners "$port"
   done
 }

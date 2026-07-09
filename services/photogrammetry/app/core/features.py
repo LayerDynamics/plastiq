@@ -218,9 +218,9 @@ def build_scale_space(image, sigma: float = _SIGMA, n_scales: int = _N_SCALES,
     k = 2.0 ** (1.0 / n_scales)
     n_layers = n_scales + 3
     increments = [0.0]
-    for l in range(1, n_layers):
-        s_prev = sigma * (k ** (l - 1))
-        s_curr = sigma * (k ** l)
+    for li in range(1, n_layers):
+        s_prev = sigma * (k ** (li - 1))
+        s_curr = sigma * (k ** li)
         increments.append(float(np.sqrt(max(s_curr ** 2 - s_prev ** 2, 0.0))))
 
     # number of octaves: keep halving until the interior can no longer hold a 3×3 neighbourhood
@@ -236,8 +236,8 @@ def build_scale_space(image, sigma: float = _SIGMA, n_scales: int = _N_SCALES,
     cur = base
     for _o in range(n_octaves):
         layers = [cur]
-        for l in range(1, n_layers):
-            layers.append(gaussian_blur(layers[-1], increments[l]))
+        for li in range(1, n_layers):
+            layers.append(gaussian_blur(layers[-1], increments[li]))
         stack = mx.stack(layers, axis=0)  # (n_layers, h, w)
         dstack = stack[1:] - stack[:-1]  # (n_layers-1, h, w) DoG
         mx.eval(stack, dstack)
