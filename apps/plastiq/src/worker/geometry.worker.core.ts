@@ -34,6 +34,7 @@ export function toTransfer(
       edgeId: e.edgeId,
       positions: Float32Array.from(e.positions),
       faceNormals: e.faceNormals,
+      faceIds: e.faceIds,
       midpoint: e.midpoint,
     })),
     vertexIds: t.vertexPoints.map((v) => v.vertexId),

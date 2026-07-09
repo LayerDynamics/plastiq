@@ -25,3 +25,9 @@ benchmark/cadgenbench
 
 # hf-mount mountpoint for the CADGenBench data bucket (LayerDynamics/cadgenbench-data-bucket)
 local/
+.pnpm-store
+.pytest_cache
+.ruff_cache
+
+# carabiner (lore framework) local tooling state — SQLite DBs, chat/memory stores, traces
+.carabiner/

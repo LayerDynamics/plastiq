@@ -4,7 +4,8 @@
 
 import { describe, it, expect } from "vitest";
 import { MODEL_CATALOG, preflightModel } from "./models.js";
-import { buildProvider } from "./registry.js";
+import { buildProvider, keyResolverFor } from "./registry.js";
+import { toProviderSettings, type AiSettings } from "../settings.js";
 
 describe("R1.4 model catalog (Appendix A)", () => {
   it("lists the curated Anthropic + Ollama models", () => {
@@ -75,5 +76,39 @@ describe("R1.4 registry — builds the right adapter from settings", () => {
     expect(p.id).toBe("llama-mlx");
     expect(p.model).toBe("mlx-community/Qwen2.5-3B-Instruct-4bit");
     expect(p.supportsTools).toBe(true);
+  });
+
+  it("a live probe result supersedes the static catalog hint (FR-5b/§6.9)", () => {
+    // Catalog says qwen2.5 has no vision; the endpoint's model metadata says otherwise
+    // (e.g. a vision-tagged local build) — the probed answer wins at construction.
+    const p = buildProvider(
+      { providerKey: "ollama", providerId: "openai-compatible", model: "qwen2.5" },
+      { supportsTools: true, supportsVision: true },
+    );
+    expect(p.supportsVision).toBe(true);
+  });
+});
+
+describe("R1.4 keyResolverFor — the decision-21 key indirection at adapter construction", () => {
+  const byo: AiSettings = {
+    providerKey: "anthropic",
+    providerId: "anthropic",
+    model: "claude-opus-4-8",
+    apiKeys: { anthropic: "sk-byo" },
+  };
+
+  it("resolves the BYO key locally when no base-URL override is set", () => {
+    expect(toProviderSettings(byo, keyResolverFor(byo)).apiKey).toBe("sk-byo");
+  });
+
+  it("hosted-proxy state (base URL + no key stored for the provider) resolves through the proxy resolver — no key sent", () => {
+    // An unrelated stored key (fal) must not leak: the check is per provider key.
+    const proxied: AiSettings = { ...byo, apiKeys: { fal: "fal-key" }, baseURL: "https://proxy.example.com/v1" };
+    expect(toProviderSettings(proxied, keyResolverFor(proxied)).apiKey).toBeUndefined();
+  });
+
+  it("a stored BYO key wins over a base-URL override (a keyed custom endpoint keeps working)", () => {
+    const gateway: AiSettings = { ...byo, baseURL: "https://gateway.corp.example/v1" };
+    expect(toProviderSettings(gateway, keyResolverFor(gateway)).apiKey).toBe("sk-byo");
   });
 });

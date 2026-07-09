@@ -213,3 +213,223 @@ def select_init_pair(pair_matches, keypoints, K) -> tuple[int, int]:
     if best_pair is None:
         raise ValueError("pair_matches is empty; cannot select an initial pair")
     return best_pair
+
+
+# ---------------------------------------------------------------------------------------------
+# Incremental mapper (P5.2): init → register → triangulate → bundle-adjust
+# ---------------------------------------------------------------------------------------------
+
+from dataclasses import dataclass  # noqa: E402  (kept next to the mapper it serves)
+
+from app.core.ba import (  # noqa: E402
+    inverse_rodrigues,
+    pack,
+    rodrigues,
+    run_bundle_adjustment,
+    unpack,
+)
+from app.core.ransac import ransac_essential, ransac_pnp  # noqa: E402
+from app.core.triangulate import triangulate_gated  # noqa: E402
+
+__all__ += ["SfmResult", "reconstruct"]
+
+_GLOBAL_BA_EVERY = 5  # run a full global bundle adjustment every N registrations
+
+
+@dataclass
+class SfmResult:
+    """Output of :func:`reconstruct`.
+
+    Attributes:
+        poses_w2c: ``{image_idx: (3, 4)}`` world→camera ``[R | t]`` for each registered view, in the
+            reconstruction's own frame (camera of the init pair's first image = identity; recovered
+            up to a global similarity).
+        points3d: ``{track_id: (3,)}`` triangulated world points (``track_id`` indexes the input
+            ``tracks`` list).
+        registered: registered image indices, in registration order.
+        unregistered_names: names of images that appear in tracks but could not be registered.
+        mean_reproj: mean reprojection error (px) over all surviving observations.
+    """
+
+    poses_w2c: dict
+    points3d: dict
+    registered: list
+    unregistered_names: list
+    mean_reproj: float
+
+
+def _proj(K, pose):
+    return K @ pose  # (3, 4) = K [R | t]
+
+
+def _run_ba(poses, points3d, tracks, keypoints, K, *, fix_intrinsics, free_cams=None):
+    """Bundle-adjust the current reconstruction in place (poses + points updated)."""
+    reg = sorted(poses)
+    tids = sorted(points3d)
+    if len(reg) < 2 or len(tids) < 1:
+        return
+    cam_index = {v: i for i, v in enumerate(reg)}
+    pt_index = {tid: i for i, tid in enumerate(tids)}
+    intr = np.array([K[0, 0], K[0, 2], K[1, 2], 0.0, 0.0, 0.0, 0.0])
+    cam_params = np.zeros((len(reg), 6))
+    for v, i in cam_index.items():
+        cam_params[i, :3] = inverse_rodrigues(poses[v][:, :3])
+        cam_params[i, 3:] = poses[v][:, 3]
+    pts = np.array([points3d[tid] for tid in tids])
+    obs = []
+    for tid in tids:
+        for v, feat in tracks[tid].items():
+            if v in cam_index:
+                u, w = keypoints[v][feat]
+                obs.append((cam_index[v], pt_index[tid], u, w))
+    obs = np.array(obs, dtype=np.float64)
+    if obs.shape[0] < len(reg) + len(tids):
+        return
+    x0 = pack(intr, cam_params, pts)
+    free = None if free_cams is None else [cam_index[v] for v in free_cams if v in cam_index]
+    x_opt, _ = run_bundle_adjustment(
+        x0, obs, len(reg), len(tids), fix_intrinsics=fix_intrinsics, free_cams=free
+    )
+    _, cam2, pts2 = unpack(x_opt, len(reg), len(tids))
+    for v, i in cam_index.items():
+        poses[v] = np.hstack([rodrigues(cam2[i, :3]), cam2[i, 3:].reshape(3, 1)])
+    for tid in tids:
+        points3d[tid] = pts2[pt_index[tid]]
+
+
+def _mean_reproj(poses, points3d, tracks, keypoints, K):
+    errs = []
+    for tid, X in points3d.items():
+        Xh = np.append(X, 1.0)
+        for v, feat in tracks[tid].items():
+            if v in poses:
+                p = _proj(K, poses[v]) @ Xh
+                if p[2] > 1e-9:
+                    errs.append(np.linalg.norm(p[:2] / p[2] - keypoints[v][feat]))
+    return float(np.mean(errs)) if errs else float("inf")
+
+
+def reconstruct(tracks, keypoints, K, *, init_pair, image_names=None, seed=0,
+                fix_intrinsics=True, min_pnp=6, reproj_gate=4.0, parallax_gate_deg=1.5):
+    """Incrementally reconstruct camera poses + a sparse point cloud from feature tracks.
+
+    Seeds from ``init_pair`` (two-view essential + cheirality), then repeatedly registers the
+    unregistered view seeing the most triangulated tracks (DLT-PnP RANSAC), triangulates its new
+    tracks (cheirality/reprojection/parallax gated), runs local bundle adjustment, and a periodic +
+    final global bundle adjustment (SPEC-13 §5.4-3/4). Intrinsics are held fixed by default (the
+    synthetic/known-K case); the P7 real-photo path frees them for self-calibration.
+
+    Args:
+        tracks: ``list[{image_idx: feature_idx}]`` from :func:`build_tracks`.
+        keypoints: per-image ``(K_i, 2)`` pixel arrays.
+        K: shared ``(3, 3)`` intrinsics.
+        init_pair: ``(i, j)`` seed pair (e.g. from :func:`select_init_pair`).
+        image_names: optional per-image names for ``unregistered_names`` reporting.
+        seed: RANSAC seed threaded into PnP (D-10).
+        fix_intrinsics: hold intrinsics fixed in BA (default; set False for self-calibration).
+
+    Returns:
+        An :class:`SfmResult`.
+    """
+    K = np.asarray(K, dtype=np.float64)
+    i0, j0 = int(init_pair[0]), int(init_pair[1])
+    all_images = sorted({img for t in tracks for img in t})
+    names = image_names if image_names is not None else [str(v) for v in range(max(all_images) + 1)]
+
+    # --- seed from the init pair -------------------------------------------------------------
+    both = [(tid, t) for tid, t in enumerate(tracks) if i0 in t and j0 in t]
+    pts_i = np.array([keypoints[i0][t[i0]] for _, t in both], dtype=np.float64)
+    pts_j = np.array([keypoints[j0][t[j0]] for _, t in both], dtype=np.float64)
+    # Robust two-view init: RANSAC the essential matrix (real matches carry outliers, so the raw
+    # 5-point minimal solver on all correspondences is unusable — this mirrors the PnP registration).
+    _, R, t, _ = ransac_essential(pts_i, pts_j, K, K, seed=seed, threshold=reproj_gate)
+
+    poses: dict = {i0: np.hstack([np.eye(3), np.zeros((3, 1))]), j0: np.hstack([R, t.reshape(3, 1)])}
+    points3d: dict = {}
+    reg_order = [i0, j0]
+
+    P_i = _proj(K, poses[i0])
+    P_j = _proj(K, poses[j0])
+    tids0 = [tid for tid, _ in both]
+    X0, valid0 = triangulate_gated(P_i, P_j, pts_i, pts_j, max_px=reproj_gate, min_deg=parallax_gate_deg)
+    for k, tid in enumerate(tids0):
+        if valid0[k]:
+            points3d[tid] = X0[k]
+
+    _run_ba(poses, points3d, tracks, keypoints, K, fix_intrinsics=fix_intrinsics)
+
+    # --- incremental registration ------------------------------------------------------------
+    # A view that fails PnP is not abandoned: it is retried once its triangulated-track *evidence*
+    # grows (more structure registered since), the standard incremental-SfM recovery. ``last_attempt``
+    # records the track count at each failure so a view is only re-attempted with strictly more
+    # evidence — bounded, so a genuinely unregisterable view (e.g. a mismatched image) can't loop.
+    last_attempt: dict = {}
+    since_global = 0
+    while True:
+        best_v, best_count = None, 0
+        for v in all_images:
+            if v in poses:
+                continue
+            count = sum(1 for tid in points3d if v in tracks[tid])
+            if count < min_pnp or count <= last_attempt.get(v, -1):
+                continue  # too little structure, or no new evidence since this view last failed
+            if count > best_count:
+                best_v, best_count = v, count
+        if best_v is None:
+            break
+
+        tids_v = [tid for tid in points3d if best_v in tracks[tid]]
+        X = np.array([points3d[tid] for tid in tids_v], dtype=np.float64)
+        uv = np.array([keypoints[best_v][tracks[tid][best_v]] for tid in tids_v], dtype=np.float64)
+        try:
+            Rv, tv, mask = ransac_pnp(X, uv, K, seed=seed, threshold=reproj_gate)
+        except (ValueError, np.linalg.LinAlgError):
+            last_attempt[best_v] = best_count
+            continue
+        n_in = int(mask.sum())
+        if n_in < min_pnp or n_in < 0.3 * len(tids_v):  # bad registration ⇒ retry when evidence grows
+            last_attempt[best_v] = best_count
+            continue
+
+        poses[best_v] = np.hstack([Rv, tv.reshape(3, 1)])
+        reg_order.append(best_v)
+
+        # triangulate this view's not-yet-triangulated tracks against the best co-registered view.
+        for tid, t in enumerate(tracks):
+            if tid in points3d or best_v not in t:
+                continue
+            others = [w for w in t if w in poses and w != best_v]
+            if not others:
+                continue
+            # widest baseline co-observer for a well-conditioned triangulation.
+            cbest = -poses[best_v][:, :3].T @ poses[best_v][:, 3]
+            w = max(others, key=lambda ww: np.linalg.norm((-poses[ww][:, :3].T @ poses[ww][:, 3]) - cbest))
+            p1 = keypoints[best_v][t[best_v]][None]
+            p2 = keypoints[w][t[w]][None]
+            Xn, vn = triangulate_gated(_proj(K, poses[best_v]), _proj(K, poses[w]), p1, p2,
+                                       max_px=reproj_gate, min_deg=parallax_gate_deg)
+            if vn[0]:
+                points3d[tid] = Xn[0]
+
+        since_global += 1
+        _run_ba(poses, points3d, tracks, keypoints, K, fix_intrinsics=fix_intrinsics, free_cams=[best_v])
+        if since_global >= _GLOBAL_BA_EVERY:
+            _run_ba(poses, points3d, tracks, keypoints, K, fix_intrinsics=fix_intrinsics)
+            since_global = 0
+
+    # --- final global BA + track-length filter -----------------------------------------------
+    _run_ba(poses, points3d, tracks, keypoints, K, fix_intrinsics=fix_intrinsics)
+    for tid in list(points3d):
+        n_obs = sum(1 for v in tracks[tid] if v in poses)
+        if n_obs < 3:  # SPEC-13 §5.4-4: final cloud keeps track length >= 3
+            del points3d[tid]
+
+    registered = reg_order
+    unreg = [names[v] for v in all_images if v not in poses and v < len(names)]
+    return SfmResult(
+        poses_w2c=poses,
+        points3d=points3d,
+        registered=registered,
+        unregistered_names=unreg,
+        mean_reproj=_mean_reproj(poses, points3d, tracks, keypoints, K),
+    )

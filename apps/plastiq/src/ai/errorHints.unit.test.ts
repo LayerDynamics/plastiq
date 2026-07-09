@@ -1,5 +1,7 @@
 // AI/service UX — errorHints unit tests: every raw→friendly translation mapping
-// (connection / auth / rate-limit / timeout / unknown), the provider-endpoint
+// (connection / auth / rate-limit / timeout / unknown), the local-Ollama CORS
+// disambiguation (opaque browser failures get the OLLAMA_ORIGINS half, definitive
+// connection-refused signatures don't — SPEC-6 FR-3), the provider-endpoint
 // resolution the messages name, and the GET /health pre-check (ok, non-2xx,
 // refused, timeout) over an injected fake fetch.
 
@@ -58,10 +60,57 @@ describe("translateProviderError — mappings", () => {
     expect(hint?.raw).toBe("TypeError: Failed to fetch");
   });
 
+  it("opaque browser failures on localhost Ollama also carry the OLLAMA_ORIGINS CORS guidance (SPEC-6 FR-3)", () => {
+    // These signatures look identical whether Ollama is down or up-but-CORS-blocked,
+    // so the hint must honestly cover both possibilities.
+    const opaque = [
+      "TypeError: Failed to fetch", // Chrome
+      "NetworkError when attempting to fetch resource.", // Firefox
+      "Load failed", // Safari
+      "Connection error.", // openai SDK wrapper around the browser fetch failure
+    ];
+    for (const raw of opaque) {
+      const hint = translateProviderError(raw, ollamaEndpoint);
+      expect(hint?.friendly, raw).toContain("ollama serve");
+      expect(hint?.friendly, raw).toContain("If it IS already running, the browser was likely blocked by CORS");
+      expect(hint?.friendly, raw).toContain("OLLAMA_ORIGINS='*'");
+    }
+  });
+
+  it("a definitive connection-refused signature (nothing listening — never CORS) → start hint WITHOUT the CORS half", () => {
+    const refused = [
+      "Error: connect ECONNREFUSED 127.0.0.1:11434", // Node SDK
+      "net::ERR_CONNECTION_REFUSED", // Chrome devtools-style
+      "Connection refused",
+    ];
+    for (const raw of refused) {
+      const hint = translateProviderError(raw, ollamaEndpoint);
+      expect(hint?.friendly, raw).toContain("ollama serve");
+      expect(hint?.friendly, raw).toContain("ollama pull");
+      expect(hint?.friendly, raw).not.toContain("OLLAMA_ORIGINS");
+    }
+  });
+
+  it("the OLLAMA_ORIGINS example names the page's own origin when running in a browser", () => {
+    vi.stubGlobal("location", { origin: "http://localhost:5173" });
+    try {
+      const hint = translateProviderError("TypeError: Failed to fetch", ollamaEndpoint);
+      expect(hint?.friendly).toContain("OLLAMA_ORIGINS='http://localhost:5173' ollama serve");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("…and falls back to an <app origin> placeholder outside a browser (no location global)", () => {
+    const hint = translateProviderError("TypeError: Failed to fetch", ollamaEndpoint);
+    expect(hint?.friendly).toContain("OLLAMA_ORIGINS='<app origin>' ollama serve");
+  });
+
   it("SDK connection error on a non-Ollama endpoint → can't-reach WITHOUT the Ollama hint", () => {
     const hint = translateProviderError("Connection error.", hostedEndpoint);
     expect(hint?.friendly).toContain("Can't reach Anthropic (Claude) at https://api.anthropic.com");
     expect(hint?.friendly).not.toContain("ollama serve");
+    expect(hint?.friendly).not.toContain("OLLAMA_ORIGINS");
   });
 
   it("fetch failure on a local llama-mlx endpoint (:11543) → the llama-mlx start + CORS hint", () => {
@@ -74,6 +123,8 @@ describe("translateProviderError — mappings", () => {
     expect(hint?.friendly).toContain("just serve");
     expect(hint?.friendly).toContain("CORS");
     expect(hint?.friendly).not.toContain("ollama serve");
+    // llama-mlx keeps its own CORS note; OLLAMA_ORIGINS is Ollama-only.
+    expect(hint?.friendly).not.toContain("OLLAMA_ORIGINS");
   });
 
   it("resolves the llama-mlx catalog label + default :11543/v1 endpoint", () => {

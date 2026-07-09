@@ -20,6 +20,7 @@ import { buildAgentTools, type AgentToolDeps } from "../ai/tools/toolDefs.js";
 import type { AgentTools } from "../ai/agentRunner.js";
 import type { BuildProbe, ApplyDocument } from "../ai/tools/buildPart.js";
 import type { MeshProbe } from "../ai/tools/inspectGeometry.js";
+import type { PlanGraph } from "../ai/planning.js";
 import type { ToolDef, JsonSchema } from "../ai/providers/types.js";
 import type { CadDocument } from "../store/types.js";
 
@@ -129,6 +130,11 @@ export interface HeadlessSession {
    * editing seed, `false` means the model never changed the imported solid (a
    * no-op edit that re-exports the input), distinct from a real edit. */
   applied(): boolean;
+  /** The last validated decomposition plan the agent committed via plan_part this
+   * session (9-M1), or null when it never planned — the headless twin of the
+   * browser's conversation-trace "plan" entry, so a run's plan is reported, not
+   * discarded. */
+  plan(): PlanGraph | null;
   /** Rebuild the current document and export it as STEP text. Throws if the
    * document produces no geometry. */
   toStep(): string;
@@ -150,6 +156,7 @@ export async function createHeadlessSession(
   const oc = await initOcct();
   let current: CadDocument = seed;
   let didApply = false;
+  let committedPlan: PlanGraph | null = null;
 
   // build_part only needs to know the document compiles, so rebuild WITHOUT
   // tessellating (the agent may probe many candidate docs per run; tessellation is
@@ -176,11 +183,15 @@ export async function createHeadlessSession(
 
   // No createMesh dep: the headless path is parametric-only (the creative img→3D
   // path needs paid cloud providers + a browser). plan_part / inspect_geometry /
-  // answer_user are wired automatically by buildAgentTools.
+  // answer_user are wired automatically by buildAgentTools; onPlan captures the
+  // committed decomposition plan into the session report (9-M1).
   const deps: AgentToolDeps = {
     buildPart: { probe, apply },
     probe: meshProbe,
     currentDoc: () => current,
+    onPlan: (p) => {
+      committedPlan = p;
+    },
   };
 
   const tools = buildAgentTools(deps);
@@ -191,6 +202,7 @@ export async function createHeadlessSession(
     tools: { defs: grammarSafeToolDefs(tools.defs), handlers: tools.handlers },
     currentDoc: () => current,
     applied: () => didApply,
+    plan: () => committedPlan,
     toStep: () => {
       const solid = rebuildDocument(oc, current);
       if (!solid) throw new Error("current document has no geometry to export");

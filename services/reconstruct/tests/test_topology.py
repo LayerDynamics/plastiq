@@ -23,6 +23,7 @@ from OCC.Core.TopLoc import TopLoc_Location
 from OCC.Core.TopoDS import topods
 
 from app.cleanup import clean_mesh
+from app.closure import count_free_edges
 from app.pipeline import reconstruct
 from app.topology import reconstruct_cut_cylinder, shared_edge_by_intersection
 
@@ -120,6 +121,15 @@ def test_cut_cylinder_recovers_a_plain_capped_cylinder():
     res = reconstruct_cut_cylinder(v, f)
     assert res is not None and res.is_solid
     assert abs(res.volume - pi * R**2 * H) / (pi * R**2 * H) < 0.03
+
+
+def test_cut_cylinder_route_reports_computed_zero_free_edges():
+    # 7-M2 follow-up: free_edges used to be hardcoded 0 here; it is now the real free-bounds
+    # count from the shared FR-7 closure helper — cross-checked against count_free_edges.
+    v, f = _oblique_cut_cylinder_mesh()
+    res = reconstruct_cut_cylinder(v, f)
+    assert res is not None and res.is_solid
+    assert res.free_edges == count_free_edges(res.shape) == 0
 
 
 def test_cut_cylinder_rejects_a_box():

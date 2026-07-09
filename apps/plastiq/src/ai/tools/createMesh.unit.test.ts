@@ -112,6 +112,32 @@ describe("createMesh — paid-job gate + orchestration (SPEC-6 R4.3)", () => {
     expect(state.persisted!.source).toMatchObject({ mode: "text2img3d", prompt: "a vase" });
   });
 
+  it("text2img3d threads the SELECTED image provider into the image stage (not a hardwired one)", async () => {
+    let usedProviderId: string | null = null;
+    const selected: CreateMeshDeps["imageProvider"] = {
+      id: "fal:flux-dev",
+      label: "FLUX dev",
+      generate: async () => {
+        usedProviderId = "fal:flux-dev"; // the id of THIS provider — proves selection flows through
+        return { mediaType: "image/png", data: "aW1n" };
+      },
+    };
+    const { deps, state } = makeDeps({ imageProvider: selected });
+    const res = await createMesh({ mode: "text2img3d", prompt: "a vase", providerId: "fake:3d" }, deps);
+    expect(res.status).toBe("ok");
+    expect(usedProviderId).toBe("fal:flux-dev"); // the picked model ran text→image, not a default
+    expect(state.paidJobs).toBe(2);
+  });
+
+  it("text2img3d errors when no image provider resolved (e.g. an unknown persisted id) — the 3D path", async () => {
+    const { deps, state } = makeDeps({ imageProvider: undefined });
+    const res = await createMesh({ mode: "text2img3d", prompt: "a vase", providerId: "fake:3d" }, deps);
+    expect(res.status).toBe("error");
+    expect(res.message).toMatch(/No image-generation provider/);
+    expect(state.persisted).toBeNull();
+    expect(state.paidJobs).toBe(0);
+  });
+
   it("img3d resolves the attached image and does NOT call the image-gen provider", async () => {
     let imageGenCalled = false;
     const { deps, state } = makeDeps({

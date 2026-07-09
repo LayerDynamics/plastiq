@@ -3,7 +3,9 @@
 Ported (Apache-2.0) from kornia's `depth_to_3d` / `depth_to_normals` — pinhole unprojection and
 gradient-cross-product normal estimation — reimplemented in **MLX** (`mlx.core`), consistent with the
 rest of the capture service's models (the M7 SDF + M8 completion). Turns a depth scan into a 3D point
-cloud + normals that feed the mesh→B-rep reconstruction. Deterministic. See docs/adr/0006.
+cloud + normals that feed the mesh→B-rep reconstruction — served as the service's
+`POST /points-from-depth` (app/main.py), whose output is exactly `/capture`'s input. Deterministic.
+See docs/adr/0006.
 
 Scope (per ADR 0006): the depth/point-cloud math only. SfM pose solvers (Nister 5-point) and fisheye
 distortion (Kannala-Brandt) are deliberately NOT built — poses come from COLMAP / the learned field.

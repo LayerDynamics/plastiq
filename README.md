@@ -44,11 +44,16 @@ packages/capture       @plastiq/capture — browser client for the point-cloud s
 services/reconstruct   optional Python + pythonOCC mesh→B-rep (STEP) service (SPEC-7)
 services/nerf          optional MLX NeRF/VolSDF photo-capture service (SPEC-11)
 services/capture       optional MLX point-cloud → mesh / scan-completion service (SPEC-10)
+services/nurbs         optional MLX NURBS surface-fitting service (SPEC-12)
+services/photogrammetry  optional SfM/MVS photos → poses + point-cloud service (SPEC-13)
 e2e/plastiq            no-mock Playwright end-to-end tests
 ```
 
-(`services/nurbs` and the `packages/{data,embed,recon,rl,segment}` directories
-are empty scaffolding reserved for future work — no code yet.)
+(The `packages/{data,embed,recon,rl,segment}` directories are empty scaffolding
+reserved for future work — no code yet; `services/photogrammetry` is scaffolded
+but pre-implementation, its service code landing per SPEC-13's milestones.
+`services/nurbs` is now implemented per SPEC-12 — U0–U9 shipped and the U7
+watertight-blob gate passed; reconstruct delegation (U10) is deferred.)
 
 - **`@plastiq/cad`** — a parametric B-rep kernel built directly on
   [`opencascade.js`](https://ocjs.org) (full OCCT compiled to WebAssembly). It
@@ -107,9 +112,9 @@ build` produces `apps/plastiq/dist`, which any static host can serve. A
 self-host image ([`deploy/plastiq-web/`](deploy/plastiq-web/), nginx with
 precompressed wasm and immutable-asset caching) is wrapped by `just
 app-docker-build` / `just app-docker-run`; `apps/desktop` packages the same
-editor as a native app via `pnpm -C apps/desktop tauri build`. The three optional
-services run locally with `just services` (starts reconstruct/nerf/capture on
-:8000/:8001/:8002 with health checks; `just services-stop` tears them down). Full
+editor as a native app via `pnpm -C apps/desktop tauri build`. The optional Python
+services run locally with `just services` (starts reconstruct/capture/nerf/nurbs on
+:8000/:8001/:8002/:8003 with health checks; `just services-stop` tears them down). Full
 instructions, the single-threaded-wasm/no-COOP-COEP note, and bundle-size
 expectations are in [`docs/deploy.md`](docs/deploy.md).
 

@@ -6,13 +6,15 @@
 // Capabilities still being ported in later stages (picking R1, gizmos R2/R3,
 // sketch camera R4, section R5, assembly/sim R6) are not wired here yet.
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import * as THREE from "three";
 import { useCadStore } from "../store/store.js";
 import { PLACEMENT_TYPE, type CadDocument, type MeshDoc } from "../store/types.js";
 import { GeometryClient } from "../worker/bridge.js";
 import { useProjectsStore } from "../persistence/projectsStore.js";
 import { importGltf } from "../mesh/importGltf.js";
+import { meshBodiesToGlbBase64 } from "../mesh/glb.js";
+import { deserializeMeshBody, serializeMeshBody } from "../mesh/meshBody.js";
 import type { MeshBody } from "../mesh/meshBody.js";
 import { Viewport3D } from "./Viewport3D.js";
 import { resolveDatumPlane } from "../worker/sketchPlane.js";
@@ -144,6 +146,21 @@ export function Viewport(): React.JSX.Element {
   const setStatus = useCadStore((s) => s.setStatus);
   const measuring = useCadStore((s) => s.measuring);
   const measureResult = useCadStore((s) => s.measureResult);
+  const onMeshBodiesChange = useCallback((bodies: MeshBody[], persist = false): void => {
+    setMeshBodies(bodies);
+    if (!persist) return;
+    const projects = useProjectsStore.getState();
+    const doc = projects.activeMeshDoc;
+    if (!doc) return;
+    useProjectsStore.setState({
+      activeMeshDoc: {
+        ...doc,
+        glb: meshBodiesToGlbBase64(bodies),
+        editedBodies: bodies.map(serializeMeshBody),
+      },
+      status: "mesh edited",
+    });
+  }, []);
 
   useEffect(() => {
     const client = new GeometryClient();
@@ -449,6 +466,10 @@ export function Viewport(): React.JSX.Element {
         setMeshBodies(null);
         return;
       }
+      if (doc.editedBodies) {
+        setMeshBodies(doc.editedBodies.map(deserializeMeshBody));
+        return;
+      }
       void importGltf(decodeBase64(doc.glb))
         .then((bodies) => {
           if (!cancelled) setMeshBodies(bodies);
@@ -469,7 +490,13 @@ export function Viewport(): React.JSX.Element {
 
   return (
     <>
-      <Viewport3D mesh={mesh} meshBodies={meshBodies} sketchFrame={sketchFrame} instances={instances} />
+      <Viewport3D
+        mesh={mesh}
+        meshBodies={meshBodies}
+        sketchFrame={sketchFrame}
+        instances={instances}
+        onMeshBodiesChange={onMeshBodiesChange}
+      />
       {/* The first-party SVG view cube (viewport/ViewCube, top-right DOM overlay)
           owns click-to-orient via the setView seam; explicit named views + Fit live
           in the sidebar's Inspect panel (ViewControl + the fit-view action). No

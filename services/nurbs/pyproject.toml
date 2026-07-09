@@ -1,0 +1,17 @@
+[project]
+name = "plastiq-nurbs"
+version = "0.1.0"
+description = "Modular MLX NURBS surface-fitting service for Plastiq (Apple Silicon / M4 Max)"
+requires-python = ">=3.11"
+
+# Runtime deps are managed by environment.yml (pythonocc-core is conda-forge only; MLX and the
+# geomdl test oracle are pip). This file is for tooling config.
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+pythonpath = ["."]
+
+[tool.ruff]
+line-length = 110
+target-version = "py311"

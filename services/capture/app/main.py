@@ -1,8 +1,11 @@
 """Plastiq capture service (FastAPI) — oriented point cloud → mesh (GLB), via the MLX neural SDF.
 
+POST /points-from-depth {depth, fx, fy, cx, cy} → { points, normals }   (sync: depth scan → /capture cloud)
 POST /capture {points, normals}  → { id, state }          (submit a job)
+POST /complete {points}          → { id, state }          (submit a shape-completion job, M8)
 GET  /jobs/{id}/status           → { id, state, error? }
 GET  /jobs/{id}/result           → { glb_base64, vertices, faces }   (when completed)
+DELETE /jobs/{id}                → 204 / 404               (cancel/cleanup a job record)
 GET  /health                     → { status }
 
 Mirrors services/reconstruct's submit→poll contract so the browser client reuses the same polling
@@ -19,11 +22,12 @@ import logging
 import os
 
 import numpy as np
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from .completion_mlx import CompletionNet, fit_completion
+from .geometry import PinholeCamera, depth_to_normals, unproject_depth
 from .jobs import JobState, JobStore
 from .logging_setup import setup_logging
 from .pipeline import complete_partial, reconstruct_surface
@@ -38,6 +42,11 @@ logger = logging.getLogger(__name__)
 # CAPTURE_MAX_POINTS (like CAPTURE_COMPLETION_ITERS / CAPTURE_COMPLETION_CHECKPOINT below).
 MAX_POINTS = int(os.environ.get("CAPTURE_MAX_POINTS", "200000"))
 
+# Concurrency cap — the per-request cap above bounds ONE submit, but each accepted job runs a full
+# MLX fit on a worker thread, so N parallel unauthenticated submits would otherwise each start one.
+# Submits beyond the cap get 429 (retry after a poll). Same pattern as services/nerf.
+_MAX_CONCURRENT = int(os.environ.get("CAPTURE_MAX_CONCURRENT_JOBS", "2"))
+
 app = FastAPI(title="plastiq-capture", version="0.1.0")
 
 _origins_env = os.environ.get("CAPTURE_CORS_ORIGINS", "*")
@@ -49,9 +58,11 @@ store = JobStore()
 # Startup config summary (env-derived, no secrets) — one line an operator can grep for.
 logger.info(
     "plastiq-capture configured: cors_origins=%s (CAPTURE_CORS_ORIGINS), max_points=%d "
-    "(CAPTURE_MAX_POINTS), completion_checkpoint=%s (CAPTURE_COMPLETION_CHECKPOINT)",
+    "(CAPTURE_MAX_POINTS), max_concurrent_jobs=%d (CAPTURE_MAX_CONCURRENT_JOBS), "
+    "completion_checkpoint=%s (CAPTURE_COMPLETION_CHECKPOINT)",
     _origins,
     MAX_POINTS,
+    _MAX_CONCURRENT,
     "set" if os.environ.get("CAPTURE_COMPLETION_CHECKPOINT") else "unset (synthetic demo completer)",
 )
 
@@ -76,11 +87,76 @@ def health() -> dict:
     return {"status": "ok", "service": "plastiq-capture"}
 
 
+class DepthBody(BaseModel):
+    """A depth scan: an (H, W) z-depth map + pinhole intrinsics (camera frame, +z forward, M6 /
+    docs/adr/0006). Every pixel must carry a valid depth — crop or fill sensor holes upstream:
+    app/geometry.py estimates normals from the depth map's spatial gradients, so a hole would poison
+    its neighbours' normals (masked gradients are deliberately outside geometry.py's scope)."""
+
+    depth: list[list[float]]
+    fx: float
+    fy: float
+    cx: float
+    cy: float
+
+
+@app.post("/points-from-depth")
+def points_from_depth(body: DepthBody) -> dict:
+    """Unproject a depth scan into the oriented point cloud `/capture` consumes: pinhole unprojection
+    + gradient-cross-product normals (app/geometry.py, kornia-ported, MLX). Synchronous, no job —
+    unlike the SDF/completion fits this is a fixed handful of vectorized ops over H·W pixels (no
+    training iterations), milliseconds even at the point cap, so submit→poll would be pure overhead.
+    FastAPI runs this sync `def` in its worker threadpool, off the event loop. The response
+    `{ points, normals }` (each H·W×3, row-major over (v, u)) is exactly `/capture`'s input shape."""
+    if sum(len(row) for row in body.depth) > MAX_POINTS:  # cheap pre-parse cap, like /capture's
+        logger.warning(
+            "rejected /points-from-depth: %d pixels exceeds the %d cap",
+            sum(len(row) for row in body.depth),
+            MAX_POINTS,
+        )
+        raise HTTPException(
+            status_code=422,
+            detail=f"too many depth pixels ({sum(len(row) for row in body.depth)} > {MAX_POINTS})",
+        )
+    try:
+        d = np.asarray(body.depth, dtype=np.float32)
+    except ValueError:
+        logger.warning("rejected /points-from-depth: ragged depth rows")
+        raise HTTPException(status_code=400, detail="depth rows must all have the same length") from None
+    if d.ndim != 2 or d.shape[0] < 2 or d.shape[1] < 2:
+        logger.warning("rejected /points-from-depth: depth is not an (H>=2, W>=2) map")
+        raise HTTPException(status_code=400, detail="depth must be a 2-D (H, W) map with H >= 2 and W >= 2")
+    if not np.isfinite(d).all():
+        logger.warning("rejected /points-from-depth: non-finite values in depth")
+        raise HTTPException(status_code=400, detail="depth must contain only finite values")
+    if (d <= 0.0).any():
+        logger.warning("rejected /points-from-depth: non-positive depth values")
+        raise HTTPException(
+            status_code=400,
+            detail="depth must be strictly positive everywhere (crop or fill sensor holes upstream)",
+        )
+    intrinsics = (body.fx, body.fy, body.cx, body.cy)
+    if not all(np.isfinite(k) for k in intrinsics) or body.fx <= 0.0 or body.fy <= 0.0:
+        logger.warning("rejected /points-from-depth: degenerate intrinsics %s", intrinsics)
+        raise HTTPException(status_code=400, detail="intrinsics must be finite with fx > 0 and fy > 0")
+
+    cam = PinholeCamera(fx=body.fx, fy=body.fy, cx=body.cx, cy=body.cy)
+    pts = np.asarray(unproject_depth(d, cam), dtype=np.float32).reshape(-1, 3)
+    nrm = np.asarray(depth_to_normals(d, cam), dtype=np.float32).reshape(-1, 3)
+    logger.info("points-from-depth: unprojected a %dx%d depth map into %d oriented points", *d.shape, len(pts))
+    return {"points": pts.tolist(), "normals": nrm.tolist()}
+
+
 @app.post("/capture", response_model=JobView)
 async def submit_capture(body: CaptureBody) -> JobView:
     if len(body.points) > MAX_POINTS:
         logger.warning("rejected /capture submit: %d points exceeds the %d cap", len(body.points), MAX_POINTS)
         raise HTTPException(status_code=422, detail=f"too many points ({len(body.points)} > {MAX_POINTS})")
+    if store.running_count() >= _MAX_CONCURRENT:
+        logger.warning(
+            "rejected /capture submit: %d jobs already in flight (cap %d)", store.running_count(), _MAX_CONCURRENT
+        )
+        raise HTTPException(status_code=429, detail="too many jobs in flight; retry shortly")
     pts = np.asarray(body.points, dtype=np.float32)
     nrm = np.asarray(body.normals, dtype=np.float32)
     if pts.ndim != 2 or pts.shape[1] != 3 or pts.shape != nrm.shape:
@@ -117,9 +193,9 @@ class CompleteBody(BaseModel):
 
 @functools.lru_cache(maxsize=1)
 def _completion_model() -> CompletionNet:
-    """The trained completion network. Loads `CAPTURE_COMPLETION_CHECKPOINT` if set (train it on a
-    real dataset for general objects); otherwise trains the synthetic demo completer once and caches
-    it. `CAPTURE_COMPLETION_ITERS` tunes the demo training length."""
+    """The trained completion network. Loads `CAPTURE_COMPLETION_CHECKPOINT` if set (produce one
+    from real meshes with `python -m app.train_completion`); otherwise trains the synthetic demo
+    completer once and caches it. `CAPTURE_COMPLETION_ITERS` tunes the demo training length."""
     import mlx.core as mx
 
     ckpt = os.environ.get("CAPTURE_COMPLETION_CHECKPOINT")
@@ -138,6 +214,11 @@ async def submit_complete(body: CompleteBody) -> JobView:
             "rejected /complete submit: %d points exceeds the %d cap", len(body.points), MAX_POINTS
         )
         raise HTTPException(status_code=422, detail=f"too many points ({len(body.points)} > {MAX_POINTS})")
+    if store.running_count() >= _MAX_CONCURRENT:
+        logger.warning(
+            "rejected /complete submit: %d jobs already in flight (cap %d)", store.running_count(), _MAX_CONCURRENT
+        )
+        raise HTTPException(status_code=429, detail="too many jobs in flight; retry shortly")
     pts = np.asarray(body.points, dtype=np.float32)
     if pts.ndim != 2 or pts.shape[1] != 3:
         logger.warning("rejected /complete submit: points not an Nx3 array")
@@ -180,3 +261,12 @@ def job_result(job_id: str) -> dict:
     if job.state != JobState.completed or job.result is None:
         raise HTTPException(status_code=409, detail=f"job not complete (state: {job.state.value})")
     return job.result
+
+
+@app.delete("/jobs/{job_id}", status_code=204)
+def cancel_job(job_id: str) -> Response:
+    """Drop a job record (client cancel/cleanup). An in-flight worker thread cannot be force-killed,
+    so its eventual result is simply discarded; status/result for this id return 404 afterwards."""
+    if store.remove(job_id) is None:
+        raise HTTPException(status_code=404, detail="no such job")
+    return Response(status_code=204)

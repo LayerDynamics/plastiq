@@ -6,10 +6,12 @@
 
 import { useCadStore } from "../store/store.js";
 import { useProjectsStore } from "../persistence/projectsStore.js";
+import { useAiStore } from "./aiStore.js";
 import { buildAgentTools } from "./tools/toolDefs.js";
 import { buildMeshGenDeps } from "./meshGenDeps.js";
+import { summarizePlan, type PlanGraph } from "./planning.js";
+import { geometryClientProbe, type ApplyDocument } from "./tools/buildPart.js";
 import type { AgentTools } from "./agentRunner.js";
-import type { BuildProbe, ApplyDocument } from "./tools/buildPart.js";
 import type { MeshProbe } from "./tools/inspectGeometry.js";
 import type { ConfirmPaidJob, CreateMeshDeps } from "./tools/createMesh.js";
 import type { AiSettings } from "./settings.js";
@@ -33,6 +35,11 @@ export interface TurnToolsDeps {
   recordPaidJob: () => void;
   /** Notified with the new project id when create_mesh persists a mesh document. */
   onMeshCreated?: (id: string) => void;
+  /** Notified with the validated decomposition plan when the agent commits one via
+   * plan_part (9-M1) — the live-UI hook (the panel renders it structured). The FULL
+   * plan is recorded into the conversation trace here regardless, so a caller that
+   * omits this (the command palette) still persists it. */
+  onPlan?: (plan: PlanGraph) => void;
   /** Resolve an attached image by id (the img3d creative input). */
   resolveImage?: (id: string) => Promise<GenImage>;
   signal?: AbortSignal;
@@ -57,20 +64,18 @@ export function buildCreateMeshDeps(deps: TurnToolsDeps): CreateMeshDeps {
 }
 
 /** Wire the agent's tools to the live build seam, the projects store, and create_mesh.
- * Returns null when the geometry worker seam isn't ready yet (caller surfaces a hint). */
+ * Returns null when the geometry worker seam isn't ready yet (caller surfaces a hint) —
+ * deliberately NO fallback client here: the Viewport owns the app's single geometry
+ * worker, so before it publishes the seam there is nothing to build against, and the
+ * callers' "viewport isn't ready" line is the honest UX. */
 export function buildTurnTools(deps: TurnToolsDeps): AgentTools | null {
   const build = buildSeam();
   if (!build) return null;
 
-  const probe: BuildProbe = async (doc) => {
-    try {
-      return (await build(doc))
-        ? { ok: true }
-        : { ok: false, error: "the document produced no geometry or a feature failed to build" };
-    } catch (e) {
-      return { ok: false, error: e instanceof Error ? e.message : String(e) };
-    }
-  };
+  // The documented app probe (buildPart.geometryClientProbe) over the seam-published
+  // GeometryClient.build — the same null-mesh/throw → structured-error mapping the
+  // headless probe implements against the kernel directly.
+  const probe = geometryClientProbe({ build });
   const meshProbe: MeshProbe = (doc) => build(doc);
   const apply: ApplyDocument = (doc) => useCadStore.getState().loadDocument(doc);
 
@@ -79,5 +84,15 @@ export function buildTurnTools(deps: TurnToolsDeps): AgentTools | null {
     probe: meshProbe,
     currentDoc: () => useCadStore.getState().toDocument(),
     createMesh: buildCreateMeshDeps(deps),
+    // 9-M1: a committed plan is recorded, not discarded — the FULL validated graph
+    // goes into the per-project conversation trace as its own typed entry (the
+    // generic tool lines truncate args at 200 chars; this one never truncates),
+    // then the caller's UI hook (if any) renders it live.
+    onPlan: (plan) => {
+      void useAiStore
+        .getState()
+        .appendTrace({ kind: "plan", name: "plan_part", detail: summarizePlan(plan), plan });
+      deps.onPlan?.(plan);
+    },
   });
 }

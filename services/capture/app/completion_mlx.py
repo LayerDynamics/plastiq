@@ -6,8 +6,9 @@ that latent. Marching-cubes the predicted occupancy → completed mesh. Pure MLX
 Silicon (the M4 Max), no CUDA. The DLR-RM shape-completion repo is CUDA-only; this is a self-contained
 implementation, not a port. See docs/adr/0008.
 
-The demo trains on a synthetic family (hemisphere-masked sphere scans → the full ball); point it at a
-real dataset (ShapeNet-style partial/full pairs) for general objects.
+The demo trains on a synthetic family (hemisphere-masked sphere scans → the full ball); for general
+objects, train on real watertight meshes with `python -m app.train_completion` (app/train_completion.py)
+and serve the checkpoint via CAPTURE_COMPLETION_CHECKPOINT.
 """
 
 from __future__ import annotations

@@ -5,7 +5,12 @@
 // when Ollama isn't running, an SDK "401 …" on a bad key, …) via the agent loop's
 // `{type:"error"}` relay (agentRunner.ts) or a thrown Error. `translateProviderError`
 // maps the common failure classes to a friendly, actionable line — the raw message is
-// kept alongside so the UI can show it collapsed/secondary. `checkServiceHealth` is the
+// kept alongside so the UI can show it collapsed/secondary. For a local Ollama endpoint
+// the connection hint also surfaces the OLLAMA_ORIGINS CORS requirement (SPEC-6 FR-3):
+// a browser CORS block produces the same opaque "Failed to fetch" as a down server, so
+// the hint covers both — unless the signature proves nothing was listening (ECONNREFUSED
+// & co, which a CORS block never produces), where the plain start hint is precise.
+// `checkServiceHealth` is the
 // pre-flight GET /health (short timeout) for the reconstruction (SPEC-6 R6.6), NeRF
 // (SPEC-11 N11), and capture/completion (SPEC-10) services, all of which expose /health;
 // it gates job submission so a down service fails in ~3 s with a "start it with …" hint
@@ -44,14 +49,26 @@ export interface ErrorHint {
 
 const CONNECTION_RE =
   /failed to fetch|fetch failed|connection error|connection refused|econnrefused|networkerror|load failed|err_connection|socket hang up/i;
+/** Signatures that pin a connection failure to the network layer — nothing was listening.
+ * A browser CORS block never surfaces these (it produces the opaque "Failed to fetch"/
+ * "NetworkError"/"Load failed" TypeError instead), so a match means the local-Ollama hint
+ * can skip the CORS half and just say "start it". */
+const REFUSED_RE = /connection refused|econnrefused|err_connection|socket hang up/i;
 const AUTH_RE = /\b401\b|\b403\b|unauthorized|forbidden|invalid[^.]*api.?key|authentication[_ ]error|permission[_ ]error/i;
 const RATE_RE = /\b429\b|rate.?limit|too many requests|quota|overloaded[_ ]error/i;
 const TIMEOUT_RE = /timed?.?out|etimedout|deadline exceeded/i;
 
 /** True when the endpoint is a local Ollama (the default local provider) — it gets a
- * concrete "how to start it" hint instead of the generic one. */
+ * concrete "how to start it" hint instead of the generic one, plus the OLLAMA_ORIGINS
+ * CORS guidance when the failure signature can't rule CORS out (SPEC-6 FR-3). */
 function isLocalOllama(baseURL: string): boolean {
   return /(localhost|127\.0\.0\.1):11434/.test(baseURL);
+}
+
+/** The origin to name in the OLLAMA_ORIGINS example — the page's own origin in a
+ * browser, a placeholder in Node (headless/tests) where there is no page origin. */
+function appOrigin(): string {
+  return typeof location === "undefined" ? "<app origin>" : location.origin;
 }
 
 /** True when the endpoint is a local llama-mlx-server (default bind :11543). It gets
@@ -68,6 +85,13 @@ export function translateProviderError(raw: string, endpoint: ProviderEndpoint):
     let startHint = "";
     if (isLocalOllama(endpoint.baseURL)) {
       startHint = " Start Ollama with `ollama serve`, then pull the model (e.g. `ollama pull qwen2.5`).";
+      if (!REFUSED_RE.test(raw)) {
+        // Opaque browser signatures ("Failed to fetch", the SDK's "Connection error.", …)
+        // look identical whether Ollama is down or up-but-CORS-blocked, so cover both.
+        startHint +=
+          " If it IS already running, the browser was likely blocked by CORS — restart it with" +
+          ` \`OLLAMA_ORIGINS='${appOrigin()}' ollama serve\` (or \`OLLAMA_ORIGINS='*'\` for dev).`;
+      }
     } else if (isLocalLlamaMlx(endpoint.baseURL)) {
       startHint =
         " Start it with `just serve --model <mlx-model>`; a browser also needs the server reachable" +

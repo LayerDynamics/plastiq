@@ -1,5 +1,6 @@
 // CAD Studio document + selection types (SPEC-5 FR-2).
 import type { AssemblyModel } from "../assembly/model.js";
+import type { SerializedMeshBody } from "../mesh/meshBody.js";
 //
 // The document is a superset of the kernel's serializable ModelDoc (SPEC-4
 // FR-34): an ordered list of declarative feature specs + named parameters, so it
@@ -59,6 +60,8 @@ export interface MeshDoc {
   name?: string;
   /** The generated model as a base64 GLB (JSON-safe; re-parsed on load). */
   glb: string;
+  /** Optional direct mesh edits; absent means re-derive geometry from `glb`. */
+  editedBodies?: SerializedMeshBody[];
   source: MeshSource;
 }
 

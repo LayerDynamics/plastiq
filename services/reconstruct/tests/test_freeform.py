@@ -60,6 +60,31 @@ def test_freeform_region_face_none_for_closed_region():
     assert freeform_region_face(m, np.arange(len(m.faces))) is None
 
 
+def test_freeform_region_face_closed_region_is_a_clean_decline_not_an_error():
+    # 7-L2: a CLOSED region (no boundary loop) is the expected fundamental-limit decline, so
+    # the errors collector must stay EMPTY — the outline guard must not misreport it as a crash.
+    m = trimesh.creation.icosphere(subdivisions=2, radius=0.02)
+    errors: list[str] = []
+    assert freeform_region_face(m, np.arange(len(m.faces)), errors) is None
+    assert errors == []
+
+
+def test_freeform_region_face_collects_a_genuine_outline_crash(monkeypatch):
+    # 7-L2: a real crash in the boundary-outline step (not the clean closed/holed declines) is
+    # swallowed for FR-8 fallback but SURFACED via the collector with a descriptive message.
+    m = trimesh.creation.icosphere(subdivisions=3, radius=0.02)
+    cap_idx = np.nonzero(m.triangles_center[:, 2] > 0.012)[0]
+
+    def boom(face_indices):
+        raise RuntimeError("outline blew up")
+
+    monkeypatch.setattr(m, "outline", boom)
+    errors: list[str] = []
+    assert freeform_region_face(m, cap_idx, errors) is None  # still falls back, never raises
+    assert len(errors) == 1
+    assert "region outline" in errors[0] and "outline blew up" in errors[0]
+
+
 # --- R6.5 topology integration: a freeform cap that JOINS a watertight solid -----------------
 
 

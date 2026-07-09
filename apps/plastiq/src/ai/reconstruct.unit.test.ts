@@ -70,6 +70,39 @@ describe("reconstructMesh (SPEC-6 R6.6)", () => {
     expect(res.report.fidelity_tol).toBe(0.01);
   });
 
+  it("sends the requested method in the submit body (SPEC-7 FR-11)", async () => {
+    const bodies: string[] = [];
+    const fetchImpl = (async (url: string, init?: RequestInit) => {
+      if (url.endsWith("/reconstruct")) {
+        bodies.push(String(init?.body));
+        return jsonResponse({ id: "j", state: "queued" });
+      }
+      if (url.endsWith("/status")) return jsonResponse({ id: "j", state: "completed" });
+      if (url.endsWith("/result")) {
+        return jsonResponse({ step: "ISO-10303-21;", report: { ...REPORT, method: "faceted" } });
+      }
+      throw new Error(`unexpected url ${url}`);
+    }) as unknown as typeof fetch;
+    const res = await reconstructMesh("Z2xULi4u", { fetchImpl, delay: async () => {}, method: "faceted" });
+    expect(JSON.parse(bodies[0]!)).toEqual({ glb_base64: "Z2xULi4u", method: "faceted" });
+    expect(res.report.method).toBe("faceted");
+  });
+
+  it("omits method from the submit body when not specified (server default: auto)", async () => {
+    const bodies: string[] = [];
+    const fetchImpl = (async (url: string, init?: RequestInit) => {
+      if (url.endsWith("/reconstruct")) {
+        bodies.push(String(init?.body));
+        return jsonResponse({ id: "j", state: "queued" });
+      }
+      if (url.endsWith("/status")) return jsonResponse({ id: "j", state: "completed" });
+      if (url.endsWith("/result")) return jsonResponse({ step: "ISO-10303-21;", report: REPORT });
+      throw new Error(`unexpected url ${url}`);
+    }) as unknown as typeof fetch;
+    await reconstructMesh("Z2xULi4u", { fetchImpl, delay: async () => {} });
+    expect(JSON.parse(bodies[0]!)).toEqual({ glb_base64: "Z2xULi4u" });
+  });
+
   it("throws with the backend detail on a failed job", async () => {
     const fetchImpl = (async (url: string) => {
       if (url.endsWith("/reconstruct")) return jsonResponse({ id: "j", state: "queued" });

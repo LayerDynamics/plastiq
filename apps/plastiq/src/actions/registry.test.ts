@@ -67,6 +67,8 @@ describe("action registry — composition", () => {
       "selmode-vertex",
       "selmode-body",
       "insert-instance",
+      "import-assy",
+      "export-assy",
     ]) {
       expect(ACTIONS[id]).toBeDefined();
     }
@@ -172,6 +174,7 @@ describe("action registry — mesh mode disables B-rep ops (FR-18)", () => {
       "export-step",
       "export-iges",
       "insert-instance",
+      "import-assy",
     ]) {
       expect(ACTIONS[id]!.enabled(t)).toBe(false);
     }

@@ -9,16 +9,22 @@
 // project id. A linear conversation only — branching is out of scope (§13).
 
 import type { ChatMessage } from "./providers/types.js";
+import type { PlanGraph } from "./planning.js";
 
 /** One step in the visible generation trace (what the panel renders under a turn). */
 export interface TraceEntry {
-  kind: "tool-call" | "tool-result" | "status";
-  /** Tool name (for tool-call / tool-result entries). */
+  kind: "tool-call" | "tool-result" | "status" | "plan";
+  /** Tool name (for tool-call / tool-result / plan entries). */
   name?: string;
   /** Human-readable summary line. */
   detail: string;
   /** True when a tool result was an error fed back for self-correction. */
   isError?: boolean;
+  /** The FULL validated decomposition graph the agent committed via plan_part
+   * (kind "plan" only — 9-M1). Persisted untruncated, unlike the 200-char
+   * tool-call/result summaries, so the committed plan survives verbatim. Purely
+   * additive: traces saved before this kind existed load unchanged. */
+  plan?: PlanGraph;
 }
 
 /** A project's saved AI conversation: the messages plus the generation trace. */

@@ -39,4 +39,30 @@ describe("R3.1 inspect_geometry — real OCCT", () => {
       solid.delete();
     }
   }, 120_000);
+
+  it("classifies a real cylinder: lateral wall cylindrical (with its radius), caps planar (FR-11)", () => {
+    // 10 mm ∅ × 10 mm rod: sketch(circle r=5mm) + extrude — the kernel's real cylinder path.
+    const doc: CadDocument = {
+      features: [
+        { id: "f1", type: "sketch", data: { profile: { kind: "circle", center: [0, 0], radius: 0.005 } } },
+        { id: "f2", type: "extrude", params: { height: 0.01 } },
+      ],
+      params: {},
+    };
+    const solid = rebuildDocument(oc, doc)!;
+    try {
+      const mesh = tessellateTagged(oc, solid, {});
+      const ins = inspectMesh(mesh);
+
+      const cylindrical = ins.faces.filter((f) => f.kind === "cylindrical");
+      const planar = ins.faces.filter((f) => f.kind === "planar");
+      expect(planar).toHaveLength(2); // the two caps
+      expect(cylindrical.length).toBeGreaterThanOrEqual(1); // the lateral wall
+      expect(ins.faces).toHaveLength(planar.length + cylindrical.length); // nothing left "curved"
+      for (const f of cylindrical) expect(f.radius).toBeCloseTo(5, 1); // real radius, in mm
+      expect(ins.text).toMatch(/cylindrical \(radius 5\.0 mm\)/);
+    } finally {
+      solid.delete();
+    }
+  }, 120_000);
 });

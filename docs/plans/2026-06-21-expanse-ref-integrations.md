@@ -176,7 +176,7 @@ service is local single-user (D-6) so parallelism is moot. Building a `spawn` po
 - [x] **M3.1–M3.3 — NOT BUILT.** No `app/pool.py`; the simple long-running-server + `to_thread` design
       is correct. Documented, not skipped.
 
-## M4 — partcad-style declarative `.assy` assembly + auto-BOM · T1 · concept (Apache-2.0) · ✅ built + tested (`.assy` import/export UI pending)
+## M4 — partcad-style declarative `.assy` assembly + auto-BOM · T1 · concept (Apache-2.0) · ✅ SHIPPED (import/export UI landed 2026-07-04)
 
 **Why fourth:** real authoring value, high confidence, builds on our existing assembly layer; pure
 TS, deterministic.
@@ -193,12 +193,17 @@ TS, deterministic.
       instances + transforms our solver already supports) → map parsed links → component instances → green.
 - [x] **M4.4 — TDD: auto-BOM.** Failing test (the assembly yields a BOM: part → count, recursively
       rolled up) → implement BOM derivation → green.
-- [ ] **M4.5 — UI + docs.** Import/export `.assy` + a BOM panel; `SPEC-9-authoring-extensions.md`
+- [x] **M4.5 — UI + docs.** Import/export `.assy` + a BOM panel; `SPEC-9-authoring-extensions.md`
       §assembly; update `Expanse.md`. Suites green.
-      **Partial (as of 2026-07-03):** `BomPanel.tsx` (+ tests), `SPEC-9` §assembly, and the `Expanse.md`
-      partcad item are done, and the BOM panel is now **mounted in the app shell**
-      (`app/BomSection.tsx`, rendered from `App.tsx`). Still open: a `.assy` **file import/export** UI
-      (`parseAssy` has no UI caller).
+      **Shipped 2026-07-04:** `BomPanel.tsx` (+ tests) is mounted in the app shell
+      (`app/BomSection.tsx`, rendered from `App.tsx`), and the `.assy` **file import/export** UI now
+      exists — `import-assy` / `export-assy` `ActionDef`s in `actions/registry.ts`
+      (`importAssyText` → `parseAssy` → `realizeAssembly` → `loadAssemblyModel` into the live store;
+      `exportAssyFromStore` → `assemblyToAssy` download) with Import/Export buttons in
+      `app/AssemblyTree.tsx`, so `parseAssy` finally has a real UI caller. `parseAssy` also gained
+      sub-assembly cycle detection (`assertAcyclic`). Honest scope: `assemblyToAssy` round-trips
+      instances only — mates, joints, and the `fixed` flag are not representable in `.assy` and are
+      dropped on export.
 
 ## M5 — Graph-CAD decomposition-graph planning-IR for the AI agent · T1 orchestration · idea-only · ✅ SHIPPED
 

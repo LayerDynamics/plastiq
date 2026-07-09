@@ -26,7 +26,7 @@ import { resolveContextTarget, type ContextTarget } from "../three/contextmenu/c
 import { buildMenuSections, type MenuSection } from "../three/contextmenu/contextOptions.js";
 import { runContextAction } from "../three/contextmenu/config.js";
 import { snapshotCad, snapshotSketch } from "../three/contextmenu/snapshot.js";
-import { ContextMenuView } from "../three/contextmenu/ContextMenuView.js";
+import { PlastiqScreenContextMenu } from "../three/contextmenu/PlastiqContextMenu.js";
 import {
   centeredView,
   gridStep,
@@ -1244,17 +1244,16 @@ export function Sketcher(): React.JSX.Element | null {
               setCtxMenu(null);
             }}
           />
-          <div className="fixed z-50" style={{ left: ctxMenu.x, top: ctxMenu.y }}>
-            <ContextMenuView
-              testid="sketch-context-menu"
-              sections={ctxMenu.sections}
-              onClose={() => setCtxMenu(null)}
-              onRun={(id) => {
-                runContextAction(id, ctxMenu.target);
-                setCtxMenu(null);
-              }}
-            />
-          </div>
+          <PlastiqScreenContextMenu
+            open={true}
+            anchor={{ x: ctxMenu.x, y: ctxMenu.y }}
+            target={ctxMenu.target}
+            onClose={() => setCtxMenu(null)}
+            onRun={(id) => {
+              runContextAction(id, ctxMenu.target);
+              setCtxMenu(null);
+            }}
+          />
         </>
       )}
     </div>

@@ -8,11 +8,13 @@
 /** Package version, surfaced for tooling/diagnostics. */
 export const NERF_VERSION = "0.1.0" as const;
 
-export { trainNerf } from "./client.js";
+export { cancelJob, trainNerf } from "./client.js";
 export type {
   NerfMethod,
+  NerfEncoding,
   NerfTrainInput,
   NerfReport,
   NerfResult,
   NerfOptions,
+  NerfCancelOptions,
 } from "./types.js";

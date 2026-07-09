@@ -8,7 +8,9 @@
 //  3. client-side validation: the server's 16-point floor and /capture's normals requirement
 //     block submission with zero network traffic; a points-only file auto-switches to Complete;
 //  4. Complete mode routes to POST /complete (points only);
-//  5. abort: cancel mid-poll lands on "cancelled", not an error.
+//  5. abort: cancel mid-poll lands on "cancelled", not an error;
+//  6. a configured captureBaseURL (settings-capture-url) overrides the default origin for the
+//     health pre-check AND the submit→poll conversation — nothing leaks to localhost:8001.
 
 import "fake-indexeddb/auto";
 import { IDBFactory } from "fake-indexeddb";
@@ -246,6 +248,61 @@ describe("CaptureScanSection — client-side validation (zero network on failure
     });
     expect(screen.queryByTestId("capture-file-name")).toBeNull();
     expect((screen.getByTestId("capture-run-btn") as HTMLButtonElement).disabled).toBe(true);
+  });
+});
+
+describe("CaptureScanSection — configured captureBaseURL (settings override)", () => {
+  const CUSTOM = "http://capture.lan:9321";
+
+  /** Persist the custom capture URL into the settings slice the section reads at run time. */
+  function configureCaptureURL(): void {
+    useAiStore.setState({
+      settings: { ...useAiStore.getState().settings!, captureBaseURL: CUSTOM },
+      loaded: true,
+    });
+  }
+
+  it("health pre-check, /capture submit, and the status/result polls ALL hit the configured origin", async () => {
+    configureCaptureURL();
+    const { spy } = installScriptedFetch({ submitPath: "/capture" });
+    const store = stubProjectsStore();
+    render(<GenerationPanel />);
+    await uploadScan("scan.ply", PLY_16);
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("capture-run-btn"));
+    });
+
+    await waitFor(() => expect(store.opened()).toBe("mesh-99"));
+    const urls = spy.mock.calls.map((c) => String(c[0]));
+    // The full conversation, in order: probe → submit → poll → result — all on the custom origin.
+    expect(urls[0]).toBe(`${CUSTOM}/health`);
+    expect(urls[1]).toBe(`${CUSTOM}/capture`);
+    expect(urls).toContain(`${CUSTOM}/jobs/job-9/status`);
+    expect(urls[urls.length - 1]).toBe(`${CUSTOM}/jobs/job-9/result`);
+    // …and NOTHING leaked to the default origin.
+    expect(urls.every((u) => u.startsWith(`${CUSTOM}/`))).toBe(true);
+  });
+
+  it("an unreachable configured service probes the CONFIGURED /health and names that URL in the hint", async () => {
+    configureCaptureURL();
+    const spy: ReturnType<typeof vi.fn> = vi.fn(async () => {
+      throw new TypeError("Failed to fetch");
+    });
+    globalThis.fetch = spy as unknown as typeof fetch;
+    render(<GenerationPanel />);
+    await uploadScan("scan.ply", PLY_16);
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("capture-run-btn"));
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId("capture-error").textContent).toContain(`unreachable at ${CUSTOM}`);
+    });
+    // Exactly ONE request — the health probe against the configured origin, not localhost:8001.
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(String(spy.mock.calls[0]?.[0])).toBe(`${CUSTOM}/health`);
   });
 });
 

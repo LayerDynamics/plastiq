@@ -93,8 +93,28 @@ function parseNode(raw: unknown, where: string): AssyNode {
   return node;
 }
 
+/** Reject sub-assembly reference cycles (a `subAssemblies` entry reaching itself through
+ * `links`): a cyclic document can never be realized as written, so it is a validation
+ * error, named by its path (e.g. "a -> b -> a"). Depth-first over the reference graph;
+ * `done` marks fully-explored keys so shared (diamond) references stay legal.
+ * realizeAssembly/deriveBOM keep their own guards as defense-in-depth for hand-built
+ * (unparsed) docs. */
+function assertAcyclic(subs: Record<string, AssyNode>): void {
+  const done = new Set<string>();
+  const visit = (key: string, path: string[]): void => {
+    if (done.has(key)) return;
+    const at = path.indexOf(key);
+    if (at >= 0) throw new Error(`assy: sub-assembly cycle: ${[...path.slice(at), key].join(" -> ")}`);
+    const next = [...path, key];
+    for (const link of subs[key]!.links) if (subs[link.part]) visit(link.part, next);
+    done.add(key);
+  };
+  for (const key of Object.keys(subs)) visit(key, []);
+}
+
 /** Validate an untrusted value (e.g. parsed JSON or AI-authored data) into an AssyDoc. Throws with
- * a descriptive message on the first problem. */
+ * a descriptive message on the first problem — including a sub-assembly reference cycle, which
+ * could otherwise never realize as written. */
 export function parseAssy(input: unknown): AssyDoc {
   const node = parseNode(input, "document");
   const doc: AssyDoc = { links: node.links };
@@ -104,6 +124,7 @@ export function parseAssy(input: unknown): AssyDoc {
     if (typeof subs !== "object" || subs === null) throw new Error("assy: `subAssemblies` must be an object");
     const out: Record<string, AssyNode> = {};
     for (const [key, value] of Object.entries(subs)) out[key] = parseNode(value, `subAssembly "${key}"`);
+    assertAcyclic(out);
     doc.subAssemblies = out;
   }
   return doc;

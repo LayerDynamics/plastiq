@@ -1,8 +1,8 @@
 """Deterministic primitive fitting (SPEC-7 R6.4).
 
 Closed-form least-squares fits from a region's on-surface vertices + face normals — NO
-randomized RANSAC, so a given region always yields the same parameters (NFR-2). R6.4a ships
-the cylinder; sphere/cone follow in R6.4b.
+randomized RANSAC, so a given region always yields the same parameters (NFR-2). All three
+single-primitive fits ship here: the cylinder (R6.4a) and the sphere + cone (R6.4b).
 
 Cylinder fit rationale (verified): a cylinder's surface normals are all perpendicular to its
 axis, so the axis is the direction ⊥ to every normal — the right-singular vector of smallest

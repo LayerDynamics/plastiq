@@ -30,18 +30,16 @@ import networkx as nx
 import numpy as np
 import trimesh
 from OCC.Core.BRepAlgoAPI import BRepAlgoAPI_Cut
-from OCC.Core.BRepCheck import BRepCheck_Analyzer
-from OCC.Core.BRepGProp import brepgprop
 from OCC.Core.BRepPrimAPI import BRepPrimAPI_MakeBox, BRepPrimAPI_MakeCylinder
 from OCC.Core.Geom import Geom_CylindricalSurface, Geom_Plane, Geom_Surface
 from OCC.Core.GeomAbs import GeomAbs_Circle, GeomAbs_Ellipse, GeomAbs_Line
 from OCC.Core.GeomAdaptor import GeomAdaptor_Curve
 from OCC.Core.GeomAPI import GeomAPI_IntSS
 from OCC.Core.gp import gp_Ax2, gp_Ax3, gp_Dir, gp_Pnt
-from OCC.Core.GProp import GProp_GProps
 from OCC.Core.TopAbs import TopAbs_SOLID
 from OCC.Core.TopExp import TopExp_Explorer
 
+from .closure import verify_closure
 from .curved_faces import SolidResult, classify_faces
 from .detect import dominant_axis
 from .primitives import CylinderFit, fit_cylinder
@@ -102,12 +100,6 @@ def _halfspace_box(point: np.ndarray, normal: np.ndarray, size: float):
 
 def _is_solid(shape) -> bool:
     return TopExp_Explorer(shape, TopAbs_SOLID).More()
-
-
-def _volume(shape) -> float:
-    props = GProp_GProps()
-    brepgprop.VolumeProperties(shape, props)
-    return float(props.Mass())
 
 
 def reconstruct_cut_cylinder(
@@ -202,12 +194,13 @@ def reconstruct_cut_cylinder(
 
     if used_planes == 0 or not _is_solid(solid):
         return None
-    if not BRepCheck_Analyzer(solid).IsValid():
-        return None
-    volume = _volume(solid)
-    if volume <= 0 or abs(volume - mesh_volume) / mesh_volume > vol_tol:
+    # FR-7 (shared closure helper): validity + COMPUTED free-edge count + positive volume —
+    # never hardcoded. Boolean-cut results are born outward-oriented, so no re-orientation is
+    # needed (same orient semantics as the csg / revolution routes).
+    solid, rep = verify_closure(solid)
+    if not rep.is_solid or abs(rep.volume - mesh_volume) / mesh_volume > vol_tol:
         return None
 
     planar, curved, _freeform = classify_faces(solid)
     n_faces = planar + curved + _freeform
-    return SolidResult(solid, True, True, 0, volume, n_faces, primitive="cut_cylinder")
+    return SolidResult(solid, True, True, rep.free_edges, rep.volume, n_faces, primitive="cut_cylinder")

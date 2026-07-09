@@ -33,6 +33,9 @@ const providerControl = vi.hoisted(() => ({
   requests: [] as ChatStreamRequest[],
 }));
 vi.mock("./providers/registry.js", () => ({
+  // The panel threads the decision-21 key indirection into toProviderSettings; the
+  // fake provider ignores keys, so a no-key resolver stands in for keyResolverFor.
+  keyResolverFor: () => () => undefined,
   buildProvider: () => ({
     id: "openai-compatible" as const,
     model: "fake-model",
@@ -53,14 +56,16 @@ vi.mock("./providers/registry.js", () => ({
 }));
 
 // The NeRF flow trains server-side; mock the package client so the health pre-check is
-// the ONLY network touchpoint (and assert the train job is never submitted).
+// the ONLY network touchpoint (and assert the train job is never submitted). cancelJob is
+// mocked too (src/ai/nerf.ts imports it for the panel's Cancel); no test here cancels.
 const nerfMocks = vi.hoisted(() => ({
   trainNerf: vi.fn(async () => ({
     glb: "R0xCdGVzdA==",
     report: { method: "neus", iters: 100, psnr: 20, vertices: 10, faces: 20 },
   })),
+  cancelJob: vi.fn(async () => {}),
 }));
-vi.mock("@plastiq/nerf", () => ({ trainNerf: nerfMocks.trainNerf }));
+vi.mock("@plastiq/nerf", () => ({ trainNerf: nerfMocks.trainNerf, cancelJob: nerfMocks.cancelJob }));
 
 const realFetch = globalThis.fetch;
 
@@ -145,6 +150,16 @@ describe("GenerationPanel — provider failures are translated and retryable", (
     expect(last).toMatchObject({ role: "user", content: "make a cube" });
     // A successful run clears the retry affordance.
     await waitFor(() => expect(screen.queryByTestId("generation-retry")).toBeNull());
+  });
+
+  it("the system prompt ships the creative guidance — the panel always offers create_mesh (6-M2)", async () => {
+    providerControl.behavior = "ok";
+    render(<GenerationPanel />);
+    await sendPrompt("make a cube");
+    await waitFor(() => expect(providerControl.requests).toHaveLength(1));
+    // buildTurnTools always wires create_mesh, and runGeneration derives the creative
+    // guidance from that tool surface — so the prompt teaches the tool it offers.
+    expect(providerControl.requests[0]!.system).toContain("create_mesh");
   });
 });
 
@@ -256,5 +271,149 @@ describe("GenerationPanel — service health pre-checks block submission (GET /h
     expect(fetchSpy).toHaveBeenCalledTimes(1);
     expect(String(fetchSpy.mock.calls[0]?.[0])).toBe("http://localhost:8002/health");
     expect(nerfMocks.trainNerf).not.toHaveBeenCalled();
+  });
+});
+
+describe("MeshConvertSection — converted status carries the recognition fingerprint (SPEC-8 8-M2)", () => {
+  const meshDoc: MeshDoc = { kind: "mesh", name: "gen", glb: "R0xC", source: { mode: "img3d", providerId: "fal:tripo" } };
+  const baseReport = {
+    triangles_in: 12,
+    triangles_used: 12,
+    faces_built: 6,
+    planar_faces: 6,
+    is_solid: true,
+    is_valid: true,
+    method: "fitted",
+  };
+
+  /** Script the full reconstruction conversation (health → submit → status → result)
+   * so the REAL reconstructMesh client runs the convert to completion. */
+  const installReconstructFetch = (report: Record<string, unknown>): void => {
+    const json = (body: unknown): unknown => ({ ok: true, status: 200, json: async () => body });
+    globalThis.fetch = (async (url: string | URL | Request) => {
+      const u = String(url);
+      if (u.endsWith("/health")) return json({ status: "ok" });
+      if (u.endsWith("/reconstruct")) return json({ id: "job-1", state: "queued" });
+      if (u.endsWith("/status")) return json({ id: "job-1", state: "completed" });
+      if (u.endsWith("/result")) return json({ step: "ISO-10303-21;\nDATA;\nENDSEC;\nEND-ISO-10303-21;", report });
+      throw new Error(`unexpected url ${u}`);
+    }) as unknown as typeof fetch;
+  };
+
+  const convert = async (): Promise<string> => {
+    useProjectsStore.setState({ activeMeshDoc: meshDoc, status: "" });
+    render(<GenerationPanel />);
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("mesh-convert-run"));
+    });
+    await waitFor(() => expect(useProjectsStore.getState().status).toContain("converted to CAD"));
+    return useProjectsStore.getState().status;
+  };
+
+  it("appends the tangent-region fingerprint when the server reports it", async () => {
+    installReconstructFetch({ ...baseReport, surface_deviation: 0.0041, fidelity_tol: 0.01, tangent_regions: 3 });
+    const status = await convert();
+    expect(status).toBe("converted to CAD — 6 faces, solid, fidelity good (Δ0.0041), 3 tangent regions");
+  });
+
+  it("omits the fingerprint for an older server (tangent_regions absent)", async () => {
+    installReconstructFetch(baseReport);
+    const status = await convert();
+    expect(status).toContain("converted to CAD — 6 faces, solid");
+    expect(status).not.toContain("tangent region");
+  });
+});
+
+describe("MeshConvertSection — Fit smooth CAD (NURBS) alongside Convert to CAD (SPEC-12 FR-8)", () => {
+  const meshDoc: MeshDoc = { kind: "mesh", name: "blob", glb: "R0xC", source: { mode: "img3d", providerId: "fal:tripo" } };
+  const baseReport = {
+    patches: 1,
+    fitted_patches: 1,
+    faceted_patches: 0,
+    control_points: 256,
+    degree_u: 3,
+    degree_v: 3,
+    iters: 200,
+    chamfer: 0.001,
+    scd: 0.002,
+    rms_deviation: 0.0003,
+    max_deviation: 0.0008,
+    fidelity_tol: 0.01,
+    is_solid: false,
+    is_valid: true,
+    mode: "open",
+  };
+
+  /** Script the full NURBS fit conversation (health → /fit → status → result) so the REAL
+   * @plastiq/nurbs client runs the fit to completion (the reconstruct precedent above). */
+  const installNurbsFetch = (report: Record<string, unknown>): void => {
+    const json = (body: unknown): unknown => ({ ok: true, status: 200, json: async () => body });
+    globalThis.fetch = (async (url: string | URL | Request) => {
+      const u = String(url);
+      if (u.endsWith("/health")) return json({ status: "ok" });
+      if (u.endsWith("/fit")) return json({ id: "job-1", state: "queued" });
+      if (u.endsWith("/status")) return json({ id: "job-1", state: "completed" });
+      if (u.endsWith("/result"))
+        return json({ step: "ISO-10303-21;\nDATA;\nENDSEC;\nEND-ISO-10303-21;", surfaces: [], report });
+      throw new Error(`unexpected url ${u}`);
+    }) as unknown as typeof fetch;
+  };
+
+  const fit = async (): Promise<string> => {
+    useProjectsStore.setState({ activeMeshDoc: meshDoc, status: "" });
+    render(<GenerationPanel />);
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("mesh-nurbs-run"));
+    });
+    await waitFor(() => expect(useProjectsStore.getState().status).toContain("fitted smooth CAD"));
+    return useProjectsStore.getState().status;
+  };
+
+  it("renders the NURBS action alongside Convert to CAD in the mesh section", () => {
+    useProjectsStore.setState({ activeMeshDoc: meshDoc });
+    render(<GenerationPanel />);
+    expect(screen.getByTestId("mesh-convert-run")).toBeTruthy();
+    const btn = screen.getByTestId("mesh-nurbs-run") as HTMLButtonElement;
+    expect(btn.textContent).toContain("Fit smooth CAD (NURBS)");
+  });
+
+  it("a completed open-mode fit loads the STEP doc and labels the shell honestly (isSolid=false)", async () => {
+    installNurbsFetch(baseReport);
+    const status = await fit();
+    expect(status).toContain("fitted smooth CAD (NURBS)");
+    expect(status).toContain("shell (not a solid)");
+    // Switched out of mesh mode into the new B-rep document.
+    expect(useProjectsStore.getState().activeMeshDoc).toBeNull();
+    expect(useProjectsStore.getState().currentName).toBe("blob");
+  });
+
+  it("surfaces faceted fallback patches in the result message (facetedPatches > 0)", async () => {
+    installNurbsFetch({ ...baseReport, patches: 6, fitted_patches: 4, faceted_patches: 2, is_solid: true, mode: "closed" });
+    const status = await fit();
+    expect(status).toContain("2 of 6 faceted (fallback)");
+    expect(status).not.toContain("not a solid");
+  });
+
+  it("an unreachable NURBS service shows the start hint and never submits", async () => {
+    const spy = vi.fn(async (_url: string | URL | Request) => {
+      throw new TypeError("Failed to fetch");
+    });
+    globalThis.fetch = spy as unknown as typeof fetch;
+    useProjectsStore.setState({ activeMeshDoc: meshDoc });
+    render(<GenerationPanel />);
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("mesh-nurbs-run"));
+    });
+
+    await waitFor(() => {
+      const err = screen.getByTestId("mesh-convert-error").textContent ?? "";
+      expect(err).toContain("unreachable at http://localhost:8003");
+      expect(err).toContain("start it with");
+    });
+    // Exactly ONE request went out — the health probe; the fit was never submitted.
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(String(spy.mock.calls[0]?.[0])).toBe("http://localhost:8003/health");
+    expect((screen.getByTestId("mesh-nurbs-run") as HTMLButtonElement).disabled).toBe(false);
   });
 });

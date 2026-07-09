@@ -44,6 +44,11 @@ describe("R1.5 settings persistence", () => {
     await clearSettings();
     expect(await loadSettings()).toBeNull();
   });
+
+  it("round-trips the selected image-gen provider id (decision 6)", async () => {
+    await saveSettings({ ...sample(), imageProviderId: "fal:flux-dev" });
+    expect((await loadSettings())?.imageProviderId).toBe("fal:flux-dev");
+  });
 });
 
 describe("R1.5 key indirection (proxy-ready)", () => {

@@ -4,8 +4,9 @@
 // buildPart.integration.test.ts.
 
 import { describe, it, expect, vi } from "vitest";
-import { buildPart, type BuildProbe } from "./buildPart.js";
+import { buildPart, geometryClientProbe, type BuildProbe } from "./buildPart.js";
 import type { CadDocument } from "../../store/types.js";
+import type { TransferMesh } from "../../worker/protocol.js";
 
 const okProbe: BuildProbe = async () => ({ ok: true });
 const failProbe: BuildProbe = async () => ({ ok: false, error: "feature 'f1' (extrude): no sketch profile upstream" });
@@ -66,5 +67,32 @@ describe("R2.1 build_part — atomic failure paths (never apply)", () => {
     const res = await buildPart("not a document", { probe: okProbe, apply });
     expect(res.status).toBe("error");
     expect(apply).not.toHaveBeenCalled();
+  });
+});
+
+describe("R2.1 geometryClientProbe — the app probe over the worker's build (the __plastiqBuild seam)", () => {
+  const emptyDoc: CadDocument = { features: [], params: {} };
+  // The probe only checks mesh-vs-null, so a minimal stand-in suffices (no worker in unit tests).
+  const someMesh = {} as TransferMesh;
+
+  it("maps a returned mesh to ok", async () => {
+    const probe = geometryClientProbe({ build: async () => someMesh });
+    expect(await probe(emptyDoc)).toEqual({ ok: true });
+  });
+
+  it("reports the no-geometry error on a null mesh (the worker's failed-build signal)", async () => {
+    const probe = geometryClientProbe({ build: async () => null });
+    const r = await probe(emptyDoc);
+    expect(r.ok).toBe(false);
+    expect(r.error).toMatch(/no geometry|failed to build/);
+  });
+
+  it("maps a thrown build error to a structured probe error (never a throw to the agent loop)", async () => {
+    const probe = geometryClientProbe({
+      build: async () => {
+        throw new Error("worker exploded");
+      },
+    });
+    expect(await probe(emptyDoc)).toEqual({ ok: false, error: "worker exploded" });
   });
 });

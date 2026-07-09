@@ -1,8 +1,9 @@
 """Trainer (N6, MLX): ray-batch photometric optimization of a NeRF/surface model.
 
 MLX `Adam` + `nn.value_and_grad`; each step samples a random batch of rays and minimizes the MSE
-between the rendered and ground-truth pixels. Deterministic: a fixed per-iteration key for the
-sampler's stratified jitter and a seeded numpy RNG for the batch indices.
+between the rendered and ground-truth pixels — unless `rays_per_batch` covers the whole set, in which
+case every step trains full-batch (exact gradients, no batch-sampling noise). Deterministic: a fixed
+per-iteration key for the sampler's stratified jitter and a seeded numpy RNG for the batch indices.
 """
 
 from __future__ import annotations
@@ -47,9 +48,18 @@ class Trainer:
             return model.render_loss(o, d, gt, key)
 
         loss_and_grad = nn.value_and_grad(self.model, loss_fn)
+        full_batch = rays_per_batch >= m  # a batch covering the whole set = the whole set: exact
+        # gradients, and the trajectory no longer depends on the batch-index draws at all.
         for i in range(iters):
-            idx = mx.array(rng.integers(0, m, size=rays_per_batch).astype(np.int32))
-            o, d, gt = mx.take(origins, idx, axis=0), mx.take(directions, idx, axis=0), mx.take(target_rgb, idx, axis=0)
+            if full_batch:
+                o, d, gt = origins, directions, target_rgb
+            else:
+                idx = mx.array(rng.integers(0, m, size=rays_per_batch).astype(np.int32))
+                o, d, gt = (
+                    mx.take(origins, idx, axis=0),
+                    mx.take(directions, idx, axis=0),
+                    mx.take(target_rgb, idx, axis=0),
+                )
             _, grads = loss_and_grad(self.model, o, d, gt, keys[i])
             self.opt.update(self.model, grads)
             mx.eval(self.model.parameters(), self.opt.state)

@@ -43,6 +43,7 @@ reconstruct).
 | `POST` | `/train` | `{ transforms_json, images, iters?, method?, grid_res? }` → `{ id, state }` |
 | `GET` | `/jobs/{id}/status` | `{ id, state, error? }` — `state ∈ {queued, running, completed, failed}` |
 | `GET` | `/jobs/{id}/result` | `{ glb_base64, vertices, faces, psnr, method, iters }` when completed |
+| `DELETE` | `/jobs/{id}` | `204` — job record dropped (cancel/cleanup; an in-flight worker's eventual result is discarded); `404` unknown id |
 
 ## Browser client (`@plastiq/nerf`)
 

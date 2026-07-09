@@ -19,6 +19,7 @@ smooth fitted arc vs a faceted polyline neighbour) still needs the surface-inter
 
 from __future__ import annotations
 
+import logging
 from typing import Optional
 
 import numpy as np
@@ -32,18 +33,19 @@ from OCC.Core.BRepBuilderAPI import (
     BRepBuilderAPI_Sewing,
 )
 from OCC.Core.BRepCheck import BRepCheck_Analyzer
-from OCC.Core.BRepGProp import brepgprop
-from OCC.Core.BRepLib import breplib
 from OCC.Core.BRepOffsetAPI import BRepOffsetAPI_MakeFilling
 from OCC.Core.GeomAbs import GeomAbs_C0
 from OCC.Core.GeomAPI import GeomAPI_ProjectPointOnSurf
-from OCC.Core.GProp import GProp_GProps
 from OCC.Core.gp import gp_Pnt
 from OCC.Core.TopAbs import TopAbs_FACE, TopAbs_SHELL
 from OCC.Core.TopExp import TopExp_Explorer
 from OCC.Core.TopoDS import TopoDS_Face, topods
 
+from . import nurbs_delegate
+from .closure import verify_closure
 from .curved_faces import SolidResult
+
+logger = logging.getLogger(__name__)
 
 
 # MakeFilling accuracy improves markedly with more interior constraints (a sphere cap:
@@ -59,9 +61,17 @@ def _first_face(shape) -> Optional[TopoDS_Face]:
     return topods.Face(exp.Current()) if exp.More() else None
 
 
-def freeform_face(boundary_loop: np.ndarray, interior_points: Optional[np.ndarray] = None) -> Optional[TopoDS_Face]:
+def freeform_face(
+    boundary_loop: np.ndarray,
+    interior_points: Optional[np.ndarray] = None,
+    errors: Optional[list[str]] = None,
+) -> Optional[TopoDS_Face]:
     """A freeform face from an ordered boundary loop (the shared mesh polyline) + interior point
-    constraints. Returns None if it can't be built/validated (caller falls back to faceting)."""
+    constraints. Returns None if it can't be built/validated (caller falls back to faceting).
+
+    `errors` (7-L2): an optional collector a swallowed `MakeFilling.Build` crash is appended to,
+    so the caller can tell a clean decline (None, nothing collected) from a swallowed crash
+    (None, message collected). Fallback behavior is unchanged either way."""
     pts = np.asarray(boundary_loop, dtype=float)
     if len(pts) >= 2 and np.allclose(pts[0], pts[-1]):
         pts = pts[:-1]
@@ -80,7 +90,13 @@ def freeform_face(boundary_loop: np.ndarray, interior_points: Optional[np.ndarra
             fill.Add(gp_Pnt(float(p[0]), float(p[1]), float(p[2])))
     try:
         fill.Build()
-    except Exception:  # noqa: BLE001
+    except Exception as e:  # noqa: BLE001 — MakeFilling can raise on hard constraint sets; the
+        # crash is logged (debug: the interior-ladder retries make it common)…
+        logger.debug("MakeFilling raised (%s: %s); falling back", type(e).__name__, e)
+        if errors is not None:  # …and surfaced to the caller's collector (7-L2), then the
+            # caller falls back (FR-8). The ladder in `freeform_region_face` only FLUSHES these
+            # upward when every rung failed, so a retried-then-successful build stays clean.
+            errors.append(f"MakeFilling: {type(e).__name__}: {e}")
         return None
     if not fill.IsDone():
         return None
@@ -90,13 +106,38 @@ def freeform_face(boundary_loop: np.ndarray, interior_points: Optional[np.ndarra
     return face
 
 
-def freeform_region_face(mesh: trimesh.Trimesh, face_indices: np.ndarray) -> Optional[TopoDS_Face]:
+def freeform_region_face(
+    mesh: trimesh.Trimesh,
+    face_indices: np.ndarray,
+    errors: Optional[list[str]] = None,
+) -> Optional[TopoDS_Face]:
     """Build a freeform face for a connected mesh region: its single outer boundary loop +
-    interior vertices. None for holed (multi-loop) or unbuildable regions."""
+    interior vertices. None for holed (multi-loop) or unbuildable regions.
+
+    `errors` (7-L2): an optional collector for swallowed crashes on the paths that end in the
+    faceted fallback — a genuine outline crash, or `MakeFilling.Build` raising on EVERY rung of
+    the interior ladder. Clean declines (a CLOSED region with no boundary loop, a holed region,
+    a fill that builds but doesn't validate) collect nothing: they are the expected
+    fundamental-limit paths, not errors. Fallback behavior is unchanged either way."""
+    # SPEC-12 FR-10 / U10: when RECONSTRUCT_NURBS_URL is set, offload this region to the nurbs
+    # service; its fitted face's rim interpolates the region polyline, so the caller's accuracy
+    # gate + coincident-boundary sew handle it identically. Any failure (or unset env) ⇒ None ⇒
+    # fall through to the existing MakeFilling path below, byte-for-byte unchanged.
+    if nurbs_delegate._nurbs_url():
+        delegated = nurbs_delegate.delegate_region_face(mesh, face_indices)
+        if delegated is not None:
+            return delegated
     try:
         outline = mesh.outline(face_indices)
-        loops = outline.discrete  # raises on a closed region (no boundary)
-    except Exception:  # noqa: BLE001 — closed/degenerate region → not fillable as one patch
+        # A CLOSED region has no boundary edges (`entities` is empty; `.discrete` would raise on
+        # it) — treat it as the clean no-loop decline below, so a raise HERE is a genuine crash.
+        loops = outline.discrete if len(outline.entities) > 0 else []
+    except Exception as e:  # noqa: BLE001 — degenerate region → not fillable as one patch; the
+        # crash is logged AND surfaced via the collector (7-L2) so it is distinguishable from
+        # the clean closed/holed declines, then the caller falls back to faceted (FR-8).
+        logger.debug("region outline failed (%s: %s); falling back to faceted", type(e).__name__, e)
+        if errors is not None:
+            errors.append(f"region outline: {type(e).__name__}: {e}")
         return None
     if loops is None or len(loops) != 1:
         return None  # closed (no loop) or holed (multi-loop) → faceted fallback
@@ -108,14 +149,20 @@ def freeform_region_face(mesh: trimesh.Trimesh, face_indices: np.ndarray) -> Opt
     bset = {tuple(np.round(p, 7)) for p in boundary}
     interior = np.array([v for v in region_v if tuple(np.round(v, 7)) not in bset], dtype=float)
     if len(interior) == 0:
-        return freeform_face(boundary, None)
+        return freeform_face(boundary, None, errors)
     # Try the richest (most accurate) interior set first, stepping down on a MakeFilling
     # failure (deterministic even strides). Returns the most accurate face that builds.
+    # Rung crashes are collected LOCALLY: a rung raising while a poorer rung then succeeds is a
+    # routine retry (not an error), so they only flush to `errors` when the whole ladder failed
+    # — i.e. when the region really errored-and-fell-back (7-L2).
+    ladder_errors: list[str] = []
     for k in _INTERIOR_LADDER:
         sub = interior if len(interior) <= k else interior[:: max(1, len(interior) // k)][:k]
-        face = freeform_face(boundary, sub)
+        face = freeform_face(boundary, sub, ladder_errors)
         if face is not None:
             return face
+    if errors is not None and ladder_errors:
+        errors.extend(dict.fromkeys(ladder_errors))  # deduped, order-preserving
     return None
 
 
@@ -181,16 +228,12 @@ def freeform_capped_solid(
     shape = sew.SewedShape()
     if shape.ShapeType() != TopAbs_SHELL:
         return None
-    solid = BRepBuilderAPI_MakeSolid(topods.Shell(shape)).Solid()
-    breplib.OrientClosedSolid(solid)  # ensure outward orientation (positive volume)
-    if not BRepCheck_Analyzer(solid).IsValid():
+    # Full FR-7 chain (shared helper): real free-edge count, OrientClosedSolid (outward
+    # orientation → positive volume), BRepCheck validity, volume > 0.
+    solid, rep = verify_closure(BRepBuilderAPI_MakeSolid(topods.Shell(shape)).Solid(), orient=True)
+    if not rep.is_solid:
         return None
-    props = GProp_GProps()
-    brepgprop.VolumeProperties(solid, props)
-    volume = float(props.Mass())
-    if volume <= 0:
-        return None
-    return SolidResult(solid, True, True, 0, volume, _faces_in(solid), primitive="freeform")
+    return SolidResult(solid, True, True, rep.free_edges, rep.volume, _faces_in(solid), primitive="freeform")
 
 
 def face_max_point_error(face: TopoDS_Face, points: np.ndarray) -> float:

@@ -1,0 +1,13 @@
+{
+  "name": "@plastiq/nurbs",
+  "version": "0.1.0",
+  "private": true,
+  "license": "SEE LICENSE IN LICENSE",
+  "type": "module",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "description": "Browser client for Plastiq's MLX NURBS surface-fitting service (services/nurbs): submit a GLB mesh, poll, and receive STEP + NURBS-surface JSON that feeds the existing stepToImportDocument → importStep path.",
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  }
+}

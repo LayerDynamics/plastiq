@@ -38,7 +38,9 @@ def test_fitted_step_is_smaller_than_faceted_for_a_box():
     assert len(fitted_step) < len(faceted_step)  # fewer faces → smaller STEP
 
 
-def test_pipeline_defaults_to_fitted():
+def test_pipeline_default_auto_falls_through_to_fitted_for_a_box():
+    # The pipeline's default method is "auto" (analytic routes first); a plain box matches
+    # no analytic route (primitive/revolution/CSG/cut-cylinder) and falls through to fitted.
     glb = trimesh.creation.box(extents=(0.03, 0.02, 0.01)).export(file_type="glb")
     res = reconstruct(glb, "glb")
     assert res.report.method == "fitted"

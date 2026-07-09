@@ -468,7 +468,7 @@ export const useCadStore = create<CadStore>((set, get) => ({
     })),
 
   selectFeature: (id) => set({ selectedFeatureId: id }),
-  setSelMode: (mode) => set({ selMode: mode, picks: [] }),
+  setSelMode: (mode) => set({ selMode: mode }),
 
   // The workspace is the single authority over sim mode: entering `simulate`
   // starts a fresh playing run, leaving stops it (mirrors setSimulating). Sketch

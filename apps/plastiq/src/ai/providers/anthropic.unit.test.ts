@@ -34,7 +34,7 @@ describe("R1.3 request mapping", () => {
         { type: "image", mediaType: "image/png", data: "AAAA" },
       ] },
     ];
-    const content = (toAnthropicMessages(msgs)[0] as { content: unknown[] }).content;
+    const {content} = toAnthropicMessages(msgs)[0] as { content: unknown[] };
     expect(content[0]).toEqual({ type: "text", text: "what is this?" });
     expect(content[1]).toEqual({ type: "image", source: { type: "base64", media_type: "image/png", data: "AAAA" } });
   });

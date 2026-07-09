@@ -195,6 +195,14 @@ Each card: **what it IS** · **license** (load-bearing — a non-commercial/no-l
   already do freeform BSpline fitting + STEP export. Only novel piece: `normalize.py`'s NURBS-param→token
   compression (relevant only if we trained our own CAD LLM — out of scope).
 - **Verdict** — **T3, ALREADY-COVERED.**
+- **Update (2026-07-05, SPEC-12):** the "already-covered" call held for *generation* (SPEC-6) and for
+  reconstruct's *analytic/single-patch* freeform, but the audit understated a real gap: reconstruct's
+  `MakeFilling` cannot fit a **closed/organic region** (no boundary loop → stays faceted). That gap is
+  now filled by **`services/nurbs` (SPEC-12)** — a from-scratch modular-MLX **data-driven mesh→NURBS
+  surface-fitting** service (LSQ + differentiable refinement; NURBGen contributed only its JSON-schema
+  shape, no code, no license). Its U7 gate produces a watertight all-NURBS STEP solid from a closed
+  organic mesh — the case documented here as impossible for the freeform stage. So NURBGen-the-repo
+  stays not-liftable, but the *capability* it hinted at (parametric NURBS surfaces) shipped, built ours.
 
 ### Group C — Shape completion & 3D-GAN reconstruction
 

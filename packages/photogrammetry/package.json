@@ -1,0 +1,16 @@
+{
+  "name": "@plastiq/photogrammetry",
+  "version": "0.1.0",
+  "private": true,
+  "license": "SEE LICENSE IN LICENSE",
+  "type": "module",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "description": "Browser client for Plastiq's SfM+MVS photogrammetry service (services/photogrammetry): submit unposed photos, poll, and receive a transforms.json (→ services/nerf) plus a sparse and a dense oriented point cloud (→ services/capture) — the photos → CAD front-end.",
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "devDependencies": {
+    "@plastiq/capture": "workspace:*"
+  }
+}

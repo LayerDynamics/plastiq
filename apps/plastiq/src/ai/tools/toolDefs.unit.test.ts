@@ -151,7 +151,12 @@ describe("buildAgentTools dispatch", () => {
     });
     expect(res.isError).toBe(false);
     expect(res.result).toMatch(/plan accepted/i);
+    // The FULL validated graph is delivered, not a summary/truncation (9-M1).
     expect(onPlan).toHaveBeenCalledOnce();
+    expect(onPlan).toHaveBeenCalledWith({
+      nodes: [{ id: "body", part: "housing" }, { id: "lid", part: "lid", parent: "body" }],
+      relations: [{ from: "lid", to: "body", kind: "attached" }],
+    });
   });
 
   it("plan_part returns isError on a malformed plan (so the model fixes it)", async () => {
@@ -219,5 +224,40 @@ describe("plan-conditioned execution (M5.3)", () => {
     expect(onPlan).toHaveBeenCalledOnce(); // the agent committed a validated plan first
     expect(apply).toHaveBeenCalledOnce(); // then built the part
     expect(res.finish).toBe("answer");
+  });
+
+  it("a plan too big for the 200-char trace line reaches onPlan intact through runAgent (9-M1)", async () => {
+    // Long enough that the panel's generic tool-call line (args JSON sliced to 200
+    // chars) would cut it mid-graph — the onPlan seam must deliver it whole.
+    const bigPlan = {
+      nodes: [
+        { id: "chassis", part: "the main quadcopter chassis plate" },
+        { id: "arm-fl", part: "front-left motor arm", parent: "chassis" },
+        { id: "arm-fr", part: "front-right motor arm", parent: "chassis" },
+        { id: "arm-rl", part: "rear-left motor arm", parent: "chassis" },
+        { id: "arm-rr", part: "rear-right motor arm", parent: "chassis" },
+        { id: "canopy", part: "aerodynamic canopy shell over the electronics bay", parent: "chassis" },
+      ],
+      relations: [
+        { from: "arm-fl", to: "chassis", kind: "attached" },
+        { from: "arm-fr", to: "chassis", kind: "attached" },
+        { from: "arm-rl", to: "chassis", kind: "attached" },
+        { from: "arm-rr", to: "chassis", kind: "attached" },
+        { from: "canopy", to: "chassis", kind: "aligned" },
+        { from: "arm-fl", to: "arm-rr", kind: "symmetric" },
+      ],
+    };
+    expect(JSON.stringify(bigPlan).length).toBeGreaterThan(200);
+
+    const onPlan = vi.fn();
+    const tools: AgentTools = buildAgentTools(deps({ onPlan }));
+    const provider = new ScriptedProvider([
+      [call("p1", "plan_part", bigPlan), done()],
+      [call("a1", ANSWER_USER, { message: "planned" }), done()],
+    ]);
+    const res = await runAgent({ provider, system: "s", messages: [{ role: "user", content: "plan a quadcopter" }], tools });
+    expect(res.finish).toBe("answer");
+    expect(onPlan).toHaveBeenCalledOnce();
+    expect(onPlan).toHaveBeenCalledWith(bigPlan); // full graph, untruncated
   });
 });

@@ -6,12 +6,17 @@
         and is monotone inside→surface→outside.
   N8.3  REAL training on the M4 Max: train VolSDF on synthetic sphere views, assert the held-out view's
         PSNR improves (appearance is genuinely learned through the SDF→density→volume-render path — not
-        a stub), and the eikonal-regularized field still marching-cubes into a clean, unit-scaled mesh.
+        a stub), and the marching-cubed surface gets geometrically CLOSER to the ground-truth unit
+        sphere than the mesh extracted from the freshly-initialized field.
 
 Honest scope (NFR-2/NFR-3): the IGR geometric init seeds a coarse unit sphere — that is load-bearing
 by design, exactly as VolSDF/IGR methods rely on it. What N8.3 proves trains from scratch is the
 view-dependent appearance (random ~0.5 grey at init → the normal-shaded sphere), rendered through the
-VolSDF density transform; the mesh check confirms training + eikonal preserve a extractable surface.
+VolSDF density transform. Because the init already extracts a rough sphere (test_exporters asserts the
+same 0.6<r̄<1.5 unit-scale bound on the UNTRAINED field), that bound alone cannot prove geometric
+learning — so the mesh check also requires the vertices' mean |r−1| error against the ground-truth
+unit sphere to at least halve versus an extraction from the untrained init (measured: ≈0.21 → ≈0.05
+at seed 0; the halving holds across seeds with wide margin).
 """
 
 import numpy as np
@@ -110,6 +115,9 @@ def test_volsdf_training_improves_psnr_and_extracts_mesh():
     )
     model = VolSDFModel(cfg, laplace_beta=0.2, lam_eikonal=0.1, seed=0)
     before = _psnr(model.render_rays(ho_o, ho_d, key=make_key(99)), ho_t)
+    # Baseline geometry from the UNTRAINED (IGR geometric init) field — the bar training must beat.
+    init_verts, _init_faces = _extract_mesh(model.field, res=32)
+    init_err = float(np.abs(np.linalg.norm(init_verts, axis=1) - 1.0).mean())
 
     Trainer(model, lr=5e-3, seed=0).train(train_o, train_d, train_t, iters=400, rays_per_batch=512)
 
@@ -120,6 +128,14 @@ def test_volsdf_training_improves_psnr_and_extracts_mesh():
     assert verts.shape[0] > 0 and faces.shape[0] > 0, "trained field produced an empty mesh"
     mean_r = float(np.linalg.norm(verts, axis=1).mean())
     assert 0.6 < mean_r < 1.5, f"extracted surface is not unit-scaled: mean radius {mean_r:.3f}"
+    # Geometry-level training proof: the untrained init already satisfies the loose unit-scale bound
+    # above (test_exporters asserts the identical bound at init), so additionally require the surface's
+    # mean |r−1| error vs the ground-truth unit sphere to at least halve relative to the init mesh
+    # (measured ≈0.21 → ≈0.05 at seed 0 — a decisive margin, not noise).
+    err = float(np.abs(np.linalg.norm(verts, axis=1) - 1.0).mean())
+    assert err < 0.5 * init_err, (
+        f"training did not improve the extracted geometry: mean |r-1| {init_err:.4f} (init) → {err:.4f} (trained)"
+    )
 
 
 def test_eikonal_term_contributes_to_render_loss():

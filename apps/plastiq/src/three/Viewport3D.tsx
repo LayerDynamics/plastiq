@@ -16,11 +16,13 @@ export function Viewport3D({
   meshBodies,
   sketchFrame,
   instances,
+  onMeshBodiesChange,
 }: {
   mesh: TransferMesh | null;
   meshBodies: MeshBody[] | null;
   sketchFrame: DatumPlane | null;
   instances: InstanceBody[] | null;
+  onMeshBodiesChange: (bodies: MeshBody[], persist?: boolean) => void;
 }): React.JSX.Element {
   return (
     <Canvas
@@ -35,7 +37,13 @@ export function Viewport3D({
       style={{ position: "absolute", inset: 0 }}
     >
       <color attach="background" args={[VIEWPORT_BG]} />
-      <Scene mesh={mesh} meshBodies={meshBodies} sketchFrame={sketchFrame} instances={instances} />
+      <Scene
+        mesh={mesh}
+        meshBodies={meshBodies}
+        sketchFrame={sketchFrame}
+        instances={instances}
+        onMeshBodiesChange={onMeshBodiesChange}
+      />
     </Canvas>
   );
 }

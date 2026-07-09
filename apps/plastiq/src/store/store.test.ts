@@ -84,11 +84,11 @@ describe("CAD Studio store — document (FR-2)", () => {
 });
 
 describe("CAD Studio store — selection (FR-2/FR-8/FR-9)", () => {
-  it("setSelMode switches mode and clears picks", () => {
+  it("setSelMode switches mode and preserves picks for chained selections", () => {
     s().pick({ kind: "face", id: 3 });
     s().setSelMode("edge");
     expect(s().selMode).toBe("edge");
-    expect(s().picks).toEqual([]);
+    expect(s().picks).toEqual([{ kind: "face", id: 3 }]);
   });
 
   it("pick replaces by default and toggles additively", () => {

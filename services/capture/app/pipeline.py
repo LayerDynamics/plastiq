@@ -2,8 +2,8 @@
 
 The capture service's core: fit a Softplus/IGR SDF to points + normals (app.sdf_mlx, trained on the
 M4 Max in MLX), marching-cubes the zero level-set, and export a GLB the browser imports as a MeshDoc
-(then reconstruct → editable B-rep). Points/normals come from a depth scan (app.geometry) or an
-external SfM/MVS (COLMAP). See docs/adr/0007.
+(then reconstruct → editable B-rep). Points/normals come from a depth scan (app.geometry, served as
+`POST /points-from-depth`) or an external SfM/MVS (COLMAP). See docs/adr/0007.
 """
 
 from __future__ import annotations

@@ -21,6 +21,7 @@ import { SketchCamera } from "./SketchCamera.js";
 import { Section } from "./Section.js";
 import { Assembly, type InstanceBody } from "./Assembly.js";
 import { VoxelSculpt } from "./VoxelSculpt.js";
+import { MeshEditing } from "./MeshEditing.js";
 import type { DatumPlane } from "@plastiq/cad";
 import { GRID_CENTER, GRID_CELL } from "./colors.js";
 import { buildPart, buildMeshBody, disposePart, type BuiltPart, type BuiltMeshBody } from "../viewport/buildMesh.js";
@@ -62,11 +63,13 @@ export function Scene({
   meshBodies,
   sketchFrame,
   instances,
+  onMeshBodiesChange,
 }: {
   mesh: TransferMesh | null;
   meshBodies: MeshBody[] | null;
   sketchFrame: DatumPlane | null;
   instances: InstanceBody[] | null;
+  onMeshBodiesChange: (bodies: MeshBody[], persist?: boolean) => void;
 }): React.JSX.Element {
   const camera = useThree((s) => s.camera);
   const controls = useThree((s) => s.controls) as OrbitLike | null;
@@ -200,10 +203,8 @@ export function Scene({
     );
   }
 
-  // A mesh document is display-only triangle geometry (decision 20): render the bodies
-  // with the standard light rig + grid + orbit, but NONE of the B-rep editor surfaces
-  // (picking, gizmos, sections, assembly) — those operate on a B-rep solid this doc has
-  // no equivalent of (FR-16/FR-18: B-rep ops are simply not offered, never a silent no-op).
+  // A mesh document is non-B-rep triangle geometry (decision 20): B-rep-only tools
+  // stay off, but raw mesh vertices and segments are selectable/editable directly.
   if (builtBodies) {
     return (
       <>
@@ -213,9 +214,16 @@ export function Scene({
         <gridHelper args={[0.4, 40, GRID_CENTER, GRID_CELL]} rotation={[Math.PI / 2, 0, 0]} />
         <group name="mesh-document">
           {builtBodies.map((b, i) => (
-            <primitive key={i} object={b.mesh} />
+            <group key={i} name={`mesh-body-${i}`}>
+              <primitive object={b.mesh} />
+              {b.edges.map((edge, j) => (
+                <primitive key={j} object={edge} />
+              ))}
+              <primitive object={b.vertexPoints} />
+            </group>
           ))}
         </group>
+        <MeshEditing bodies={meshBodies ?? []} builtBodies={builtBodies} onBodiesChange={onMeshBodiesChange} />
         <OrbitControls
           makeDefault
           enableDamping

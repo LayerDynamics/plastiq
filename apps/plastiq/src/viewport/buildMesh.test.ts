@@ -56,6 +56,9 @@ describe("buildPart — tagged mesh → three.js (SPEC-5 M0.5)", () => {
     const part = buildPart(sampleMesh());
     expect(part.edges).toHaveLength(2);
     expect(part.edges.map((l) => l.userData["edgeId"])).toEqual([1, 2]);
+    expect(part.edges.every((l) => l.renderOrder === 2)).toBe(true);
+    expect(part.edgeMaterials[FACE_MATERIAL.hover]!.depthTest).toBe(false);
+    expect(part.edgeMaterials[FACE_MATERIAL.selected]!.depthTest).toBe(false);
     // edge 1: a single segment → 2 points (6 floats).
     const p0 = part.edges[0]!.geometry.getAttribute("position");
     expect(p0.count).toBe(2);
@@ -69,6 +72,8 @@ describe("buildPart — tagged mesh → three.js (SPEC-5 M0.5)", () => {
     expect(part.vertexPoints).not.toBeNull();
     expect(part.vertexPoints!.userData["vertexIds"]).toEqual([10, 20, 30]);
     expect(part.vertexPoints!.geometry.getAttribute("position").count).toBe(3);
+    expect(part.vertexPoints!.renderOrder).toBe(3);
+    expect((part.vertexPoints!.material as THREE.PointsMaterial).depthTest).toBe(false);
   });
 
   it("the part group contains the solid mesh + the edge lines + the corner points", () => {
@@ -97,6 +102,20 @@ describe("buildMeshBody — mesh triangle soup → three.js (SPEC-6 R4.2)", () =
     const geom = built.mesh.geometry;
     expect(geom.getAttribute("position").count).toBe(4);
     expect(geom.getIndex()!.count).toBe(6);
+    expect(geom.groups).toHaveLength(2);
+    expect(built.mesh.userData["faceIds"]).toEqual([0, 1]);
+  });
+
+  it("builds selectable handles for every mesh vertex and unique triangle segment", () => {
+    const built = buildMeshBody(sampleBody());
+    expect(built.vertexPoints.geometry.getAttribute("position").count).toBe(4);
+    expect(built.vertexPoints.userData["vertexIds"]).toEqual([0, 1, 2, 3]);
+    expect(built.edges).toHaveLength(5);
+    expect(built.edges.map((e) => e.userData["edgeId"])).toEqual([0, 1, 2, 3, 4]);
+    expect(built.edges.every((e) => e.renderOrder === 2)).toBe(true);
+    expect(built.edgeMaterials[FACE_MATERIAL.hover]!.depthTest).toBe(false);
+    expect(built.vertexPoints.renderOrder).toBe(3);
+    expect((built.vertexPoints.material as THREE.PointsMaterial).depthTest).toBe(false);
   });
 
   it("computes vertex normals when the body supplies none (lighting needs them)", () => {
@@ -112,7 +131,7 @@ describe("buildMeshBody — mesh triangle soup → three.js (SPEC-6 R4.2)", () =
 
   it("applies the body material — colour + sub-1 opacity ⇒ transparent", () => {
     const built = buildMeshBody(sampleBody({ material: { color: 0xff0000, opacity: 0.5 } }));
-    const mat = built.mesh.material as THREE.MeshStandardMaterial;
+    const mat = (built.mesh.material as THREE.MeshStandardMaterial[])[FACE_MATERIAL.base]!;
     expect(mat.color.getHex()).toBe(0xff0000);
     expect(mat.opacity).toBe(0.5);
     expect(mat.transparent).toBe(true);

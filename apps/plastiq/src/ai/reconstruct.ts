@@ -1,4 +1,4 @@
-// SPEC-6 R6.6 — client for the mesh→B-rep reconstruction service (services/reconstruct).
+// SPEC-7 R6.6 — client for the mesh→B-rep reconstruction service (services/reconstruct).
 //
 // Sends a mesh document's inline base64 GLB to the self-hosted reconstruction backend and
 // polls for the resulting STEP, which is wrapped as a parametric CadDocument (one
@@ -7,6 +7,18 @@
 // is reached by base URL (self-hosted; same BYO/self-host spirit as the AI proxy seam).
 
 import type { CadDocument } from "../store/types.js";
+
+/** One reconstruction-chain route attempt (7-L2 observability). */
+export interface ReconstructRouteAttempt {
+  /** "single_primitive" | "revolution" | "csg" | "cut_cylinder" | "fitted" | "faceted". */
+  route: string;
+  /** "matched" — this route produced the result; "no_match" — it declined cleanly;
+   * "error" — it raised (or internally swallowed an exception) and the chain degraded to the
+   * next route (FR-8: nothing is ever dropped). */
+  outcome: "matched" | "no_match" | "error";
+  /** The caught exception message(s) when outcome === "error"; null otherwise. */
+  error?: string | null;
+}
 
 export interface ReconstructReport {
   triangles_in: number;
@@ -29,9 +41,15 @@ export interface ReconstructReport {
   tangent_regions?: number;
   is_solid: boolean;
   is_valid: boolean;
+  /** The reconstruction route the service actually took — never "auto":
+   * "cylinder" | "sphere" | "cone" | "revolution" | "csg" | "cut_cylinder" | "fitted" | "faceted". */
   method: string;
-  /** "cylinder" | "sphere" | "cone" | "revolution" | "csg" when method="auto" hit one. */
+  /** "cylinder" | "sphere" | "cone" | "revolution" | "csg" | "cut_cylinder" when method="auto" hit one. */
   primitive?: string;
+  /** Per-route attempt trail of the reconstruction chain, in the order the routes ran —
+   * distinguishes a route that errored from one that cleanly didn't match (7-L2). Absent on
+   * older servers. */
+  attempted?: ReconstructRouteAttempt[];
 }
 
 export interface ReconstructResult {
@@ -53,6 +71,9 @@ export interface ReconstructOptions {
   delay?: (ms: number) => Promise<void>;
   /** Job-state callback for UI progress ("queued" | "running" | …). */
   onState?: (state: string) => void;
+  /** Reconstruction method requested from the service (SPEC-7 FR-11): "auto" (analytic routes →
+   * fitted fallback), "fitted", or "faceted". Omitted ⇒ the server default ("auto"). */
+  method?: "auto" | "fitted" | "faceted";
 }
 
 const DEFAULT_BASE_URL = "http://localhost:8000";
@@ -80,7 +101,7 @@ export async function reconstructMesh(
   const submitRes = await f(`${base}/reconstruct`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ glb_base64: glbBase64 }),
+    body: JSON.stringify({ glb_base64: glbBase64, ...(opts.method ? { method: opts.method } : {}) }),
     ...(opts.signal ? { signal: opts.signal } : {}),
   });
   if (!submitRes.ok) throw new Error(await httpError(submitRes, "submit"));

@@ -11,6 +11,8 @@
 import { useCadStore } from "../store/store.js";
 import { useProjectsStore } from "../persistence/projectsStore.js";
 import { useVoxelStore } from "../voxel/voxelStore.js";
+import { assemblyToAssy, parseAssy, realizeAssembly } from "../assembly/assy.js";
+import type { AssemblyModel } from "../assembly/model.js";
 import { voxelDocToMesh } from "../voxel/doc.js";
 import { voxelMeshToGlbBase64 } from "../voxel/glb.js";
 import { exportMeshGlb } from "../mesh/exportGlb.js";
@@ -125,6 +127,74 @@ export function importStepFromDisk(): void {
     });
   };
   input.click();
+}
+
+/** Replace the live interactive assembly (the one AssemblyTree/BomSection read) with a
+ * realized `.assy` model — the import path's store entry point (M4.5). Undoable: pushes
+ * one history snapshot, mirroring store.ts `pushHistory` (same shape + its HISTORY_LIMIT
+ * of 100). Transient assembly state (solve verdict, mate picks, joint drives,
+ * interference results) is cleared — it described the replaced assembly. */
+function loadAssemblyModel(model: AssemblyModel): void {
+  useCadStore.setState((s) => ({
+    past: [
+      ...s.past,
+      structuredClone({
+        features: s.features,
+        params: s.params,
+        assembly: s.assembly,
+        nextSeq: s.nextSeq,
+        assemblyResult: s.assemblyResult,
+      }),
+    ].slice(-100),
+    future: [],
+    assembly: model,
+    assemblyResult: null,
+    matePicks: [],
+    jointDrive: {},
+    interferences: null,
+  }));
+}
+
+/** Parse + realize `.assy` JSON text and load it as the live assembly — the read side
+ * of the declarative `.assy` bridge (assembly/assy.ts). Any problem (bad JSON, schema
+ * violations, sub-assembly cycles) surfaces on the status line and leaves the store
+ * untouched. Exported so tests can drive the flow without the file picker. */
+export function importAssyText(name: string, text: string): void {
+  try {
+    const model = realizeAssembly(parseAssy(JSON.parse(text)));
+    loadAssemblyModel(model);
+    cad().setStatus(`imported ${name}: ${model.instances.length} instance(s)`);
+  } catch (e) {
+    cad().setStatus(`import failed: ${(e as Error).message}`);
+  }
+}
+
+/** Open a file picker and import the chosen `.assy` (JSON) document as the live
+ * assembly. Mirrors importStepFromDisk's picker mechanism. */
+export function importAssyFromDisk(): void {
+  const input = document.createElement("input");
+  input.type = "file";
+  input.accept = ".assy,.json";
+  input.onchange = (): void => {
+    const file = input.files?.[0];
+    if (!file) return;
+    void file.text().then((text) => importAssyText(file.name, text));
+  };
+  input.click();
+}
+
+/** Download the live interactive assembly as a flat `.assy` JSON document
+ * (assemblyToAssy — the write side of the bridge; re-importable via Import .assy). */
+export function exportAssyFromStore(): void {
+  const doc = assemblyToAssy(cad().assembly);
+  const blob = new Blob([JSON.stringify(doc, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "assembly.assy";
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 100);
+  cad().setStatus("exported assembly.assy");
 }
 
 const hasExporter = (): boolean =>
@@ -299,6 +369,24 @@ const RIBBON_ONLY: ActionDef[] = [
     active: (ctx) => ctx.mateMode,
     // Enter/leave mate authoring; the two-pick + apply flow lives in AssemblyTree.
     run: (ctx) => cad().setMateMode(!ctx.mateMode),
+  },
+  // Declarative `.assy` interchange (M4.5): import parses + realizes a JSON document
+  // into the live assembly; export downloads the live assembly back out (assy.ts).
+  {
+    id: "import-assy",
+    label: () => "Import .assy",
+    icon: "⤒",
+    enabled: always,
+    run: () => importAssyFromDisk(),
+  },
+  {
+    id: "export-assy",
+    label: () => "Export .assy",
+    icon: "⤓",
+    // Nothing to export until the assembly has at least one instance (matches
+    // BomSection's gating on the same store slice).
+    enabled: () => cad().assembly.instances.length > 0,
+    run: () => exportAssyFromStore(),
   },
 ];
 

@@ -1,9 +1,10 @@
 """Plastiq mesh→B-rep reconstruction service (FastAPI).
 
-POST /reconstruct {glb_base64}  → { id, state }     (submit a job)
-GET  /jobs/{id}/status          → { id, state, error? }
-GET  /jobs/{id}/result          → { step, report }   (when completed)
-GET  /health                    → { status }
+POST   /reconstruct {glb_base64, method?} → { id, state }     (submit a job)
+GET    /jobs/{id}/status                  → { id, state, error? }
+GET    /jobs/{id}/result                  → { step, report }   (when completed)
+DELETE /jobs/{id}                         → 204                (drop/cancel a job record)
+GET    /health                            → { status }
 
 The browser sends a mesh document's inline base64 GLB; the service reconstructs a B-rep
 and returns STEP text the client imports via the existing importStep. The submit→poll
@@ -17,8 +18,9 @@ import base64
 import logging
 
 import os
+from typing import Literal
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
@@ -43,10 +45,24 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-store = JobStore()
+# Bound concurrent reconstructions (OCCT work is CPU-bound) — same pattern as services/nerf's
+# NERF_MAX_CONCURRENT_JOBS. Submits beyond the cap are rejected with 429 so load sheds early.
+_MAX_CONCURRENT = int(os.environ.get("RECONSTRUCT_MAX_CONCURRENT_JOBS", "2"))
+# A hung non-terminal job is force-failed after this long, so it stops counting against the
+# concurrency cap and becomes evictable like any other terminal job.
+_RUNNING_TTL = float(os.environ.get("RECONSTRUCT_RUNNING_JOB_TTL_SECONDS", "1800"))
+
+store = JobStore(running_ttl_seconds=_RUNNING_TTL)
 
 # Startup config summary (env-derived, no secrets) — one line an operator can grep for.
-logger.info("plastiq-reconstruct configured: cors_origins=%s (RECONSTRUCT_CORS_ORIGINS)", _origins)
+logger.info(
+    "plastiq-reconstruct configured: cors_origins=%s (RECONSTRUCT_CORS_ORIGINS), "
+    "max_concurrent_jobs=%d (RECONSTRUCT_MAX_CONCURRENT_JOBS), "
+    "running_job_ttl=%gs (RECONSTRUCT_RUNNING_JOB_TTL_SECONDS)",
+    _origins,
+    _MAX_CONCURRENT,
+    _RUNNING_TTL,
+)
 
 
 class SubmitBody(BaseModel):
@@ -54,6 +70,9 @@ class SubmitBody(BaseModel):
 
     glb_base64: str
     file_type: str = "glb"
+    # SPEC-7 FR-11: requested reconstruction method — "auto" (analytic routes → fitted fallback;
+    # default), "fitted", or "faceted". Unknown values are rejected with 422 by validation.
+    method: Literal["auto", "fitted", "faceted"] = "auto"
 
 
 class JobView(BaseModel):
@@ -69,6 +88,13 @@ def health() -> dict:
 
 @app.post("/reconstruct", response_model=JobView)
 async def submit_reconstruction(body: SubmitBody) -> JobView:
+    if store.running_count() >= _MAX_CONCURRENT:
+        logger.warning(
+            "rejected /reconstruct submit: %d jobs already in flight (cap %d)",
+            store.running_count(),
+            _MAX_CONCURRENT,
+        )
+        raise HTTPException(status_code=429, detail="too many reconstruction jobs in flight; retry shortly")
     try:
         data = base64.b64decode(body.glb_base64, validate=True)
     except Exception as e:  # noqa: BLE001
@@ -79,10 +105,11 @@ async def submit_reconstruction(body: SubmitBody) -> JobView:
         raise HTTPException(status_code=400, detail="empty GLB payload")
 
     file_type = body.file_type
+    method = body.method
 
     async def work() -> dict:
         # OCCT reconstruction is CPU-bound → run off the event loop.
-        result = await asyncio.to_thread(reconstruct, data, file_type)
+        result = await asyncio.to_thread(reconstruct, data, file_type, method=method)
         return result.to_dict()
 
     job = await store.submit(work)
@@ -107,3 +134,12 @@ def job_result(job_id: str) -> dict:
     if job.state != JobState.completed or job.result is None:
         raise HTTPException(status_code=409, detail=f"job not complete (state: {job.state.value})")
     return job.result
+
+
+@app.delete("/jobs/{job_id}", status_code=204)
+def cancel_job(job_id: str) -> Response:
+    """Drop a job record (client cancel/cleanup). An in-flight worker thread cannot be force-killed,
+    so its eventual result is simply discarded; status/result for this id return 404 afterwards."""
+    if store.remove(job_id) is None:
+        raise HTTPException(status_code=404, detail="no such job")
+    return Response(status_code=204)

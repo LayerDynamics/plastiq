@@ -3,7 +3,7 @@
 // "completed" → GET /jobs/{id}/result. (SPEC-11 N11.)
 
 import { describe, expect, it } from "vitest";
-import { trainNerf } from "./client.js";
+import { cancelJob, trainNerf } from "./client.js";
 
 const RESULT_WIRE = {
   glb_base64: "Z2xURg==",
@@ -91,6 +91,38 @@ describe("trainNerf (SPEC-11 N11)", () => {
     expect(body!.grid_res).toBe(96);
   });
 
+  it("serializes encoding/importanceSamples snake_case when set, and omits them when unset", async () => {
+    // Set → snake_case wire fields on the submit body (11-L1).
+    const withFields = scriptedFetch();
+    await trainNerf(
+      { transformsJson: "{}", images: [], method: "nerf", encoding: "hashgrid", importanceSamples: 16 },
+      { fetchImpl: withFields.fetchImpl, delay: async () => {} },
+    );
+    expect(withFields.submitBody()!.encoding).toBe("hashgrid");
+    expect(withFields.submitBody()!.importance_samples).toBe(16);
+
+    // Unset → absent entirely (the service's own defaults apply; nothing is sent speculatively).
+    const without = scriptedFetch();
+    await trainNerf({ transformsJson: "{}", images: [] }, { fetchImpl: without.fetchImpl, delay: async () => {} });
+    expect("encoding" in without.submitBody()!).toBe(false);
+    expect("importance_samples" in without.submitBody()!).toBe(false);
+  });
+
+  it("maps the additive encoding/importance_samples result keys into the report when present", async () => {
+    const { fetchImpl } = scriptedFetch({
+      result: { ...RESULT_WIRE, method: "nerf", encoding: "hashgrid", importance_samples: 16 },
+    });
+    const res = await trainNerf({ transformsJson: "{}", images: [] }, { fetchImpl, delay: async () => {} });
+    expect(res.report.encoding).toBe("hashgrid");
+    expect(res.report.importanceSamples).toBe(16);
+
+    // An older service that doesn't send them → absent from the report (not defaulted/guessed).
+    const older = scriptedFetch(); // RESULT_WIRE has neither key
+    const resOld = await trainNerf({ transformsJson: "{}", images: [] }, { fetchImpl: older.fetchImpl, delay: async () => {} });
+    expect(resOld.report.encoding).toBeUndefined();
+    expect(resOld.report.importanceSamples).toBeUndefined();
+  });
+
   it("defaults the report method to nerf when the server omits/garbles it", async () => {
     const { fetchImpl } = scriptedFetch({ result: { ...RESULT_WIRE, method: "???" } });
     const res = await trainNerf({ transformsJson: "{}", images: [] }, { fetchImpl, delay: async () => {} });
@@ -113,6 +145,19 @@ describe("trainNerf (SPEC-11 N11)", () => {
     await expect(
       trainNerf({ transformsJson: "{}", images: [] }, { fetchImpl, delay: async () => {} }),
     ).rejects.toThrow(/nerf submit: HTTP 400.*length mismatch/);
+  });
+
+  it("exposes the submitted job id via onJob before polling (the cancelJob handle)", async () => {
+    const { fetchImpl, calls } = scriptedFetch();
+    const ids: string[] = [];
+    await trainNerf(
+      { transformsJson: "{}", images: [] },
+      { fetchImpl, delay: async () => {}, onJob: (id) => ids.push(id) },
+    );
+    // Fired exactly once, with the id the /jobs/{id}/… polls then use — so a caller holding it
+    // mid-training can DELETE the same job the service is running.
+    expect(ids).toEqual(["job-7"]);
+    expect(calls[1]).toBe("http://localhost:8002/jobs/job-7/status");
   });
 
   it("times out after maxPolls when the job never completes", async () => {
@@ -145,5 +190,53 @@ describe("trainNerf auth header (SPEC-11 §5 — NERF_API_KEY deployments)", () 
     await trainNerf({ transformsJson: "{}", images: [] }, { fetchImpl, delay: async () => {} });
     expect(calls.length).toBeGreaterThan(0);
     for (const init of inits) expect(authOf(init)).toBeUndefined();
+  });
+});
+
+/** A single-shot fetch answering the DELETE with `status`, recording the request for assertions. */
+function deleteFetch(status: number, body: unknown = {}): {
+  fetchImpl: typeof fetch;
+  calls: string[];
+  inits: (RequestInit | undefined)[];
+} {
+  const calls: string[] = [];
+  const inits: (RequestInit | undefined)[] = [];
+  const fetchImpl = (async (url: string, init?: RequestInit) => {
+    calls.push(url);
+    inits.push(init);
+    return jsonResponse(body, status >= 200 && status < 300, status);
+  }) as unknown as typeof fetch;
+  return { fetchImpl, calls, inits };
+}
+
+describe("cancelJob (SPEC-11 §5 — DELETE /jobs/{id})", () => {
+  it("issues DELETE {base}/jobs/{id} (base normalized) and resolves on 204", async () => {
+    const { fetchImpl, calls, inits } = deleteFetch(204);
+    await cancelJob("job-7", { baseURL: "http://localhost:8002/", fetchImpl });
+    expect(calls).toEqual(["http://localhost:8002/jobs/job-7"]);
+    expect(inits[0]?.method).toBe("DELETE");
+  });
+
+  it("treats 404 as already-gone (no throw) — cancelling twice is not an error", async () => {
+    const { fetchImpl, calls } = deleteFetch(404, { detail: "no such job" });
+    await expect(cancelJob("gone", { fetchImpl })).resolves.toBeUndefined();
+    expect(calls).toEqual(["http://localhost:8002/jobs/gone"]); // default base URL
+  });
+
+  it("surfaces other HTTP errors with the server detail, like the train helpers", async () => {
+    const { fetchImpl } = deleteFetch(401, { detail: "missing or invalid API key" });
+    await expect(cancelJob("job-7", { fetchImpl })).rejects.toThrow(
+      /nerf cancel: HTTP 401 — missing or invalid API key/,
+    );
+  });
+
+  it("sends Authorization: Bearer <key> when apiKey is set, and no header otherwise", async () => {
+    const withKey = deleteFetch(204);
+    await cancelJob("job-7", { fetchImpl: withKey.fetchImpl, apiKey: "nerf-secret" });
+    expect(authOf(withKey.inits[0])).toBe("Bearer nerf-secret");
+
+    const withoutKey = deleteFetch(204);
+    await cancelJob("job-7", { fetchImpl: withoutKey.fetchImpl });
+    expect(authOf(withoutKey.inits[0])).toBeUndefined();
   });
 });

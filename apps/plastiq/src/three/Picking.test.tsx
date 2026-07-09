@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as THREE from "three";
 import ReactThreeTestRenderer from "@react-three/test-renderer";
 
-import { Picking } from "./Picking.js";
+import { completeBrepFacePicks, Picking } from "./Picking.js";
 import { Picker } from "../viewport/pick.js";
 import { buildPart } from "../viewport/buildMesh.js";
 import { useCadStore } from "../store/store.js";
@@ -47,6 +47,7 @@ function multiEdgeQuad(): TransferMesh {
     edgeId: number,
     positions: number[],
     midpoint: [number, number, number],
+    faceIds: readonly [number, number] = [7, -1],
   ): TransferMesh["edges"][number] => ({
     edgeId,
     positions: new Float32Array(positions),
@@ -55,6 +56,7 @@ function multiEdgeQuad(): TransferMesh {
       [0, -1, 0],
     ],
     midpoint,
+    faceIds,
   });
   return {
     vertices: new Float32Array([0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0]),
@@ -210,6 +212,41 @@ describe("Picking — additive selection (Shift+click)", () => {
     ]);
 
     await r.unmount();
+  });
+
+  it("face mode still allows direct edge selection from the canvas", async () => {
+    const part = buildPart(quad());
+    // Remove vertices for this regression so the test isolates edge-vs-face priority.
+    part.vertexPoints = null;
+    useCadStore.getState().setSelMode("face");
+
+    vi.spyOn(Picker.prototype, "pick").mockImplementation((_part, _ndc, _camera, mode) =>
+      mode === "edge" ? { kind: "edge", id: 4 } : null,
+    );
+
+    let canvas: HTMLCanvasElement | undefined;
+    const r = await ReactThreeTestRenderer.create(<Picking part={part} />, {
+      beforeReturn: (c) => {
+        canvas = c;
+      },
+    });
+
+    click(canvas!, 10, 10);
+    expect(useCadStore.getState().picks).toEqual([{ kind: "edge", id: 4 }]);
+
+    await r.unmount();
+  });
+});
+
+describe("Picking — complete boundary face promotion", () => {
+  it("promotes a B-rep face only when all adjacent edges and corner points are selected", () => {
+    const part = buildPart(multiEdgeQuad());
+    const allEdges = [1, 2, 3, 4].map((id) => ({ kind: "edge" as const, id }));
+    const allVertices = [11, 12, 13, 14].map((id) => ({ kind: "vertex" as const, id }));
+
+    expect(completeBrepFacePicks(part, [...allEdges, ...allVertices.slice(0, 3)])).toEqual([]);
+    expect(completeBrepFacePicks(part, [...allEdges.slice(0, 3), ...allVertices])).toEqual([]);
+    expect(completeBrepFacePicks(part, [...allEdges, ...allVertices])).toEqual([{ kind: "face", id: 7 }]);
   });
 });
 

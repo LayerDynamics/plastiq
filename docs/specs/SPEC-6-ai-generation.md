@@ -11,6 +11,46 @@
 
 ## Revision history
 
+- **2026-07-04 (r4, UnfinishedFable reconciliation):** A day of code changes closed most of
+  the gaps a deep-code audit (`docs/specs/UnfinishedFable.md` §4) found between this spec and
+  the shipped app; this entry records both the code and the doc corrections (the 24 locked
+  decisions are unchanged). **Shipped since r3:** (1) the FR-5b preflight is now a real LIVE
+  probe (`providers/models.ts` `probeModelCapabilities` — Ollama `POST /api/show` capabilities,
+  else an OpenAI-compatible tools-enabled chat probe, Anthropic on catalog truth, offline→static
+  fallback), fired debounced + abortable from `SettingsPanel` and consumed by `registry.ts`;
+  static `preflightModel` remains the sync fallback (§6.9 / FR-5b). (2) The usage meter is now
+  session-scoped (`aiStore.sessionUsage` + `recordRunUsage` fold each run's `UsageMeter`
+  snapshot), rendered in the panel (`generation-usage` + `generation-usage-session`) and the
+  palette (`palette-usage-session`) (FR-18a). (3) The command palette reached FR-19 parity —
+  streaming text, a visible tool-call/build trace, image attach + parametric/creative route
+  toggle, a per-job 3D-gen provider select, and an error surface (`CommandPalette.tsx`). (4)
+  Image-gen is now multi-selectable — `falImageProviders` ships three real fal models
+  (`fal:flux-schnell`/`fal:flux-dev`/`fal:fast-sdxl`), resolved by `settings.imageProviderId`
+  with a per-job panel selector; default `fal:flux-schnell` (decision 6 / FR-15 / Appendix A).
+  (5) FR-3's `OLLAMA_ORIGINS` CORS guidance is now surfaced on a local-Ollama connection
+  failure (`errorHints.ts`), and first-run replaced the blind qwen2.5 save with a live
+  `detectOllama` GET `/api/tags` probe (`ollamaDetect.ts`, FR-5a / §6.8). (6) The
+  `inspect_geometry` face hint is now three-way `planar | cylindrical | curved` with a real
+  cylinder radius (`tools/inspectGeometry.ts`, FR-11 / §6.3). (7) The `plan_part` plan is
+  recorded verbatim into the per-project conversation trace (a typed `kind:"plan"` entry) and
+  rendered live (`agentTurn.ts` → `appendTrace`; `GenerationPanel` `formatPlanGraph`); the
+  formerly-dead `isFirstRun` / `proxyKeyResolver` / `geometryClientProbe` exports are now wired;
+  the creative system prompt ships exactly when `create_mesh` is offered
+  (`runGeneration.offersCreateMesh`), which the app always is. (8) The always-on deterministic
+  E2E (`e2e/plastiq/ai-deterministic.spec.ts`) was extended to cover a selector-predicate
+  (`convexEdges`) fillet, a real GLB mesh-document import, and a timeline + autosave-across-reload
+  assertion (§10 / R5.2). (9) A distinct **`llama-mlx`** `ChatProvider` adapter shipped
+  (`providers/llama-mlx.ts`, commit `21f3b82`) — a local llama-mlx-server at `:11543/v1`
+  with a Bearer key, wrapping the OpenAI-compatible adapter; the `ChatProvider` id union is
+  now three-membered (`anthropic | openai-compatible | llama-mlx`), so §5.1/§5.2, FR-1 and
+  decision 3's adapter list are reconciled to include it (the hosted proxy stays a base-URL
+  re-point, not a separate adapter). **Doc corrections (honesty):** the Ollama LLM-boundary E2E
+  (`ai-ollama.spec.ts`) is a real model-in-the-loop test that runs LOCALLY against a live Ollama
+  and self-skips cleanly when unreachable — CI never installs or starts Ollama, so it is **not a
+  CI gate**; the earlier "green in CI" claims (§10, R5.3, §14.8) and §14.1's "both verified" are
+  corrected to state only what is proven. The fal creative path (`meshgen/fal.ts`) is a real
+  submit→poll client but has **not** been executed against the live fal API here (opt-in keyed
+  `createMesh.integration.test.ts`); §14.5 is annotated accordingly.
 - **2026-06-20 (r3, implementation reconciliation):** Two below-the-decisions
   refinements found during R4.1/R4.2 implementation, recorded here for accuracy (the
   24 locked decisions are unchanged — decision 20 "parametric OR mesh" still holds):
@@ -195,15 +235,20 @@ Plastiq has the better substrate and should expose it.
 ### Provider layer
 
 - **FR-1** A `ChatProvider` interface exposes a streaming, tool-calling completion call
-  independent of vendor. At least three adapters ship: `anthropic`, `openai-compatible`
-  (covers Ollama + OpenAI + others, via the official `openai` SDK + `baseURL`), and
-  `proxy`.
+  independent of vendor. Three adapters ship: `anthropic`, `openai-compatible` (covers
+  Ollama + OpenAI + others, via the official `openai` SDK + `baseURL`), and `llama-mlx`
+  (local **llama-mlx-server** at `:11543/v1`, Bearer key; wraps `openai-compatible`). A
+  hosted **proxy** is a base-URL re-point of any of these (FR-5) — not a separate adapter.
 - **FR-2** Anthropic adapter calls the API directly from the browser with
   `dangerouslyAllowBrowser: true`, adaptive thinking (`thinking: { type: "adaptive" }`),
   streaming, tool use, and **image input** (for vision→parametric).
 - **FR-3** Ollama works against `http://localhost:11434/v1` with **no API key**, a
   user-selectable local model, and tool calling. The app surfaces the `OLLAMA_ORIGINS`
-  CORS requirement and a tool-capable-model requirement in-product.
+  CORS requirement and a tool-capable-model requirement in-product. *(Shipped: the
+  `OLLAMA_ORIGINS` guidance is emitted on a local-Ollama connection failure — a browser
+  CORS block and a down server surface the same opaque error, so the hint covers both
+  (`errorHints.ts`; mirrored in the first-run `ollamaDetect.ts` not-detected message); the
+  tool-capable-model requirement rides the FR-5b preflight.)*
 - **FR-4** Provider, model, base-URL, and keys are user-configurable in a Settings panel
   and persisted locally (IndexedDB). Keys are never sent anywhere except the configured
   endpoint, and are structured so a proxy can hold them later without call-site changes.
@@ -211,7 +256,9 @@ Plastiq has the better substrate and should expose it.
 - **FR-5a** First run shows a **neutral provider chooser** (no default provider/model).
 - **FR-5b** Model selection is a **curated list + free-text override**; the app
   **preflights** that the selected model advertises tool calling and warns if not
-  (Appendix A lists the curated entries).
+  (Appendix A lists the curated entries). *(Shipped: the preflight is a real LIVE probe —
+  `probeModelCapabilities` (§6.9) — with the static catalog (`preflightModel`) as the
+  synchronous/offline fallback.)*
 
 ### Parametric generation & editing (`build_part`)
 
@@ -249,8 +296,12 @@ Plastiq has the better substrate and should expose it.
 ### Selection
 
 - **FR-11** An `inspect_geometry` tool returns the current part's enumerated faces and
-  edges (index, normal, centroid/midpoint, area/length, planar/cylindrical hint) as
-  structured text from the freshly built `TaggedMesh` — no rendered image required.
+  edges (index, normal, centroid/midpoint, area/length, and a three-way
+  `planar | cylindrical | curved` face hint — with the fitted cylinder radius, in mm, on
+  cylindrical faces) as structured text from the freshly built `TaggedMesh` — no rendered
+  image required. *(Shipped: `tools/inspectGeometry.ts` — a real per-face cylinder fit
+  (axis from triangle-normal cross products + a Kåsa circle fit) sets `kind:"cylindrical"`
+  + `radius`; everything non-planar and non-cylindrical is `curved`.)*
 - **FR-12** The AI references inspected faces/edges by index; the client maps indices to
   concrete `FaceRef`/`EdgeRef` before writing them into the dress-up feature's `data`.
 - **FR-13** A **selector-predicate** form is supported in feature `data` (e.g.
@@ -284,13 +335,23 @@ Plastiq has the better substrate and should expose it.
 - **FR-18a** A usage meter shows tokens (per turn/session) and paid-job counts. Before
   each **paid** 3D/image-gen job the user must confirm (one click). Parametric LLM calls
   on BYO/Ollama run without confirmation. An agent **step cap** is always enforced.
+  *(Shipped: usage is session-scoped — `aiStore.sessionUsage` accumulates each run's
+  `UsageMeter` snapshot via `recordRunUsage` (tokens per turn AND cumulative, plus the
+  paid-job count); rendered in the panel (`generation-usage` per run +
+  `generation-usage-session`) and the palette (`palette-usage-session`), both fed by the
+  same store.)*
 
 ### Chat / UX / persistence
 
 - **FR-19** The generation UI is available as a **dockable side panel** in the Design
   workspace **and** via a **command palette/modal**; both provide prompt input, image
   attach + route choice, streaming response, a visible tool-call/build trace, and an
-  error surface, driving the same `agentRunner`.
+  error surface, driving the same `agentRunner`. *(Shipped: both surfaces reached this
+  parity — `GenerationPanel.tsx` and `CommandPalette.tsx`. The palette streams assistant
+  text live, shows the tool-call/build trace while a run is in flight, attaches an image
+  with the parametric-vision / creative-image→3D route toggle and a per-job 3D-gen provider
+  select, and surfaces errors on its own line; conversation + trace persist via the shared
+  `aiStore`.)*
 - **FR-20** Generation writes into the active project; the existing autosave + crash
   recovery persist the resulting document unchanged. The **conversation + generation
   trace are persisted per project** (FR/decision 14) and reloaded with it.
@@ -339,8 +400,9 @@ apps/plastiq/src/ai/
     types.ts             # ChatProvider, ChatMessage(+image), ToolDef, StreamEvent
     anthropic.ts         # AnthropicAdapter (@anthropic-ai/sdk, dangerouslyAllowBrowser, vision)
     openaiCompatible.ts  # openai SDK + baseURL → Ollama / OpenAI / proxy
+    llama-mlx.ts         # LlamaMlxAdapter (id:"llama-mlx") — local llama-mlx-server :11543/v1, Bearer; wraps openaiCompatible
     registry.ts          # construct adapter + model from settings; tool-capability preflight
-    models.ts            # curated model catalog per provider (Appendix A)
+    models.ts            # curated model catalog per provider (Appendix A) + probeModelCapabilities (live preflight)
   tools/
     buildPart.ts         # validate + mm→SI + atomic loadDocument; edit-context assembly
     inspectGeometry.ts   # build + enumerate faces/edges as text
@@ -377,7 +439,7 @@ packages/cad/src/
 // apps/plastiq/src/ai/providers/types.ts
 export interface ToolDef { name: string; description: string; parameters: JsonSchema; }
 export interface ChatProvider {
-  readonly id: "anthropic" | "openai-compatible";
+  readonly id: "anthropic" | "openai-compatible" | "llama-mlx";
   readonly supportsVision: boolean;
   readonly supportsTools: boolean;          // set after preflight (FR-5b)
   stream(req: {
@@ -393,8 +455,12 @@ export interface ChatProvider {
   dangerouslyAllowBrowser: true })`), adaptive thinking, streaming, tools, image blocks.
 - **OpenAICompatAdapter** uses the official `openai` SDK with a configurable `baseURL`
   (Ollama `http://localhost:11434/v1`, OpenAI, or the proxy) and `tools`/`tool_calls`.
-- **Proxy** is any adapter pointed at a proxy base-URL (key held server-side) — a
-  settings change, satisfying FR-5.
+- **LlamaMlxAdapter** (`id: "llama-mlx"`, shipped since r3 — `providers/llama-mlx.ts`)
+  wraps `OpenAICompatAdapter` for a local **llama-mlx-server** (`http://127.0.0.1:11543/v1`,
+  Bearer key on by default, tools always on, vision optional) — a distinct provider id, not
+  a base-URL preset of the Ollama path.
+- **Proxy** is any of the above adapters pointed at a proxy base-URL (key held server-side)
+  — a settings change, satisfying FR-5; it is **not** a separate adapter class.
 
 ### 5.3 Why the tool loop, not one shot
 
@@ -439,7 +505,8 @@ step cap. Because our inspection is structured text (faces/edges with normals), 
 ### 6.3 Selection — structured-ref feedback loop (FR-11, FR-12)
 
 - `inspect_geometry` builds the current doc and serializes the `TaggedMesh`:
-  - faces: `{ index, normal:[x,y,z], centroid:[x,y,z], area, kind:"planar"|"cylindrical"|… }`
+  - faces: `{ index, normal:[x,y,z], centroid:[x,y,z], area, kind:"planar"|"cylindrical"|"curved", radius? }`
+    (a real cylinder fit sets `kind:"cylindrical"` + `radius` (mm); see `tools/inspectGeometry.ts`)
   - edges: `{ index, faceNormals:[[..],[..]], midpoint:[x,y,z], length, straight? }`
   (all derived from `FaceGroup`/`TaggedEdge` — `mesh/tagged.ts`).
 - The model picks indices; the client resolves index → `FaceRef`/`EdgeRef` and writes
@@ -488,7 +555,10 @@ step cap. Because our inspection is structured text (faces/edges with normals), 
   `three/Scene.tsx` gain a branch that builds a `THREE.Mesh`/`Group` directly from a mesh
   document; `worker/protocol.ts` is untouched.
 - **Three input modes (decision 15):**
-  - *text→image→3D*: `ImageGenProvider.generate(prompt)` → image → `MeshGenProvider`.
+  - *text→image→3D*: a **user-selected** `ImageGenProvider.generate(prompt)` → image →
+    `MeshGenProvider`. `fal.ts` ships three image models — `fal:flux-schnell` (default),
+    `fal:flux-dev`, `fal:fast-sdxl` — resolved by `settings.imageProviderId` with a per-job
+    panel selector (decision 6 applies to image providers too).
   - *image→3D*: user image → `MeshGenProvider`.
   - *text→3D*: providers that support direct text→3D.
 - **Providers (decision 6, multi-selectable, no default):** `fal.ts` exposes Tripo
@@ -521,7 +591,10 @@ step cap. Because our inspection is structured text (faces/edges with normals), 
 ### 6.8 Settings, secrets, first run, cost (FR-4, FR-5a, FR-18a, decisions 17/19/21)
 
 - **First run** shows a neutral chooser (no default). Options: detect-and-use local
-  Ollama, or enter a key for Anthropic/OpenAI/other, or set a proxy URL.
+  Ollama, or enter a key for Anthropic/OpenAI/other, or set a proxy URL. *(Shipped:
+  "detect-and-use" is a live `detectOllama` GET `/api/tags` probe (`ollamaDetect.ts`) that
+  lists the installed models tool-capable-first, or shows an actionable, `OLLAMA_ORIGINS`-aware
+  "not detected" hint when nothing answers — replacing the earlier blind qwen2.5 save.)*
 - **Settings** stores provider + model + base-URL + keys in IndexedDB (never in
   documents/logs), behind a `keyResolver` indirection so a proxy can supply them later
   with no call-site change (decision 21).
@@ -531,10 +604,18 @@ step cap. Because our inspection is structured text (faces/edges with normals), 
 ### 6.9 Model catalog & preflight (FR-5b, decision 22)
 
 - `ai/providers/models.ts` holds a curated catalog (Appendix A) per provider with a
-  `supportsTools`/`supportsVision` hint; the Settings UI offers the list + a free-text
-  field. On selection, `registry.ts` **preflights** tool capability (a cheap tools-enabled
-  probe, or the provider's model metadata) and warns if the model can't do tool calling
-  (which would break `build_part`).
+  `supportsTools`/`supportsVision` hint plus **two preflight layers**: `preflightModel` (a
+  synchronous static catalog lookup, instant + offline) and `probeModelCapabilities` (a LIVE
+  async probe that supersedes it when the endpoint can answer). The Settings UI offers the
+  list + a free-text field and, on each selection change, fires the live probe **debounced +
+  abortable** (`SettingsPanel.tsx`): an Ollama endpoint answers via `POST /api/show` model
+  metadata (`capabilities` ∋ `"tools"`/`"vision"`); any other OpenAI-compatible endpoint (incl.
+  llama-mlx-server — same `/v1` surface) via a minimal tools-enabled chat probe; Anthropic
+  stays on catalog truth (no cheap metadata endpoint, no user tokens burned); an
+  offline/unreachable/aborted probe falls back to the static catalog result (as
+  `verdict:"unverified"`) so it never blocks. `registry.ts` **consumes** the probed result
+  (falling back to `preflightModel` when none was passed), and the UI warns when the model
+  can't — or isn't known to — tool-call, which would break `build_part`.
 
 ---
 
@@ -635,7 +716,9 @@ no swallowed errors; a failed generation is a no-op on the live document.
 
 - **R5.1** Per-project conversation/trace persistence (FR-20, decision 14).
 - **R5.2** Full deterministic E2E (validation, build, edit, selectors, GLB import, mm→SI, atomic apply, mesh doc). Always-on.
-- **R5.3** LLM-boundary E2E against local Ollama (CI) + opt-in keyed Anthropic.
+- **R5.3** LLM-boundary E2E against a **local** Ollama (`ai-ollama.spec.ts` — real
+  model-in-the-loop; runs locally via the documented command, self-skips when Ollama is
+  unreachable, so it is **not a CI gate**) + opt-in keyed Anthropic.
 - **R5.4** Docs: README section, in-product help, this spec kept in sync.
 
 ---
@@ -651,14 +734,20 @@ Per repo CLAUDE.md, **E2E must be real** (no mocked components). Strategy:
   tessellation, incl. per-feature error feedback and edit-from-context; `inspect_geometry`
   enumeration; atomic-apply (bad doc leaves live doc intact); mesh-document load/render.
 - **E2E (Playwright, no mocks):**
-  - *Deterministic pipeline* (always-on): drive the app with **fixed known-good** tool
-    inputs through the real handlers (not the LLM) — create, edit, dress-up via predicate,
-    and mesh-document import from a real GLB fixture → real worker build → assert rendered
-    geometry + timeline + autosave. Exercises every real component except the model.
-  - *LLM boundary* (real model, realistic stand-in): run against a **real local Ollama**
-    with a tool-capable model in CI — a legitimate no-mock E2E of prompt→tool→document. An
-    **opt-in** keyed Anthropic E2E covers the hosted + vision paths (not default CI;
-    nondeterministic, costs money, needs a secret).
+  - *Deterministic pipeline* (always-on, CI-gating — `ai-deterministic.spec.ts`): drive the
+    app with **fixed known-good** tool inputs through the real handlers (not the LLM) —
+    create, edit, dress-up via a selector predicate (`convexEdges` fillet), and
+    mesh-document import from a real GLB fixture → real worker build → assert rendered
+    geometry + timeline + autosave-across-reload. Exercises every real component except the
+    model.
+  - *LLM boundary* (real model, realistic stand-in — `ai-ollama.spec.ts`): a genuine
+    no-mock, model-in-the-loop E2E (prompt → live **local** Ollama → agent loop → real
+    `build_part` → OCCT worker → rendered part). It runs **locally** against a reachable
+    Ollama via the documented command (`OLLAMA_MODEL=… pnpm e2e --grep "real AI"`) and
+    **self-skips cleanly** when Ollama is unreachable. CI never installs or starts Ollama,
+    so it is **not a CI gate** (nor is whether it has passed against a live backend recorded
+    here). An **opt-in** keyed Anthropic E2E covers the hosted + vision paths
+    (nondeterministic, costs money, needs a secret).
   - *Creative + cloud-gen path*: E2E against a real fal sandbox/account is **opt-in/manual**
     (external + paid); the deterministic mesh-import/render path is covered always-on with
     real GLB fixtures.
@@ -729,8 +818,11 @@ decision 16 / FR-10a (user-routed, in v1).
 ## 14. Acceptance criteria (definition of done for SPEC-6 v1)
 
 1. From a text prompt, the app produces a valid `CadDocument` that builds, renders, and
-   appears in the timeline with editable parameters — via a user-chosen provider
-   (Anthropic BYO key **and** local Ollama both verified). (FR-1…FR-10, FR-5a/5b)
+   appears in the timeline with editable parameters — via a user-chosen provider. The
+   build → render → timeline path is proven end-to-end by the always-on, model-free
+   deterministic E2E; the live-provider runs (local Ollama via `ai-ollama.spec.ts`; opt-in
+   keyed Anthropic) are local/opt-in and are **not asserted-passing here**. (FR-1…FR-10,
+   FR-5a/5b)
 2. With a part open, a prompt **edits** it correctly (the AI worked from the current
    document). (FR-6a)
 3. The AI applies a fillet/chamfer/shell to the right edges/faces using both the
@@ -740,12 +832,21 @@ decision 16 / FR-10a (user-routed, in v1).
    routed to creative, produces a mesh. (FR-10a/10b)
 5. The creative path produces a GLB **mesh document** (via text→image→3D, image→3D, and
    text→3D) that renders and exports, behind a paid-job confirm, with the external-service
-   dependency disclosed. (FR-15…FR-18a)
+   dependency disclosed. (FR-15…FR-18a) *(Verification status: `meshgen/fal.ts` is a
+   complete, real submit→poll fal client — three 3D models (Tripo/Meshy/Hunyuan) + three
+   image models (FLUX schnell/dev, Fast SDXL) — but it has **not** been executed against the
+   live fal API here; the live run is the opt-in, keyed `createMesh.integration.test.ts`
+   (`describe.skipIf(!FAL_KEY)`), and endpoint ids/result fields are doc-verified only. The
+   always-on GLB import→render path IS covered by the deterministic E2E with a real GLB
+   fixture.)*
 6. Invalid AI output never corrupts the live document; errors round-trip to the model.
    (FR-7, FR-21)
 7. Conversation/trace persists per project and reloads. (FR-20)
-8. Deterministic-pipeline E2E is green and always-on; the local-Ollama LLM-boundary E2E
-   is green in CI; zero regressions to the existing suite. (§10)
+8. The deterministic-pipeline E2E (`ai-deterministic.spec.ts`) is always-on and CI-gating
+   (create, edit, selector-predicate dress-up, GLB mesh-document import, timeline +
+   autosave-across-reload); the local-Ollama LLM-boundary E2E (`ai-ollama.spec.ts`) is a
+   real model-in-the-loop test that runs **locally** and self-skips in CI — it is **not a
+   CI gate**; zero regressions to the existing suite. (§10)
 
 ---
 
@@ -760,7 +861,8 @@ decision 16 / FR-10a (user-routed, in v1).
 | Provider | Curated models | Notes |
 |---|---|---|
 | Anthropic | `claude-opus-4-8` (quality), `claude-sonnet-4-6` (balanced), `claude-haiku-4-5` (fast) | All support tools + **vision**. Adaptive thinking. |
-| Ollama (local) | `qwen3`/`qwen2.5` (14B–32B+), `llama3.3:70b`, `gpt-oss`, `deepseek-r1:32b`, `glm-4.x`, `llama3.1:8b` (fast/dev) | Tool calling native (Ollama ≥0.4). **≥14B recommended** for reliable tool selection; most are **not** vision-capable (R-9). |
+| Ollama (local) | `qwen3`/`qwen2.5` (14B–32B+), `llama3.3:70b`, `gpt-oss`, `deepseek-r1:32b`, `glm-4`, `llama3.1:8b` (fast/dev) | Tool calling native (Ollama ≥0.4). **≥14B recommended** for reliable tool selection; most are **not** vision-capable (R-9). |
+| llama-mlx-server (local MLX) | `mlx-community/Qwen2.5-{14B,7B,3B,0.5B}-Instruct-4bit` | `:11543/v1`, Bearer key (on by default). Grammar-backed tool calls ⇒ reliable regardless of model size; the server auto-discovers on-disk MLX models, so any served model works via free-text + preflight. Not vision-capable by default. |
 | OpenAI / other OpenAI-compatible | free-text (e.g. current GPT tool-models) | Via `openai` SDK + `baseURL`; preflight tools. |
 
 ### 3D generation (multi-selectable, no default — decision 6)
@@ -773,8 +875,12 @@ decision 16 / FR-10a (user-routed, in v1).
 
 ### Image generation (for text→image→3D — decision 15)
 
-Pluggable `ImageGenProvider` (e.g. a fal image model); selectable, BYO key (proxy-later).
-Exact default deferred to R4.3 (provider is pluggable, so not load-bearing).
+Pluggable `ImageGenProvider`, selectable, BYO key (proxy-later). **Shipped**
+(`meshgen/fal.ts` `falImageProviders`): three fal text→image models — `fal:flux-schnell`
+(fast, cheapest; the **default** when `settings.imageProviderId` is unset), `fal:flux-dev`
+(higher quality), and `fal:fast-sdxl` — offered as a per-job selector in the panel (and the
+palette's creative route). Endpoint ids are doc-verified against fal's model registry
+(2026-07); like the rest of `fal.ts` they have not been run against the live API here.
 
 **Research sources:** Ollama tool support / model lists
 ([Ollama blog](https://ollama.com/blog/tool-support),

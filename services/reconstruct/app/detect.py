@@ -138,7 +138,11 @@ def _volume_ok(mesh: trimesh.Trimesh, res: SolidResult, tol: float) -> bool:
 
 
 def try_single_primitive(
-    vertices: np.ndarray, faces: np.ndarray, rel_tol: float = 0.02, vol_tol: float = 0.05
+    vertices: np.ndarray,
+    faces: np.ndarray,
+    rel_tol: float = 0.02,
+    vol_tol: float = 0.05,
+    errors: Optional[list[str]] = None,
 ) -> Optional[SolidResult]:
     """Deterministically test whether the whole mesh is a single analytic primitive
     (sphere / cylinder / cone) and, if so, return its watertight solid. Beyond a low
@@ -146,7 +150,11 @@ def try_single_primitive(
     cylinder/cone; distinct-normal count for sphere) so a box — whose corners lie on a
     circumscribed circle/sphere — is NOT misread as a primitive, AND a VOLUME gate so a partial
     primitive (oblique-cut / flat-sided cylinder) isn't rebuilt as a full one. Returns None if
-    nothing qualifies; the caller falls back to the planar/faceted path. Must be a valid solid."""
+    nothing qualifies; the caller falls back to the planar/faceted path. Must be a valid solid.
+
+    `errors` (7-L2): an optional collector the hypothesis-level exception handlers append to,
+    so the caller can tell a clean non-match (None, nothing collected) from a swallowed crash
+    (None, messages collected). Fallback behavior is unchanged either way."""
     mesh = trimesh.Trimesh(vertices=np.asarray(vertices, dtype=float),
                            faces=np.asarray(faces, dtype=np.int64), process=False)
     fn = np.asarray(mesh.face_normals, dtype=float)
@@ -158,8 +166,9 @@ def try_single_primitive(
             sf = fit_sphere(mesh.vertices)
             if sf.radius > 0:
                 candidates.append(("sphere", sf.rms / sf.radius, sphere_solid(sf)))
-    except Exception:  # noqa: BLE001 — a failed hypothesis is simply not a candidate
-        pass
+    except Exception as e:  # noqa: BLE001 — a failed hypothesis is simply not a candidate…
+        if errors is not None:  # …but the crash is surfaced, not silently swallowed (7-L2)
+            errors.append(f"sphere hypothesis: {type(e).__name__}: {e}")
 
     # Cylinder + cone — the lateral region about the dominant axis; gate on angular coverage.
     try:
@@ -176,8 +185,9 @@ def try_single_primitive(
             cone = fit_cone(cv, fn[cone_side])
             if cone.base_radius > 0:
                 candidates.append(("cone", cone.rms / cone.base_radius, cone_solid(cone)))
-    except Exception:  # noqa: BLE001
-        pass
+    except Exception as e:  # noqa: BLE001 — same rationale (and same 7-L2 surfacing) as above
+        if errors is not None:
+            errors.append(f"cylinder/cone hypothesis: {type(e).__name__}: {e}")
 
     good = [
         (name, err, res)

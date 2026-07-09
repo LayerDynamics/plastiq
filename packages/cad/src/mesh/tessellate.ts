@@ -8,7 +8,6 @@
 import type { TopoDS_Edge, TopoDS_Face, TopoDS_Shape } from "opencascade.js";
 
 import type { Occt } from "../oc/init.js";
-import type { Vec3 } from "../math/index.js";
 import type { Solid } from "../solid/solid.js";
 import {
   MESH_PURPOSE,
@@ -38,15 +37,6 @@ const DEFAULT_ANGULAR = 0.5;
  */
 function isMissingTriangulationError(err: unknown): boolean {
   return err instanceof Error && err.message.includes("no triangulation");
-}
-
-/** `faceCentroid` on an adjacent face, freeing the face handle even on a throw. */
-function ownedFaceCentroid(oc: Occt, face: TopoDS_Face): Vec3 {
-  try {
-    return faceCentroid(oc, face);
-  } finally {
-    face.delete();
-  }
 }
 
 /** Discretize an edge into a flat world-space polyline `[x,y,z, …]`. */
@@ -95,6 +85,9 @@ export function tessellateTagged(
   const vertices: number[] = [];
   const indices: number[] = [];
   const faceGroups: FaceGroup[] = [];
+  // Face handles retained through the edge pass (index == faceId), so a centroid-key
+  // collision can be resolved by exact B-rep identity (IsSame). Freed after that pass.
+  const faceShapes: TopoDS_Face[] = [];
   let droppedFaces = 0;
 
   // --- Faces: per-face render groups + outward-normal signature.
@@ -156,15 +149,44 @@ export function tessellateTagged(
     trsf.delete();
     handle.delete();
     loc.delete();
-    face.delete();
+    // NOT freed yet: retained (index == faceId, matching the push order above) for
+    // exact-identity resolution in the edge pass.
+    faceShapes.push(face);
   }
   fexp.delete();
 
-  // Centroid → face-group id, so an edge can record which two faces it joins (M2: the
+  // Centroid → face-group ids, so an edge can record which two faces it joins (M2: the
   // dihedral-convexity test needs the adjacent faces' centroids). The face centroid is computed
   // by the SAME `faceCentroid` as `faceGroups`, so the key matches exactly. (ADR-0002.)
-  const centroidToFaceId = new Map<string, number>();
-  for (const g of faceGroups) centroidToFaceId.set(g.centroid.join(","), g.faceId);
+  // Distinct faces CAN share an area centroid (a shelled tube's inner and outer lateral walls
+  // both centre on the axis midpoint), so each key holds a BUCKET of candidate ids — a
+  // multi-id bucket is resolved below by exact B-rep identity (IsSame) against the retained
+  // face handles, never by last-inserted-wins (which silently recorded the WRONG faceId).
+  const centroidToFaceIds = new Map<string, number[]>();
+  for (const g of faceGroups) {
+    const key = g.centroid.join(",");
+    const bucket = centroidToFaceIds.get(key);
+    if (bucket) bucket.push(g.faceId);
+    else centroidToFaceIds.set(key, [g.faceId]);
+  }
+
+  let unresolvedEdgeFaces = 0;
+  /** The face-group id of an edge-adjacent `face` (still owned by the caller): unique-centroid
+   * fast path, exact `IsSame` identity within a centroid-collision bucket. `-1` — counted in
+   * `unresolvedEdgeFaces` so the residual data loss stays visible (mirroring droppedFaces /
+   * droppedEdges) — only when the face matches no group at all. */
+  const resolveAdjacentFaceId = (face: TopoDS_Face): number => {
+    const bucket = centroidToFaceIds.get(faceCentroid(oc, face).join(","));
+    if (bucket) {
+      if (bucket.length === 1) return bucket[0]!;
+      for (const id of bucket) {
+        const retained = faceShapes[id];
+        if (retained !== undefined && face.IsSame(retained)) return id;
+      }
+    }
+    unresolvedEdgeFaces++;
+    return -1;
+  };
 
   // --- Edges: world polylines + two adjacent-face normals (EdgeRef signature).
   const edges: TaggedEdge[] = [];
@@ -184,12 +206,25 @@ export function tessellateTagged(
         // exactly the silent-corruption this avoids.
         const [na, nb] = adjacentFaceNormals(oc, faceList);
         // The two adjacent faces' ids, same order as [na, nb] (First/Last, matching
-        // adjacentFaceNormals). Resolved by centroid, which is byte-identical to the face group's.
-        const cA = ownedFaceCentroid(oc, oc.TopoDS.Face_1(faceList.First_1()));
-        const cB =
-          faceList.Size() >= 2 ? ownedFaceCentroid(oc, oc.TopoDS.Face_1(faceList.Last_1())) : cA;
-        const idA = centroidToFaceId.get(cA.join(",")) ?? -1;
-        const idB = centroidToFaceId.get(cB.join(",")) ?? -1;
+        // adjacentFaceNormals). Resolved by centroid — byte-identical to the face group's —
+        // plus exact identity on a collision. Each handle stays alive through resolution (the
+        // collision path compares it via IsSame) and is freed even if faceCentroid throws.
+        const fA = oc.TopoDS.Face_1(faceList.First_1());
+        let idA: number;
+        try {
+          idA = resolveAdjacentFaceId(fA);
+        } finally {
+          fA.delete();
+        }
+        let idB = idA;
+        if (faceList.Size() >= 2) {
+          const fB = oc.TopoDS.Face_1(faceList.Last_1());
+          try {
+            idB = resolveAdjacentFaceId(fB);
+          } finally {
+            fB.delete();
+          }
+        }
         const positions = discretizeEdge(oc, edge, deflection);
         const mid = edgeMidpoint(oc, edge);
         edges.push({
@@ -219,6 +254,8 @@ export function tessellateTagged(
     }
   } finally {
     edgeFaceMap.delete();
+    // The retained face handles have served identity resolution — free them (throw path too).
+    for (const f of faceShapes) f.delete();
   }
 
   // --- Vertices: unique B-rep corners.
@@ -235,5 +272,14 @@ export function tessellateTagged(
   }
   vertMap.delete();
 
-  return { vertices, indices, faceGroups, edges, vertexPoints, droppedFaces, droppedEdges };
+  return {
+    vertices,
+    indices,
+    faceGroups,
+    edges,
+    vertexPoints,
+    droppedFaces,
+    droppedEdges,
+    unresolvedEdgeFaces,
+  };
 }

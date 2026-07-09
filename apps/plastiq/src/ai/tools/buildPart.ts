@@ -95,8 +95,11 @@ export async function buildPart(input: unknown, deps: BuildPartDeps): Promise<Bu
 
 /** App probe: build the document in the geometry worker. A null mesh (the worker's
  * signal for a failed/empty build — see bridge.build) is reported as an error; the
- * timeline already flags the offending feature via the Viewport's rebuild. */
-export function geometryClientProbe(client: GeometryClient): BuildProbe {
+ * timeline already flags the offending feature via the Viewport's rebuild. Accepts
+ * anything with GeometryClient's `build` shape: the app wraps the `__plastiqBuild`
+ * seam the Viewport publishes off its single worker (agentTurn.buildTurnTools), and a
+ * direct GeometryClient works too. */
+export function geometryClientProbe(client: Pick<GeometryClient, "build">): BuildProbe {
   return async (doc) => {
     try {
       const mesh = await client.build(doc);

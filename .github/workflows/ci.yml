@@ -95,7 +95,7 @@ jobs:
           retention-days: 7
           if-no-files-found: ignore
 
-  # Python services (FastAPI): pytest for services/{reconstruct,capture,nerf}. Conda envs
+  # Python services (FastAPI): pytest for services/{reconstruct,capture,nerf,photogrammetry}. Conda envs
   # come from each service's environment.yml via micromamba (pythonocc-core is conda-forge
   # only). Runner feasibility — every claim below was verified against these env files
   # (2026-07, mlx 0.31.2 / occt 7.9.3), not assumed:
@@ -108,7 +108,10 @@ jobs:
   #    macOS but converges to 1.57e-3 on linux-64 with the SAME occt/pythonocc 7.9.3
   #    (platform numerics, measured; boundary accuracy still passes).
   #
-  #  • capture/nerf (MLX training services) run ONLY their MLX-free job-store tests here:
+  #  • capture/nerf/photogrammetry (MLX services) run ONLY their MLX-free tests here — the
+  #    job-store suite (tests/test_jobs.py) for all three, plus photogrammetry's MLX-free
+  #    emit-contract suite (tests/test_emit.py; app/emit.py + its tests/synthetic import chain
+  #    are numpy/stdlib only — verified no `mlx` enters sys.modules):
   #    - GitHub macOS runners expose no Metal device (MTLCreateSystemDefaultDevice returns
   #      nil — actions/runner-images#1779), and MLX hard-aborts the whole process at import
   #      when no Metal device is visible (ml-explore/mlx#3148) — a fatal signal, not an
@@ -133,6 +136,8 @@ jobs:
             pytest-args: tests/test_jobs.py
           - service: nerf
             pytest-args: tests/test_jobs.py
+          - service: photogrammetry
+            pytest-args: tests/test_jobs.py tests/test_emit.py
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
 

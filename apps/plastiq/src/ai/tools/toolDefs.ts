@@ -18,6 +18,10 @@ import type { CadDocument } from "../../store/types.js";
 /** The tool whose call ends the agent loop (CADAM-style finalizer). */
 export const ANSWER_USER = "answer_user";
 
+/** The creative 3D-gen tool (the paid path). Named so the prompt assembly can derive the
+ * creative guidance from the actual tool surface (runGeneration) without string drift. */
+export const CREATE_MESH = "create_mesh";
+
 /** JSON Schema for the authoring document, derived from the single zod source so the
  * tool contract never drifts from the validator. Falls back to a permissive object
  * schema if zod's converter can't represent the schema — the handler's zod parse is the
@@ -78,7 +82,7 @@ export function toolDefs(opts: { creative: boolean }): ToolDef[] {
   ];
   if (opts.creative) {
     defs.push({
-      name: "create_mesh",
+      name: CREATE_MESH,
       description:
         "Generate a 3D mesh (organic/sculpted geometry the parametric kernel cannot author) via a cloud provider, as a NEW mesh document. Modes: text2img3d (generate an image then 3D), img3d (an attached image), text3d (direct text→3D where supported). This is a PAID job; the user confirms before it runs.",
       parameters: {
@@ -107,7 +111,10 @@ export interface AgentToolDeps {
   currentDoc: () => CadDocument;
   /** create_mesh deps — when present, the creative tool is offered + wired. */
   createMesh?: CreateMeshDeps;
-  /** M5: called when the agent commits a (validated) decomposition plan, so the trace/UX can show it. */
+  /** M5: called when the agent commits a (validated) decomposition plan, so the trace/UX
+   * can show it (9-M1). Both production runners inject it: buildTurnTools (agentTurn.ts)
+   * records the FULL plan into the conversation trace (kind "plan") and the panel renders
+   * it structured; the headless session (headless/nodeBuild.ts) reports it via plan(). */
   onPlan?: (plan: PlanGraph) => void;
 }
 
@@ -186,7 +193,7 @@ export function buildAgentTools(deps: AgentToolDeps): AgentTools {
 
   if (deps.createMesh) {
     const cm = deps.createMesh;
-    handlers["create_mesh"] = async (args) => {
+    handlers[CREATE_MESH] = async (args) => {
       const r = await createMesh(args, cm);
       const detail =
         r.status === "ok"

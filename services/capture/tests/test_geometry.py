@@ -4,8 +4,11 @@ to numpy (np.asarray) for assertions. See docs/adr/0006.
 """
 
 import numpy as np
+import pytest
 
-from app.geometry import PinholeCamera, depth_to_normals, unproject_depth
+pytest.importorskip("mlx.core")
+
+from app.geometry import PinholeCamera, depth_to_normals, unproject_depth  # noqa: E402
 
 
 def _cam(h: int = 8, w: int = 8) -> PinholeCamera:

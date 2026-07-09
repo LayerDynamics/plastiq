@@ -33,6 +33,19 @@ def _psnr(pred: mx.array, target: mx.array) -> float:
     return -10.0 * math.log10(max(mse, 1e-10))
 
 
+def _holdout_split(m: int, seed: int, *, max_holdout: int = 4096) -> tuple[np.ndarray, np.ndarray]:
+    """Seeded, disjoint (train, held-out) split of `m` ray indices. ~10% of the rays (capped at
+    `max_holdout`, at least 1 when m > 1) are held out BEFORE training and never seen by the trainer;
+    the reported PSNR is evaluated on them, so it is a genuine held-out quality signal."""
+    n_hold = int(min(max_holdout, max(1, m // 10), max(m - 1, 0)))
+    rng = np.random.default_rng(seed + 2)
+    hold = np.sort(rng.choice(m, size=n_hold, replace=False)).astype(np.int32)
+    mask = np.ones(m, dtype=bool)
+    mask[hold] = False
+    train = np.nonzero(mask)[0].astype(np.int32)
+    return train, hold
+
+
 def train_and_export(
     transforms: dict,
     images: np.ndarray,
@@ -41,10 +54,26 @@ def train_and_export(
     iters: int = 500,
     grid_res: int = 64,
     rays_per_batch: int = 1024,
+    encoding: str = "frequency",
+    importance_samples: int = 0,
     seed: int = 0,
 ) -> dict:
     """Train a field on posed views and export its surface. `transforms` is a transforms.json dict;
-    `images` is `(N,H,W,3)` in [0,1] parallel to its frames. Returns the wire result dict."""
+    `images` is `(N,H,W,3)` in [0,1] parallel to its frames. Returns the wire result dict.
+
+    `encoding` picks the NeRF position encoding (`frequency` | `hashgrid`, `method="nerf"` only —
+    the neus SDF trunk consumes raw coordinates by design, so `hashgrid` there is a ValueError, not
+    a silent no-op); `importance_samples > 0` adds the fine PDF (hierarchical) sampling pass, which
+    both methods support."""
+    if encoding not in ("frequency", "hashgrid"):
+        raise ValueError(f"unknown encoding {encoding!r} (expected 'frequency' or 'hashgrid')")
+    if encoding == "hashgrid" and method != "nerf":
+        raise ValueError(
+            "encoding 'hashgrid' requires method 'nerf' — the 'neus' SDF trunk consumes raw "
+            "coordinates by design (geometric init), so it has no position encoding to swap"
+        )
+    if importance_samples < 0:
+        raise ValueError("importance_samples must be >= 0")
     out = parse_transforms(transforms, images)
     if len(out.poses) != len(images):
         raise ValueError(f"{len(out.poses)} poses but {len(images)} images")
@@ -61,18 +90,31 @@ def train_and_export(
     near = max(0.05, cam_dist - _SCENE_RADIUS)
     far = cam_dist + _SCENE_RADIUS
     cfg = NerfConfig(
-        field=FieldConfig(hidden=64, layers=4),
-        sampler=SamplerConfig(n_samples=48, near=near, far=far),
+        # use_hashgrid is only read by the NeRFField (method="nerf") — the hashgrid+neus combination
+        # was rejected above, so the flag is never set where it would be silently ignored.
+        field=FieldConfig(hidden=64, layers=4, use_hashgrid=encoding == "hashgrid"),
+        sampler=SamplerConfig(n_samples=48, near=near, far=far, importance_samples=importance_samples),
     )
 
-    model = VolSDFModel(cfg, seed=seed) if method == "neus" else VanillaNeRF(cfg, seed=seed)
-    Trainer(model, seed=seed).train(origins, dirs, target, iters=iters, rays_per_batch=rays_per_batch)
+    # Deterministic held-out split: ~10% of the rays (seeded, capped) are excluded from the training
+    # set entirely and kept for the reported PSNR.
+    train_idx_np, hold_idx_np = _holdout_split(origins.shape[0], seed)
+    train_idx, hold_idx = mx.array(train_idx_np), mx.array(hold_idx_np)
+    hold_o, hold_d, hold_t = mx.take(origins, hold_idx, 0), mx.take(dirs, hold_idx, 0), mx.take(target, hold_idx, 0)
+    origins, dirs, target = mx.take(origins, train_idx, 0), mx.take(dirs, train_idx, 0), mx.take(target, train_idx, 0)
 
-    # PSNR on a held-in ray sample (quality signal for the report).
-    m = origins.shape[0]
-    idx = mx.array(np.random.default_rng(seed + 2).integers(0, m, size=min(m, 4096)).astype(np.int32))
-    pred = model.render_rays(mx.take(origins, idx, 0), mx.take(dirs, idx, 0), key=make_key(seed + 1))
-    psnr = _psnr(pred, mx.take(target, idx, 0))
+    model = VolSDFModel(cfg, seed=seed) if method == "neus" else VanillaNeRF(cfg, seed=seed)
+    # Tiny scenes (a handful of low-res views) have so few rays that subsampling them with replacement
+    # only injects gradient noise — a short run then converges or collapses on the luck of the batch
+    # draw. Train full-batch when the training set is within 2× the requested batch; real captures
+    # (m ≫ batch) keep the requested batch size.
+    m_train = int(origins.shape[0])
+    batch = m_train if m_train <= 2 * rays_per_batch else rays_per_batch
+    Trainer(model, seed=seed).train(origins, dirs, target, iters=iters, rays_per_batch=batch)
+
+    # PSNR on the held-out rays (never trained on) — the genuine held-out quality signal for the report.
+    pred = model.render_rays(hold_o, hold_d, key=make_key(seed + 1))
+    psnr = _psnr(pred, hold_t)
 
     grid_bound = _SCENE_RADIUS + 0.1
     if method == "neus":
@@ -92,4 +134,8 @@ def train_and_export(
         "psnr": float(psnr),
         "method": method,
         "iters": int(iters),
+        # The effective sampling/encoding settings the served model actually trained with (additive
+        # to the frozen SPEC-11 §5 keys above).
+        "encoding": encoding,
+        "importance_samples": int(importance_samples),
     }

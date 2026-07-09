@@ -1,6 +1,6 @@
 // tessellateTagged edge-pass error paths — UNIT (fake kernel, NOT real OCCT).
 //
-// Three behaviours under test (Review #18):
+// Five behaviours under test (Review #18 + finding 8-M3):
 //  1. The per-edge catch is NARROW: only the documented missing-triangulation
 //     case (an adjacent face dropped in the face pass) skips the edge — counted
 //     in `droppedEdges` — while any other error re-throws instead of silently
@@ -10,6 +10,13 @@
 //     re-throw path too.
 //  3. Emitted edges keep COMPACT consecutive edgeIds (`edges[e.edgeId] === e`) —
 //     a skipped edge leaves no gap, matching how faceId skips dropped faces.
+//  4. Two DISTINCT faces with a byte-identical area centroid (8-M3: a shelled
+//     tube's inner/outer walls) resolve to their OWN ids by exact B-rep identity
+//     (IsSame) — never last-inserted-wins. The fake kernel pins the byte-equal
+//     key deterministically; real GProp quadrature noise makes the equality
+//     build-dependent (see tessellate.collision.test.ts for the real-OCCT side).
+//  5. An edge-adjacent face that matches NO face group resolves to faceId -1 and
+//     is COUNTED in `unresolvedEdgeFaces` — visible data loss, never silent.
 //
 // Same `.delete()`-spy pattern as action/cleanup.unit.test.ts.
 
@@ -45,17 +52,33 @@ interface FakeFace {
   label: string;
   gpropThrows: boolean;
   triNull: boolean;
+  /** Area centroid handed out via the fake GProps — controls the map key. */
+  centroid: readonly [number, number, number];
   Orientation_1: () => string;
+  /** Exact B-rep identity, as the collision-bucket resolution uses it. */
+  IsSame: (other: FakeFace) => boolean;
   delete: () => void;
 }
 
-const face = (label: string, opts?: { gpropThrows?: boolean; triNull?: boolean }): FakeFace => ({
-  label,
-  gpropThrows: opts?.gpropThrows ?? false,
-  triNull: opts?.triNull ?? false,
-  Orientation_1: () => "FORWARD",
-  delete: del(label),
-});
+const face = (
+  label: string,
+  opts?: {
+    gpropThrows?: boolean;
+    triNull?: boolean;
+    centroid?: readonly [number, number, number];
+  },
+): FakeFace => {
+  const f: FakeFace = {
+    label,
+    gpropThrows: opts?.gpropThrows ?? false,
+    triNull: opts?.triNull ?? false,
+    centroid: opts?.centroid ?? [0.5, 0.5, 0],
+    Orientation_1: () => "FORWARD",
+    IsSame: (other: FakeFace) => other === f,
+    delete: del(label),
+  };
+  return f;
+};
 
 interface FakeEdgeSpec {
   key: string;
@@ -63,8 +86,14 @@ interface FakeEdgeSpec {
   faceB: FakeFace;
 }
 
-function makeOc(edgeSpecs: FakeEdgeSpec[]): Occt {
+function makeOc(edgeSpecs: FakeEdgeSpec[], opts?: { faces?: FakeFace[] }): Occt {
   let mapCalls = 0;
+  // Faces the FACE pass enumerates (default none: most cases drive the EDGE pass
+  // only; the collision cases enumerate faces so the centroid buckets exist).
+  const enumFaces = opts?.faces ?? [];
+  // The face most recently handed to SurfaceProperties_1 — its centroid is what
+  // the paired GProps hands back, matching the real call sequence.
+  let gpropFace: FakeFace | null = null;
   const faceLists = edgeSpecs.map((s) => ({
     First_1: () => s.faceA,
     Last_1: () => s.faceB,
@@ -87,10 +116,16 @@ function makeOc(edgeSpecs: FakeEdgeSpec[]): Occt {
       TopAbs_SHAPE: "SHAPE",
     },
     TopAbs_Orientation: { TopAbs_REVERSED: "REVERSED" },
-    // No faces enumerated: the face pass is exercised by the real-wasm suites;
-    // here we drive the EDGE pass only.
     TopExp_Explorer_2: function () {
-      return { More: () => false, Next: () => {}, delete: () => {} };
+      let i = 0;
+      return {
+        More: () => i < enumFaces.length,
+        Next: () => {
+          i++;
+        },
+        Current: () => enumFaces[i],
+        delete: () => {},
+      };
     },
     TopLoc_Location_1: function () {
       return { IsIdentity: () => true, Transformation: () => ({ delete: () => {} }), delete: () => {} };
@@ -119,11 +154,18 @@ function makeOc(edgeSpecs: FakeEdgeSpec[]): Occt {
       return { Extent: () => 0, delete: del("vertMap") };
     },
     GProp_GProps_1: function () {
-      return { CentreOfMass: () => point(0.5, 0.5, 0), delete: () => {} };
+      return {
+        CentreOfMass: () => {
+          const c = gpropFace?.centroid ?? [0.5, 0.5, 0];
+          return point(c[0], c[1], c[2]);
+        },
+        delete: () => {},
+      };
     },
     BRepGProp: {
       SurfaceProperties_1: (f: FakeFace) => {
         if (f.gpropThrows) throw new Error("Standard_Failure: SurfaceProperties failed");
+        gpropFace = f;
       },
     },
     BRepAdaptor_Curve_2: function () {
@@ -185,5 +227,54 @@ describe("the per-edge catch only skips the documented missing-triangulation cas
       expect(e.positions).toHaveLength(6); // two sampled polyline points
       expect(e.midpoint).toBeDefined();
     }
+  });
+
+  it("counts adjacent faces that match no face group in unresolvedEdgeFaces, ids -1", () => {
+    // This fake enumerates NO faces (empty face pass), so both of the edge's
+    // adjacent-face lookups miss: each falls back to -1 AND is counted — the
+    // silent `?? -1` path of finding 8-M3 is now visible on the returned mesh.
+    const oc = makeOc([{ key: "edge-0", faceA: face("fA0"), faceB: face("fB0") }]);
+
+    const mesh = tessellateTagged(oc, fakeSolid());
+    expect(mesh.unresolvedEdgeFaces).toBe(2);
+    expect(mesh.edges).toHaveLength(1);
+    expect(mesh.edges[0]!.faceIds).toEqual([-1, -1]);
+  });
+});
+
+describe("centroid-key collisions resolve by exact face identity (8-M3)", () => {
+  it("two faces with a byte-identical centroid get their OWN ids, not last-inserted-wins", () => {
+    // A shelled tube's inner/outer walls: DISTINCT faces, identical area centroid.
+    const inner = face("inner", { centroid: [0, 0, 0.015] });
+    const outer = face("outer", { centroid: [0, 0, 0.015] });
+    const cap = face("cap", { centroid: [0, 0, 0.03] });
+    const oc = makeOc(
+      [
+        { key: "edge-inner-rim", faceA: inner, faceB: cap },
+        { key: "edge-outer-rim", faceA: outer, faceB: cap },
+      ],
+      { faces: [inner, outer, cap] },
+    );
+
+    const mesh = tessellateTagged(oc, fakeSolid());
+    expect(mesh.faceGroups.map((g) => g.faceId)).toEqual([0, 1, 2]);
+    // Pre-fix the map kept only the LAST colliding face (outer, id 1), so the
+    // inner rim silently recorded outer's id. Exact identity resolves each wall.
+    expect(mesh.edges[0]!.faceIds).toEqual([0, 2]); // inner rim → inner wall's id
+    expect(mesh.edges[1]!.faceIds).toEqual([1, 2]); // outer rim → outer wall's id
+    expect(mesh.unresolvedEdgeFaces).toBe(0);
+  });
+
+  it("a collision bucket matching NO retained face counts as unresolved — never a wrong id", () => {
+    const a = face("a", { centroid: [1, 2, 3] });
+    const b = face("b", { centroid: [1, 2, 3] });
+    // Same centroid as the bucket pair but never enumerated in the face pass —
+    // exact identity matches neither entry, so it must NOT be guessed into one.
+    const stranger = face("stranger", { centroid: [1, 2, 3] });
+    const oc = makeOc([{ key: "edge-0", faceA: stranger, faceB: a }], { faces: [a, b] });
+
+    const mesh = tessellateTagged(oc, fakeSolid());
+    expect(mesh.edges[0]!.faceIds).toEqual([-1, 0]);
+    expect(mesh.unresolvedEdgeFaces).toBe(1);
   });
 });

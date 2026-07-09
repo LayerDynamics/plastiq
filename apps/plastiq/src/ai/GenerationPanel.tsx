@@ -10,11 +10,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAiStore } from "./aiStore.js";
 import { useCadStore } from "../store/store.js";
 import { useProjectsStore } from "../persistence/projectsStore.js";
-import { buildProvider } from "./providers/registry.js";
-import { toProviderSettings, type AiSettings } from "./settings.js";
+import { buildProvider, keyResolverFor } from "./providers/registry.js";
+import { isFirstRun, toProviderSettings, type AiSettings } from "./settings.js";
 import { runGeneration } from "./runGeneration.js";
 import { reconstructMesh, stepToImportDocument } from "./reconstruct.js";
-import { captureFromPhotos } from "./nerf.js";
+import { fitMeshToCad, nurbsFitStatusMessage, nurbsUnreachableMessage, NURBS_DEFAULT_BASE_URL } from "./nurbs.js";
+import { cancelCapture, captureFromPhotos } from "./nerf.js";
+import type { NerfEncoding, NerfMethod } from "@plastiq/nerf";
 import { meshFromPartialScan, meshFromPointCloud } from "./capture.js";
 import { parsePointCloud, MIN_POINTS, type ParsedPointCloud } from "@plastiq/capture";
 import {
@@ -28,14 +30,17 @@ import {
   type ProviderEndpoint,
 } from "./errorHints.js";
 import { fileToBase64, fileToText } from "./fileRead.js";
+import { detectOllama, ollamaNotDetectedMessage, OLLAMA_DEFAULT_V1, type OllamaModelChoice } from "./ollamaDetect.js";
+import { pairImagesToFrames, type NamedImage } from "./framePairing.js";
 import { exportMeshGlb } from "../mesh/exportGlb.js";
-import { buildMeshGenDeps, meshGenConfigured } from "./meshGenDeps.js";
+import { buildMeshGenDeps, meshGenConfigured, DEFAULT_IMAGE_PROVIDER_ID } from "./meshGenDeps.js";
 import { buildTurnTools, buildCreateMeshDeps, buildSeam, type TurnToolsDeps } from "./agentTurn.js";
 import { PaidJobConfirmModal, type PendingConfirm } from "./PaidJobConfirmModal.js";
 import { SettingsPanel } from "./SettingsPanel.js";
 import { planAttachmentRoute, type AttachmentRoute } from "./visionRoute.js";
 import { UsageMeter, type UsageSnapshot } from "./usage.js";
 import { createMesh } from "./tools/createMesh.js";
+import type { PlanGraph } from "./planning.js";
 import type { GenImage } from "./meshgen/types.js";
 import type { ChatMessage, ContentPart } from "./providers/types.js";
 import type { MeshDoc } from "../store/types.js";
@@ -75,6 +80,33 @@ function messageText(content: string | ContentPart[]): string {
   return content.map((p) => (p.type === "text" ? p.text : "(image)")).join(" ");
 }
 
+/** Compact structured view of a committed decomposition plan (9-M1): a header line,
+ * the node hierarchy indented under its roots (`id — part`), then every relation with
+ * its kind. FULL content — unlike the generic tool lines (which cut args at 200 chars)
+ * a plan is never truncated; the transcript is whitespace-pre-wrap, so the newlines and
+ * indentation render as written. A validated plan is acyclic with referential integrity
+ * (planning.validatePlan), so the root walk reaches every node. */
+export function formatPlanGraph(plan: PlanGraph): string {
+  const byParent = new Map<string | undefined, PlanGraph["nodes"]>();
+  for (const n of plan.nodes) {
+    const siblings = byParent.get(n.parent);
+    if (siblings) siblings.push(n);
+    else byParent.set(n.parent, [n]);
+  }
+  const lines = [
+    `◆ plan: ${plan.nodes.length} part${plan.nodes.length === 1 ? "" : "s"}, ${plan.relations.length} relation${plan.relations.length === 1 ? "" : "s"}`,
+  ];
+  const walk = (parent: string | undefined, depth: number): void => {
+    for (const n of byParent.get(parent) ?? []) {
+      lines.push(`${"  ".repeat(depth)}${n.id} — ${n.part}`);
+      walk(n.id, depth + 1);
+    }
+  };
+  walk(undefined, 1);
+  for (const r of plan.relations) lines.push(`  ${r.from} —${r.kind}→ ${r.to}`);
+  return lines.join("\n");
+}
+
 /** R5.1 transcript replay — render the persisted per-project conversation as prior-
  * session lines so reopening a project doesn't present an empty panel. Tool/system
  * turns are internal loop plumbing; only user/assistant turns are replayed. */
@@ -90,16 +122,42 @@ function hydrateTranscript(messages: ChatMessage[]): Line[] {
 }
 
 /** Compact neutral first-run chooser (decision 17 / FR-5a) — local Ollama (no key,
- * offline) or a BYO Anthropic key. Persists via the aiStore. */
+ * offline) or a BYO Anthropic key. Persists via the aiStore.
+ *
+ * 6-L3 / R-10: the Ollama path DETECTS the running server instead of blindly saving a
+ * fixed qwen2.5 @ localhost:11434 config. Detection lists the models actually installed
+ * (tool-capable first) so the user saves one that exists; an unreachable/CORS-blocked
+ * server shows an actionable start hint rather than a silent dead save. */
 function FirstRunChooser(): React.JSX.Element {
   const save = useAiStore((s) => s.save);
   const [key, setKey] = useState("");
+  // Ollama detection state machine: idle → the neutral detect button; detecting → in-flight;
+  // reachable → the installed-model picker (empty ⇒ a "no models, pull one" hint); unreachable
+  // → the start/CORS hint. A dead config is never persisted (the pre-6-L3 bug).
+  const [detect, setDetect] = useState<"idle" | "detecting" | "reachable" | "unreachable">("idle");
+  const [models, setModels] = useState<OllamaModelChoice[]>([]);
+  const [chosenModel, setChosenModel] = useState("");
+
+  const runDetect = async (): Promise<void> => {
+    setDetect("detecting");
+    const result = await detectOllama();
+    if (!result.reachable) {
+      setModels([]);
+      setDetect("unreachable");
+      return;
+    }
+    setModels(result.models);
+    setChosenModel(result.models[0]?.name ?? "");
+    setDetect("reachable");
+  };
+
   const useOllama = (): void => {
+    if (!chosenModel) return;
     void save({
       providerKey: "ollama",
       providerId: "openai-compatible",
-      model: "qwen2.5",
-      baseURL: "http://localhost:11434/v1",
+      model: chosenModel,
+      baseURL: OLLAMA_DEFAULT_V1,
       apiKeys: {},
     });
   };
@@ -116,14 +174,75 @@ function FirstRunChooser(): React.JSX.Element {
   return (
     <div data-testid="ai-setup" className="space-y-2 text-xs text-[#9ab]">
       <p>Choose an AI provider to generate parts:</p>
-      <button
-        type="button"
-        data-testid="ai-use-ollama"
-        onClick={useOllama}
-        className="w-full rounded border border-[#2a3444] bg-[#10141c] px-2 py-1 text-left text-[#cfe] hover:bg-[#16202c]"
-      >
-        Use local Ollama (qwen2.5) — no key, offline
-      </button>
+      {/* Local Ollama — detect what's actually installed, then save a model that exists. */}
+      <div data-testid="ai-ollama" className="rounded border border-[#2a3444] bg-[#10141c] p-2">
+        {detect === "idle" && (
+          <button
+            type="button"
+            data-testid="ai-detect-ollama"
+            onClick={() => void runDetect()}
+            className="w-full rounded border border-[#2a3444] bg-[#0b0d12] px-2 py-1 text-left text-[#cfe] hover:bg-[#16202c]"
+          >
+            Use local Ollama — detect installed models (no key, offline)
+          </button>
+        )}
+        {detect === "detecting" && (
+          <div data-testid="ai-ollama-detecting" className="text-[#789]">
+            Detecting local Ollama…
+          </div>
+        )}
+        {detect === "reachable" && models.length > 0 && (
+          <div className="flex gap-1">
+            <select
+              data-testid="ai-ollama-model"
+              value={chosenModel}
+              onChange={(e) => setChosenModel(e.target.value)}
+              className="min-w-0 flex-1 rounded border border-[#2a3444] bg-[#0b0d12] px-1 py-1 text-[#cfe]"
+            >
+              {models.map((m) => (
+                <option key={m.name} value={m.name}>
+                  {m.name}
+                  {m.toolCapable ? "" : " (tool support unverified)"}
+                </option>
+              ))}
+            </select>
+            <button
+              type="button"
+              data-testid="ai-use-ollama"
+              onClick={useOllama}
+              className="rounded border border-[#2a3444] bg-[#0b0d12] px-2 py-1 text-[#cfe] hover:bg-[#16202c]"
+            >
+              Use
+            </button>
+          </div>
+        )}
+        {detect === "reachable" && models.length === 0 && (
+          <div data-testid="ai-ollama-empty" className="space-y-1 text-[#fb9]">
+            <p>Ollama is running but no models are installed — pull one, e.g. `ollama pull qwen2.5`.</p>
+            <button
+              type="button"
+              data-testid="ai-ollama-retry"
+              onClick={() => void runDetect()}
+              className="rounded border border-[#2a3444] bg-[#0b0d12] px-2 py-0.5 text-[#cde] hover:bg-[#16202c]"
+            >
+              Retry detection
+            </button>
+          </div>
+        )}
+        {detect === "unreachable" && (
+          <div data-testid="ai-ollama-unreachable" className="space-y-1 text-[#fb9]">
+            <p>{ollamaNotDetectedMessage()}</p>
+            <button
+              type="button"
+              data-testid="ai-ollama-retry"
+              onClick={() => void runDetect()}
+              className="rounded border border-[#2a3444] bg-[#0b0d12] px-2 py-0.5 text-[#cde] hover:bg-[#16202c]"
+            >
+              Retry detection
+            </button>
+          </div>
+        )}
+      </div>
       <div className="flex gap-1">
         <input
           data-testid="ai-anthropic-key"
@@ -158,7 +277,10 @@ function FirstRunChooser(): React.JSX.Element {
 }
 
 /** Shown when a generated MESH document is open: convert it to editable CAD by sending it
- * to the reconstruction backend (R6.6) and loading the returned STEP as a B-rep part. */
+ * to the reconstruction backend (R6.6) and loading the returned STEP as a B-rep part — or,
+ * for smooth/organic shapes, fit NURBS surfaces via the SPEC-12 fitting service instead
+ * (fitMeshToCad), landing through the same stepToImportDocument path. One action runs at a
+ * time (shared busy/status/error state). */
 function MeshConvertSection(): React.JSX.Element {
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
@@ -201,18 +323,76 @@ function MeshConvertSection(): React.JSX.Element {
         typeof dev === "number" && Number.isFinite(dev)
           ? `, fidelity ${dev <= tol ? "good" : "coarse"} (Δ${dev.toFixed(4)})`
           : "";
+      // M2c (SPEC-8): the structural fingerprint — tangent-connected regions recognised in
+      // the INPUT mesh (box→6, cylinder→3, blob→many) — surfaced alongside faces_built for
+      // honest UX (regions ≫ faces built means the conversion flattened real structure).
+      // Absent on older servers → omitted.
+      const regions = result.report.tangent_regions;
+      const recognized =
+        typeof regions === "number" && Number.isFinite(regions)
+          ? `, ${regions} tangent region${regions === 1 ? "" : "s"}`
+          : "";
       // Switch out of mesh mode: the viewport now renders the new B-rep part as a fresh
       // untitled parametric document (the original mesh project is left untouched).
       useProjectsStore.setState({
         activeMeshDoc: null,
         currentId: null,
         currentName: name,
-        status: `converted to CAD — ${result.report.faces_built} face${result.report.faces_built === 1 ? "" : "s"}${result.report.is_solid ? ", solid" : ", shell"}${fidelity}`,
+        status: `converted to CAD — ${result.report.faces_built} face${result.report.faces_built === 1 ? "" : "s"}${result.report.is_solid ? ", solid" : ", shell"}${fidelity}${recognized}`,
       });
       setStatus(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
       setStatus(null);
+    } finally {
+      setBusy(false);
+      abortRef.current = null;
+    }
+  }, [busy]);
+
+  /** SPEC-12 FR-8 — the smooth/organic sibling of `convert`: fit NURBS surfaces to the mesh via
+   * the fitting service and load the STEP through the same import path. The FR-9 report drives an
+   * honest status line (shell vs solid, faceted fallbacks — NFR-5). */
+  const fitSmooth = useCallback(async (): Promise<void> => {
+    const doc = useProjectsStore.getState().activeMeshDoc;
+    if (!doc || busy) return;
+    const controller = new AbortController();
+    abortRef.current = controller;
+    setBusy(true);
+    setError(null);
+    setStatus("checking service…");
+    const baseURL = useAiStore.getState().settings?.nurbsBaseURL;
+    // Pre-flight GET /health (short timeout) BEFORE the minutes-long fit, so a down service
+    // fails in seconds with a "start it with …" hint instead of a raw fetch error.
+    const healthBase = (baseURL ?? NURBS_DEFAULT_BASE_URL).replace(/\/+$/, "");
+    if (!(await checkServiceHealth(healthBase))) {
+      setError(nurbsUnreachableMessage(healthBase));
+      setStatus(null);
+      setBusy(false);
+      abortRef.current = null;
+      return;
+    }
+    setStatus("submitting…");
+    try {
+      const name = doc.name ?? "Fitted mesh";
+      const { report } = await fitMeshToCad(
+        doc.glb,
+        { load: (d) => useCadStore.getState().loadDocument(d) },
+        { signal: controller.signal, onState: (s) => setStatus(s) },
+        name,
+      );
+      // Switch out of mesh mode: the viewport now renders the fitted B-rep as a fresh untitled
+      // parametric document (the original mesh project is left untouched) — the convert precedent.
+      useProjectsStore.setState({
+        activeMeshDoc: null,
+        currentId: null,
+        currentName: name,
+        status: nurbsFitStatusMessage(report),
+      });
+      setStatus(null);
+    } catch (e) {
+      if (e instanceof DOMException && e.name === "AbortError") setStatus("cancelled");
+      else setError(e instanceof Error ? e.message : String(e));
     } finally {
       setBusy(false);
       abortRef.current = null;
@@ -231,6 +411,17 @@ function MeshConvertSection(): React.JSX.Element {
           className="rounded border border-[#3a5a7a] bg-[#14253a] px-2 py-1 text-[#bfe] hover:bg-[#1a2f48] disabled:opacity-40"
         >
           {busy ? "Converting…" : "Convert to CAD (STEP)"}
+        </button>
+        {/* SPEC-12 FR-8: the smooth/organic route — NURBS surface fitting instead of the
+            analytic reconstruction; same STEP → importStep landing. */}
+        <button
+          type="button"
+          data-testid="mesh-nurbs-run"
+          onClick={() => void fitSmooth()}
+          disabled={busy}
+          className="rounded border border-[#3a5a7a] bg-[#14253a] px-2 py-1 text-[#bfe] hover:bg-[#1a2f48] disabled:opacity-40"
+        >
+          Fit smooth CAD (NURBS)
         </button>
         {busy && (
           <button
@@ -265,7 +456,8 @@ function MeshConvertSection(): React.JSX.Element {
         </p>
       )}
       <p className="text-[10px] text-[#678]">
-        Organic shapes reconstruct as dense surfaces; mechanical shapes (flats, holes) convert best.
+        Mechanical shapes (flats, holes) convert best via Convert to CAD; smooth/organic shapes fit
+        best via NURBS (which rounds sharp edges — the result reports its fidelity honestly).
       </p>
     </div>
   );
@@ -275,26 +467,79 @@ function MeshConvertSection(): React.JSX.Element {
  * set is serialized into one /train POST body). Generous for photogrammetry; a real cap, not a guess. */
 const MAX_CAPTURE_IMAGES = 300;
 
+/** Server-truth defaults for the §5 /train training knobs (services/nerf TrainRequest). The section
+ * sends a knob ONLY when the user moves it off its default — untouched controls keep the submit body
+ * identical to the pre-knob panel (the @plastiq/nerf client omits unset fields on the wire). */
+const NERF_DEFAULT_METHOD: NerfMethod = "neus";
+const NERF_DEFAULT_ITERS = 500;
+/** The service's iters cap (MAX_ITERS in services/nerf). */
+const NERF_MAX_ITERS = 5000;
+const NERF_DEFAULT_GRID_RES = 64;
+/** Marching-cubes resolutions offered — a sane sweep inside the service's 16–256 bounds. */
+const NERF_GRID_RES_CHOICES = [32, 64, 96, 128];
+const NERF_DEFAULT_ENCODING: NerfEncoding = "frequency";
+/** The service's fine-PDF (importance) samples-per-ray cap (MAX_IMPORTANCE_SAMPLES in services/nerf). */
+const NERF_MAX_IMPORTANCE_SAMPLES = 128;
+
+/** Parse a bounded numeric knob: blank/garbage falls back to the default, else clamps into [min, max]
+ * (matching the input's own min/max, which jsdom and pasted values can bypass). */
+function clampKnob(raw: string, min: number, max: number, dflt: number): number {
+  const n = Number.parseInt(raw, 10);
+  if (Number.isNaN(n)) return dflt;
+  return Math.min(max, Math.max(min, n));
+}
+
 /** SPEC-11 N11.3 — capture a mesh from posed photos via the @plastiq/nerf service. The user picks a
  * transforms.json (camera poses) + the images it describes; trainNerf fits an MLX surface server-side
  * and returns a GLB, persisted as a MeshDoc. On success the new project is OPENED (createMeshProject
  * only persists — it deliberately does not switch the active doc), so the panel switches to
  * MeshConvertSection — i.e. the captured mesh flows into the existing "Convert to CAD" (mesh → B-rep)
  * path. The nerf base URL comes from settings (nerfBaseURL). Training is the longest job in the app,
- * so it is abortable. */
+ * so it is abortable.
+ *
+ * A compact knobs row (11-L6) exposes the §5 training parameters — method (NeuS/NeRF), iters,
+ * marching-cubes grid, position encoding (NeRF only — the neus SDF trunk has none, the server 422s
+ * `hashgrid`+`neus`), and fine PDF samples. Every knob defaults to the SERVER default and is omitted
+ * from the request until moved, so an untouched panel submits exactly what it did before. */
 function NerfCaptureSection(): React.JSX.Element {
   const [transformsJson, setTransformsJson] = useState<string | null>(null);
   const [transformsName, setTransformsName] = useState<string | null>(null);
-  const [images, setImages] = useState<string[]>([]);
+  // Selected images keep their filenames (11-M3) so they can be paired to transforms frames by
+  // name, not by picker order — the server pairs images[i]↔frames[i], so selection order that
+  // differs from the frames order would silently misassign poses. `data` is the base64 payload.
+  const [images, setImages] = useState<NamedImage[]>([]);
+  /** Set when pairing fell back to positional (transforms carried no per-frame file paths) —
+   * a visible note so the user knows the order came from their selection, not the filenames. */
+  const [pairingNote, setPairingNote] = useState<string | null>(null);
+  // §5 training knobs (11-L6), all starting on the SERVER defaults (services/nerf TrainRequest) so
+  // an untouched panel submits the same body it did before the knobs existed. The number inputs
+  // keep the raw string (natural typing) and are parsed/clamped at submit time.
+  const [method, setMethod] = useState<NerfMethod>(NERF_DEFAULT_METHOD);
+  const [itersRaw, setItersRaw] = useState(String(NERF_DEFAULT_ITERS));
+  const [gridRes, setGridRes] = useState(NERF_DEFAULT_GRID_RES);
+  const [encoding, setEncoding] = useState<NerfEncoding>(NERF_DEFAULT_ENCODING);
+  const [importanceRaw, setImportanceRaw] = useState("0");
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
+  /** The in-flight training job's server-side id (from trainNerf's onJob) — Cancel DELETEs it so
+   * the server stops training a job nobody will collect (11-M2), not just the client-side polling. */
+  const jobIdRef = useRef<string | null>(null);
+
+  /** Switch the training model. The hash grid is the NeRF field's position encoding — the neus SDF
+   * trunk consumes raw coordinates by design, so the service 422s `hashgrid`+`neus`. Mirror that
+   * constraint truthfully: switching to neus resets the encoding (the select also disables). */
+  const onMethod = useCallback((m: NerfMethod): void => {
+    setMethod(m);
+    if (m !== "nerf") setEncoding(NERF_DEFAULT_ENCODING);
+  }, []);
 
   const onTransforms = useCallback(
     async (f?: File): Promise<void> => {
       if (!f || busy) return;
       setError(null);
+      setPairingNote(null); // the frames changed — a stale pairing note would mislead
       setTransformsName(f.name);
       setTransformsJson(await fileToText(f));
     },
@@ -305,11 +550,13 @@ function NerfCaptureSection(): React.JSX.Element {
     async (files: FileList | null): Promise<void> => {
       if (!files || files.length === 0 || busy) return;
       setError(null);
+      setPairingNote(null);
       if (files.length > MAX_CAPTURE_IMAGES) {
         setError(`Too many images (${files.length}); the cap is ${MAX_CAPTURE_IMAGES}.`);
         return;
       }
-      setImages(await Promise.all(Array.from(files).map(fileToBase64)));
+      // Keep each file's NAME alongside its base64 payload for filename-based frame pairing (11-M3).
+      setImages(await Promise.all(Array.from(files).map(async (f) => ({ name: f.name, data: await fileToBase64(f) }))));
     },
     [busy],
   );
@@ -317,26 +564,23 @@ function NerfCaptureSection(): React.JSX.Element {
   const capture = useCallback(async (): Promise<void> => {
     if (!transformsJson || images.length === 0 || busy) return;
 
-    // Validate the photos are parallel to the transforms frames BEFORE the (minutes-long) round-trip.
-    let frameCount: number;
-    try {
-      const parsed = JSON.parse(transformsJson) as { frames?: unknown };
-      if (!Array.isArray(parsed.frames)) {
-        setError("transforms.json has no 'frames' array.");
-        return;
-      }
-      frameCount = parsed.frames.length;
-    } catch {
-      setError("transforms.json is not valid JSON.");
+    // Pair the photos to the transforms frames by FILENAME (not picker order) BEFORE the
+    // (minutes-long) round-trip: the server pairs images[i]↔frames[i] positionally, so a
+    // selection order that differs from the frames order would silently misassign poses (11-M3).
+    // The helper also enforces the count invariant and reports JSON/missing/ambiguous errors.
+    const pairing = pairImagesToFrames(images, transformsJson);
+    if (!pairing.ok) {
+      setError(pairing.error);
       return;
     }
-    if (frameCount !== images.length) {
-      setError(`Image count (${images.length}) must match transforms frames (${frameCount}).`);
-      return;
-    }
+    // Show the fallback note synchronously (before the health await) so it's visible; cleared
+    // when the pairing matched by filename.
+    setPairingNote(pairing.note ?? null);
+    const orderedImages = pairing.order.map((i) => i.data);
 
     const controller = new AbortController();
     abortRef.current = controller;
+    jobIdRef.current = null;
     setBusy(true);
     setError(null);
     setStatus("checking service…");
@@ -352,11 +596,32 @@ function NerfCaptureSection(): React.JSX.Element {
       return;
     }
     setStatus("submitting…");
+    // Send only the knobs the user moved off the server defaults — the client omits unset fields
+    // on the wire (SPEC-11 §5), so an untouched panel's submit body is unchanged. Encoding rides
+    // only with method "nerf" (the neus SDF trunk has no position encoding — the server 422s the
+    // combo; onMethod already reset it, this guard just makes the invariant local and unmissable).
+    const iters = clampKnob(itersRaw, 1, NERF_MAX_ITERS, NERF_DEFAULT_ITERS);
+    const importanceSamples = clampKnob(importanceRaw, 0, NERF_MAX_IMPORTANCE_SAMPLES, 0);
     try {
       const { meshDocId } = await captureFromPhotos(
-        { transformsJson, images },
+        {
+          transformsJson,
+          images: orderedImages,
+          ...(method !== NERF_DEFAULT_METHOD ? { method } : {}),
+          ...(iters !== NERF_DEFAULT_ITERS ? { iters } : {}),
+          ...(gridRes !== NERF_DEFAULT_GRID_RES ? { gridRes } : {}),
+          ...(method === "nerf" && encoding !== NERF_DEFAULT_ENCODING ? { encoding } : {}),
+          ...(importanceSamples !== 0 ? { importanceSamples } : {}),
+        },
         { persist: (doc) => useProjectsStore.getState().createMeshProject(doc) },
-        { ...(baseURL ? { baseURL } : {}), signal: controller.signal, onState: (s) => setStatus(s) },
+        {
+          ...(baseURL ? { baseURL } : {}),
+          signal: controller.signal,
+          onState: (s) => setStatus(s),
+          onJob: (id) => {
+            jobIdRef.current = id;
+          },
+        },
         "Captured mesh",
       );
       // Open the new mesh project so the panel switches to MeshConvertSection ("Convert to CAD").
@@ -365,16 +630,35 @@ function NerfCaptureSection(): React.JSX.Element {
       setTransformsName(null);
       setImages([]);
       setStatus(null);
+      // pairingNote is left as-is: on success the panel opens the mesh and this section
+      // unmounts; the note otherwise clears when the user picks a new transforms/image set.
     } catch (e) {
       if (e instanceof DOMException && e.name === "AbortError") setStatus("cancelled");
       else setError(e instanceof Error ? e.message : String(e));
     } finally {
       setBusy(false);
       abortRef.current = null;
+      jobIdRef.current = null;
     }
-  }, [transformsJson, images, busy]);
+  }, [transformsJson, images, busy, method, itersRaw, gridRes, encoding, importanceRaw]);
 
-  const cancel = useCallback(() => abortRef.current?.abort(), []);
+  /** Cancel: abort the client-side polling immediately, then best-effort DELETE the server-side
+   * job (11-M2) — without it the service keeps training to completion for nobody. The DELETE
+   * failing (service unreachable, job already gone — cancelJob itself tolerates the 404) must
+   * never surface in the error slot: from the user's point of view the cancel already succeeded
+   * the moment polling stopped. Auth/base URL are threaded exactly like the capture itself. */
+  const cancel = useCallback(async (): Promise<void> => {
+    const jobId = jobIdRef.current;
+    jobIdRef.current = null;
+    abortRef.current?.abort();
+    if (!jobId) return;
+    const baseURL = useAiStore.getState().settings?.nerfBaseURL;
+    try {
+      await cancelCapture(jobId, baseURL ? { baseURL } : {});
+    } catch {
+      // Best-effort cleanup — swallow abort-adjacent/network errors (see JSDoc above).
+    }
+  }, []);
 
   return (
     <div data-testid="nerf-capture" className="flex flex-col gap-1 rounded border border-[#1b2230] bg-black/20 p-2">
@@ -421,13 +705,97 @@ function NerfCaptureSection(): React.JSX.Element {
           <button
             type="button"
             data-testid="nerf-cancel-btn"
-            onClick={cancel}
+            onClick={() => void cancel()}
             className="rounded border border-[#7a3a3a] bg-[#2a1414] px-2 py-1 text-[#fbb] hover:bg-[#341a1a]"
           >
             Cancel
           </button>
         )}
       </div>
+      <div data-testid="nerf-knobs" className="flex flex-wrap items-center gap-2 text-[10px] text-[#9ab]">
+        <div data-testid="nerf-method" className="flex overflow-hidden rounded border border-[#2a3444]">
+          <button
+            type="button"
+            data-testid="nerf-method-neus"
+            onClick={() => onMethod("neus")}
+            disabled={busy}
+            className={`px-2 py-0.5 ${method === "neus" ? "bg-[#14253a] text-[#bfe]" : "bg-[#10141c] text-[#789]"}`}
+          >
+            NeuS (surface)
+          </button>
+          <button
+            type="button"
+            data-testid="nerf-method-nerf"
+            onClick={() => onMethod("nerf")}
+            disabled={busy}
+            className={`px-2 py-0.5 ${method === "nerf" ? "bg-[#14253a] text-[#bfe]" : "bg-[#10141c] text-[#789]"}`}
+          >
+            NeRF (density)
+          </button>
+        </div>
+        <label className="flex items-center gap-1">
+          iters
+          <input
+            data-testid="nerf-iters"
+            type="number"
+            min={1}
+            max={NERF_MAX_ITERS}
+            step={100}
+            value={itersRaw}
+            disabled={busy}
+            onChange={(e) => setItersRaw(e.target.value)}
+            className="w-16 rounded border border-[#2a3444] bg-[#0b0d12] px-1 py-0.5 text-[#cfe]"
+          />
+        </label>
+        <label className="flex items-center gap-1">
+          grid
+          <select
+            data-testid="nerf-grid-res"
+            value={gridRes}
+            disabled={busy}
+            onChange={(e) => setGridRes(Number(e.target.value))}
+            className="rounded border border-[#2a3444] bg-[#0b0d12] px-1 py-0.5 text-[#cfe]"
+          >
+            {NERF_GRID_RES_CHOICES.map((r) => (
+              <option key={r} value={r}>
+                {r}³
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="flex items-center gap-1" title="Position encoding — NeRF (density) only; the NeuS SDF trunk has none">
+          encoding
+          <select
+            data-testid="nerf-encoding"
+            value={encoding}
+            disabled={busy || method !== "nerf"}
+            onChange={(e) => setEncoding(e.target.value as NerfEncoding)}
+            className="rounded border border-[#2a3444] bg-[#0b0d12] px-1 py-0.5 text-[#cfe] disabled:opacity-40"
+          >
+            <option value="frequency">frequency</option>
+            <option value="hashgrid">hashgrid</option>
+          </select>
+        </label>
+        <label className="flex items-center gap-1" title="Fine PDF (importance) samples per ray — 0 keeps the coarse-only default">
+          fine samples
+          <input
+            data-testid="nerf-importance"
+            type="number"
+            min={0}
+            max={NERF_MAX_IMPORTANCE_SAMPLES}
+            step={16}
+            value={importanceRaw}
+            disabled={busy}
+            onChange={(e) => setImportanceRaw(e.target.value)}
+            className="w-12 rounded border border-[#2a3444] bg-[#0b0d12] px-1 py-0.5 text-[#cfe]"
+          />
+        </label>
+      </div>
+      {pairingNote && (
+        <div data-testid="nerf-pairing-note" className="text-[10px] text-[#9ab]">
+          {pairingNote}
+        </div>
+      )}
       {status && (
         <div data-testid="nerf-status" className="text-[10px] text-[#789]">
           {status}
@@ -671,12 +1039,18 @@ interface RunRequest {
   attached: Attachment | null;
   route: AttachmentRoute;
   meshProvider: string;
+  /** Per-job image-gen provider for the text2img3d image stage (6-L1-ui) — captured so a
+   * Retry re-runs with the same image model the user chose. */
+  imageProvider: string;
 }
 
 export function GenerationPanel(): React.JSX.Element {
   const settings = useAiStore((s) => s.settings);
   const activeMeshDoc = useProjectsStore((s) => s.activeMeshDoc);
   const conversationProjectId = useAiStore((s) => s.conversationProjectId);
+  // Session-cumulative usage across ALL runs (6-L2) — survives each generation so the readout
+  // reflects the whole session, not just the last run (which lives in the per-run `usage` state).
+  const sessionUsage = useAiStore((s) => s.sessionUsage);
   const [prompt, setPrompt] = useState("");
   const [lines, setLines] = useState<Line[]>([]);
   const [running, setRunning] = useState(false);
@@ -687,11 +1061,20 @@ export function GenerationPanel(): React.JSX.Element {
   const [attachment, setAttachment] = useState<Attachment | null>(null);
   const [attachRoute, setAttachRoute] = useState<AttachmentRoute>("parametric");
   const [meshProviderId, setMeshProviderId] = useState("fal:tripo");
+  // Per-job image-gen model for the text→image stage of AI text→3D (create_mesh text2img3d),
+  // 6-L1-ui. Defaults to the persisted setting (or the catalog default); a run-scoped override
+  // threaded through turnDeps.settings — NOT a save (that would change the persisted default and
+  // defeat the per-job semantics). Mirrors meshProviderId's un-synced initial-value pattern.
+  const [imageProviderId, setImageProviderId] = useState(settings?.imageProviderId ?? DEFAULT_IMAGE_PROVIDER_ID);
   const abortRef = useRef<AbortController | null>(null);
   /** Monotonic id source for attachments (Date.now/Math.random are banned in some
    * contexts; a counter is deterministic and unique within a session). */
   const attachSeq = useRef(0);
-  const meshProviders = useMemo(() => (settings ? buildMeshGenDeps(settings).providers : []), [settings]);
+  const { meshProviders, imageProviders } = useMemo(() => {
+    if (!settings) return { meshProviders: [], imageProviders: [] };
+    const deps = buildMeshGenDeps(settings);
+    return { meshProviders: deps.providers, imageProviders: deps.imageProviders };
+  }, [settings]);
   /** Set by create_mesh's persist dep when a mesh document is generated mid-run; the
    * panel opens it AFTER the agent loop so a success never swaps the UI mid-generation. */
   const createdMeshIdRef = useRef<string | null>(null);
@@ -719,6 +1102,7 @@ export function GenerationPanel(): React.JSX.Element {
       attached: attachment,
       route: attachRoute,
       meshProvider: meshProviderId,
+      imageProvider: imageProviderId,
     };
     const { text, attached } = req;
     if (!text && !attached) return;
@@ -735,9 +1119,14 @@ export function GenerationPanel(): React.JSX.Element {
     // Shared agent-turn deps (build_part/inspect + create_mesh) — the SAME wiring the
     // command palette uses, so both entry points stay in lockstep. The attached image (if
     // any) is the img3d creative input, resolved by id (FR-10a). The model can always reach
-    // create_mesh; without a fal key/proxy it fails cleanly (meshGenConfigured hints).
+    // create_mesh — and runGeneration derives the creative-path guidance from that tool
+    // surface, so the prompt teaches what it offers; without a fal key/proxy the tool
+    // fails cleanly (meshGenConfigured hints).
     const turnDeps: TurnToolsDeps = {
-      settings: current,
+      // Per-job image-gen model override (6-L1-ui): the user's pick this run wins over the
+      // persisted settings.imageProviderId, flowing through buildCreateMeshDeps → buildMeshGenDeps
+      // to the create_mesh text2img3d image stage. img3d ignores imageProvider, so this is inert there.
+      settings: { ...current, imageProviderId: req.imageProvider },
       confirm: (info) => new Promise<boolean>((resolve) => setPaidConfirm({ info, resolve })),
       recordPaidJob: () => {
         meter.addPaidJob();
@@ -746,6 +1135,9 @@ export function GenerationPanel(): React.JSX.Element {
       onMeshCreated: (id) => {
         createdMeshIdRef.current = id;
       },
+      // 9-M1: render the committed plan as a structured, untruncated view (the trace
+      // entry itself — kind "plan", full graph — is recorded by buildTurnTools).
+      onPlan: (plan) => append({ kind: "tool", text: formatPlanGraph(plan) }),
       ...(attached
         ? {
             resolveImage: async (id: string) => {
@@ -762,7 +1154,9 @@ export function GenerationPanel(): React.JSX.Element {
       return;
     }
 
-    const provider = buildProvider(toProviderSettings(current));
+    // Key resolution goes through the decision-21 indirection: BYO key locally, or the
+    // hosted-proxy resolver when the settings are in the proxy state (registry decides).
+    const provider = buildProvider(toProviderSettings(current, keyResolverFor(current)));
     const ai = useAiStore.getState();
     const history = ai.conversation.messages;
     const currentDoc = useCadStore.getState().toDocument();
@@ -877,8 +1271,13 @@ export function GenerationPanel(): React.JSX.Element {
       abortRef.current = null;
       // A failed run is retryable verbatim; a success clears any earlier failure.
       setFailedRun(failed ? req : null);
+      // Fold this run's usage into the session total (6-L2). Only meaningful runs count — a
+      // run that spent no tokens and no paid jobs (e.g. an instant connection failure) is not a
+      // "turn". Folded exactly once per run (the per-run meter's final snapshot).
+      const runSnap = meter.snapshot();
+      if (runSnap.totalTokens > 0 || runSnap.paidJobs > 0) useAiStore.getState().recordRunUsage(runSnap);
     }
-  }, [prompt, running, append, attachment, attachRoute, meshProviderId]);
+  }, [prompt, running, append, attachment, attachRoute, meshProviderId, imageProviderId]);
 
   const retry = useCallback((): void => {
     const req = failedRun;
@@ -899,7 +1298,7 @@ export function GenerationPanel(): React.JSX.Element {
     <div data-testid="generation-panel" className="flex flex-col gap-2 text-xs">
       {activeMeshDoc ? (
         <MeshConvertSection />
-      ) : !settings ? (
+      ) : isFirstRun(settings) ? (
         <FirstRunChooser />
       ) : (
         <>
@@ -988,6 +1387,33 @@ export function GenerationPanel(): React.JSX.Element {
               </>
             )}
           </div>
+          {/* Per-job image-gen model (6-L1-ui) for AI text→3D (create_mesh text2img3d): the
+              LLM turns a text prompt into an image with this model, then image→3D. Standalone
+              (not gated on an attachment — text2img3d is text-only); only shown when there's a
+              choice. The pick overrides settings.imageProviderId for this run only. */}
+          {imageProviders.length > 1 && (
+            <div data-testid="image-gen-row" className="flex flex-wrap items-center gap-2 text-[10px] text-[#9ab]">
+              <label
+                className="flex items-center gap-1"
+                title="Image model for the text→image stage of AI text→3D generation (create_mesh text2img3d)"
+              >
+                Image model (text→3D)
+                <select
+                  data-testid="image-gen-provider"
+                  value={imageProviderId}
+                  disabled={running}
+                  onChange={(e) => setImageProviderId(e.target.value)}
+                  className="rounded border border-[#2a3444] bg-[#0b0d12] px-1 py-0.5 text-[#cfe] disabled:opacity-40"
+                >
+                  {imageProviders.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+          )}
           <div className="flex items-center gap-2">
             <button
               type="button"
@@ -1018,9 +1444,20 @@ export function GenerationPanel(): React.JSX.Element {
                 Retry
               </button>
             )}
-            {usage && (
-              <span data-testid="generation-usage" className="ml-auto text-[10px] text-[#789]">
-                {usage.totalTokens} tok{usage.paidJobs > 0 ? ` · ${usage.paidJobs} paid` : ""}
+            {(usage || sessionUsage.turns > 0) && (
+              <span className="ml-auto text-right text-[10px] text-[#789]">
+                {usage && (
+                  <span data-testid="generation-usage">
+                    {usage.totalTokens} tok{usage.paidJobs > 0 ? ` · ${usage.paidJobs} paid` : ""}
+                  </span>
+                )}
+                {sessionUsage.turns > 0 && (
+                  <span data-testid="generation-usage-session" className={`text-[#678] ${usage ? "ml-2" : ""}`}>
+                    session {sessionUsage.totalTokens} tok · {sessionUsage.turns} run
+                    {sessionUsage.turns === 1 ? "" : "s"}
+                    {sessionUsage.paidJobs > 0 ? ` · ${sessionUsage.paidJobs} paid` : ""}
+                  </span>
+                )}
               </span>
             )}
           </div>

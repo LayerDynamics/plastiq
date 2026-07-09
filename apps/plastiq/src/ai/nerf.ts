@@ -8,7 +8,14 @@
 // set the active doc), at which point the existing "Convert to CAD" reconstruct path (mesh → editable
 // B-rep) becomes available. The dependency direction is app → @plastiq/nerf (never the reverse).
 
-import { trainNerf, type NerfOptions, type NerfReport, type NerfTrainInput } from "@plastiq/nerf";
+import {
+  cancelJob,
+  trainNerf,
+  type NerfCancelOptions,
+  type NerfOptions,
+  type NerfReport,
+  type NerfTrainInput,
+} from "@plastiq/nerf";
 
 import { useAiStore } from "./aiStore.js";
 import type { MeshDoc } from "../store/types.js";
@@ -42,4 +49,15 @@ export async function captureFromPhotos(
   const doc = nerfResultToMeshDoc(result.glb, name);
   const meshDocId = await deps.persist(doc);
   return { meshDocId, doc, report: result.report };
+}
+
+/** Cancel a capture's training job server-side (`DELETE /jobs/{id}`, SPEC-11 §5) — the counterpart
+ * to {@link captureFromPhotos} for the panel's Cancel: aborting the client-side polling alone
+ * would leave the server training to completion for nobody. The job id comes from the capture's
+ * `opts.onJob` callback. Resolves on 204 and on 404 (already gone). Auth is threaded exactly like
+ * the capture path: a caller-supplied `opts.apiKey` wins; otherwise the persisted `nerfApiKey`
+ * setting rides as `Authorization: Bearer <key>`. */
+export async function cancelCapture(jobId: string, opts: NerfCancelOptions = {}): Promise<void> {
+  const apiKey = opts.apiKey ?? useAiStore.getState().settings?.nerfApiKey;
+  await cancelJob(jobId, { ...opts, ...(apiKey ? { apiKey } : {}) });
 }

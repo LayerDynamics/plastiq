@@ -3,7 +3,8 @@
 A submitted job runs as a background task: queued/running → completed (with its result) on success,
 or → failed (capturing the error string) on exception. Unknown ids are None. Terminal jobs are
 bounded (TTL + max-count eviction — same pattern as services/nerf) so the store cannot grow without
-bound until restart. This is the contract the HTTP layer (test_api) exposes; testing it directly
+bound until restart; non-terminal jobs are bounded by the running TTL (a hung job is force-failed →
+terminal → evictable). This is the contract the HTTP layer (test_api) exposes; testing it directly
 keeps the state machine honest without a server.
 """
 
@@ -107,6 +108,70 @@ def test_terminal_jobs_are_evicted_after_the_ttl():
         await asyncio.sleep(0.02)  # let the monotonic clock advance past the zero TTL
         await store.submit(lambda: _aresult({}))  # the next submit runs the eviction pass
         assert store.get(job.id) is None  # TTL-evicted even though the count cap was never hit
+
+    asyncio.run(run())
+
+
+def test_hung_job_is_failed_after_the_running_ttl():
+    async def run():
+        store = JobStore(running_ttl_seconds=0.05)
+
+        async def hang() -> dict:
+            await asyncio.sleep(30)  # a hung reconstruction
+            return {}
+
+        job = await store.submit(hang)
+        await asyncio.sleep(0.1)  # let the running TTL lapse
+        assert store.running_count() == 0  # the sweep force-failed it → cap capacity is released
+        hung = store.get(job.id)
+        assert hung is not None
+        assert hung.state == JobState.failed
+        assert "running TTL" in (hung.error or "")
+        assert hung.finished_at is not None  # terminal → evictable like any finished job
+
+    asyncio.run(run())
+
+
+def test_ttl_failed_hung_job_is_evicted():
+    async def run():
+        store = JobStore(running_ttl_seconds=0.05, ttl_seconds=0.0)
+
+        async def hang() -> dict:
+            await asyncio.sleep(30)
+            return {}
+
+        job = await store.submit(hang)
+        await asyncio.sleep(0.1)  # the running TTL lapses
+        await store.submit(lambda: _aresult({}))  # sweep pass: the hung job goes terminal
+        await asyncio.sleep(0.02)  # zero terminal TTL — let the monotonic clock advance
+        await store.submit(lambda: _aresult({}))  # eviction pass drops it
+        assert store.get(job.id) is None  # a hung job no longer lives in the store forever
+
+    asyncio.run(run())
+
+
+def test_late_result_does_not_resurrect_a_ttl_failed_job():
+    async def run():
+        store = JobStore(running_ttl_seconds=0.05)
+
+        async def stubborn() -> dict:
+            try:
+                await asyncio.sleep(30)
+            except asyncio.CancelledError:
+                pass  # a worker that resists cancellation and still produces a result
+            return {"late": True}
+
+        job = await store.submit(stubborn)
+        await asyncio.sleep(0.1)  # the running TTL lapses
+        failed = store.get(job.id)  # get() runs the sweep → force-failed
+        assert failed is not None
+        assert failed.state == JobState.failed
+        assert failed.task is not None
+        await asyncio.gather(failed.task, return_exceptions=True)  # let the resisted task finish
+        done = store.get(job.id)
+        assert done is not None
+        assert done.state == JobState.failed  # the late result was discarded, not resurrected
+        assert done.result is None
 
     asyncio.run(run())
 

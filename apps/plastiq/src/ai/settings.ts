@@ -11,7 +11,7 @@ import type { ProviderSettings } from "./providers/registry.js";
 import type { ProviderId } from "./providers/models.js";
 
 export interface AiSettings {
-  /** Catalog preset key: "anthropic" | "ollama" | "openai" | a custom key. */
+  /** Catalog preset key: "anthropic" | "ollama" | "openai" | "llama-mlx" | a custom key. */
   providerKey: string;
   providerId: ProviderId;
   model: string;
@@ -34,10 +34,23 @@ export interface AiSettings {
    * `Authorization: Bearer <key>` on every request (SPEC-11 §5); absent ⇒ no auth header
    * (the open dev default, matching the other self-hosted services). */
   nerfApiKey?: string;
+  /** Base URL of the self-hosted MLX NURBS surface-fitting service (SPEC-12) — mesh →
+   * smooth B-spline STEP; absent ⇒ the @plastiq/nurbs client default (http://localhost:8003). */
+  nurbsBaseURL?: string;
+  /** API key for a key-protected NURBS service deployment (its `NURBS_API_KEY`) — sent as
+   * `Authorization: Bearer <key>` on every request (SPEC-12 §6.1, the SPEC-11 §5 auth model
+   * verbatim); absent ⇒ no auth header (the open dev default). */
+  nurbsApiKey?: string;
   /** Override the fal mesh-gen queue base URL — the hosted-proxy seam (decision 21).
    * Absent ⇒ fal's queue default. A *direct* browser→fal call needs fal CORS; the
    * proxy (empty fal key + this baseURL) is the production path. */
   meshGenBaseURL?: string;
+  /** Selected fal image-gen model for the text→image stage of text2img3d (decision 6:
+   * image providers are pluggable/multi-selectable). The value is a provider id from
+   * falImageProviders (e.g. "fal:flux-schnell" | "fal:flux-dev" | "fal:fast-sdxl").
+   * Absent ⇒ the default (fal:flux-schnell — FLUX schnell, the cheapest), matching the
+   * prior hardwired behaviour. Persisted client-side with the rest of AiSettings. */
+  imageProviderId?: string;
 }
 
 const DB_NAME = "plastiq-ai";
@@ -84,8 +97,10 @@ export async function clearSettings(): Promise<void> {
   await runTx("readwrite", (s) => s.delete(SETTINGS_KEY));
 }
 
-/** First run = no settings persisted → the UI shows the neutral provider chooser. */
-export function isFirstRun(settings: AiSettings | null): boolean {
+/** First run = no settings persisted → the UI shows the neutral provider chooser
+ * (FR-5a; the GenerationPanel branches on this). A type guard so the non-first-run
+ * branch keeps the narrowed AiSettings. */
+export function isFirstRun(settings: AiSettings | null): settings is null {
   return settings === null;
 }
 
