@@ -100,3 +100,73 @@ def test_reconstruct_is_deterministic():
     assert sorted(a.registered) == sorted(b.registered)
     for v in a.registered:
         assert np.allclose(a.poses_w2c[v], b.poses_w2c[v])
+
+
+def test_filter_high_reproj_points_removes_contaminated_structure():
+    """Regression (real-photo mapper hardening): the reprojection-outlier filter deletes points that
+    reproject far from their observed keypoints — the track-merge-contaminated structure that pulled
+    real-photo bundle adjustment's mean reprojection error to ~5px — while keeping accurate points.
+    Without it the mapper's absolute-inlier registration would silently corrupt the cloud."""
+    from app.sfm import _filter_high_reproj_points, _proj
+
+    K = np.array([[500.0, 0.0, 320.0], [0.0, 500.0, 240.0], [0.0, 0.0, 1.0]])
+    poses = {
+        0: np.hstack([np.eye(3), np.zeros((3, 1))]),
+        1: np.hstack([np.eye(3), np.array([[-0.6], [0.0], [0.0]])]),  # sideways baseline
+    }
+    coords = {0: [0.0, 0.0, 5.0], 1: [0.3, 0.1, 6.0], 2: [-0.2, 0.2, 4.0],
+              3: [0.1, -0.3, 7.0], 4: [-0.1, -0.1, 5.5], 5: [0.2, 0.2, 5.0]}
+    points3d = {t: np.asarray(x, dtype=float) for t, x in coords.items()}
+
+    kp0, kp1, tracks = [], [], []
+    for t in range(6):
+        Xh = np.append(points3d[t], 1.0)
+        p0 = _proj(K, poses[0]) @ Xh
+        p1 = _proj(K, poses[1]) @ Xh
+        uv0, uv1 = p0[:2] / p0[2], p1[:2] / p1[2]
+        if t == 5:  # contaminate point 5: its observed keypoints are 30px off the true projection
+            uv0 = uv0 + np.array([30.0, 0.0])
+            uv1 = uv1 + np.array([0.0, 30.0])
+        kp0.append(uv0)
+        kp1.append(uv1)
+        tracks.append({0: t, 1: t})
+    keypoints = [np.asarray(kp0), np.asarray(kp1)]
+
+    removed = _filter_high_reproj_points(poses, points3d, tracks, keypoints, K, max_px=4.0)
+    assert removed == 1
+    assert 5 not in points3d
+    assert set(points3d) == {0, 1, 2, 3, 4}  # the five accurate points survive
+
+
+def test_verify_pair_matches_rejects_geometric_outliers():
+    """Regression (real-photo track cleaning): geometric verification keeps epipolar-consistent matches
+    and drops the outliers that, propagated through union-find tracks, collapsed PnP inlier ratios and
+    stalled the mapper on real photos."""
+    from app.sfm import verify_pair_matches
+
+    rng = np.random.default_rng(7)
+    K = np.array([[600.0, 0.0, 320.0], [0.0, 600.0, 240.0], [0.0, 0.0, 1.0]])
+    pose0 = np.hstack([np.eye(3), np.zeros((3, 1))])
+    pose1 = np.hstack([np.eye(3), np.array([[-0.7], [0.02], [0.0]])])  # sideways baseline
+
+    def project(pose, X):
+        p = K @ (pose[:, :3] @ X + pose[:, 3])
+        return p[:2] / p[2]
+
+    n_true = 60
+    pts3d = np.column_stack([rng.uniform(-1, 1, n_true), rng.uniform(-1, 1, n_true), rng.uniform(4, 8, n_true)])
+    kp0 = np.array([project(pose0, X) for X in pts3d])
+    kp1_true = np.array([project(pose1, X) for X in pts3d])
+    # 40 outlier keypoints in view 1 (random pixels), matched to real view-0 features → epipolar-wrong.
+    kp1_outliers = np.column_stack([rng.uniform(0, 640, 40), rng.uniform(0, 480, 40)])
+    kp1 = np.vstack([kp1_true, kp1_outliers])
+
+    true_matches = [(i, i) for i in range(n_true)]
+    outlier_matches = [(int(rng.integers(n_true)), n_true + k) for k in range(40)]
+    matches = np.array(true_matches + outlier_matches, dtype=np.int64)
+
+    verified = verify_pair_matches([(0, 1, matches)], [kp0, kp1], seed=0, threshold=2.0, min_inliers=8)
+    assert len(verified) == 1
+    kept = verified[0][2].shape[0]
+    # The ~60 epipolar-consistent matches survive; the 40 random outliers are rejected.
+    assert 50 <= kept <= n_true + 3, f"kept {kept} of {n_true} true + 40 outliers"

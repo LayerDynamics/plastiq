@@ -95,6 +95,10 @@ def test_converges_from_perturbed_start():
     assert info["success"]
     assert end_reproj < 0.5      # in practice BA drives this to ~machine zero on the noise-free scene
     assert info["mean_reprojection_error"] == end_reproj
+    # Convergence must come from the ftol/xtol/gtol tolerances, not from grinding to max_nfev — the
+    # missing-tolerances regression made real-photo BA run tens of thousands of iterations (the P7
+    # runtime pathology). A healthy solve on this scene needs only a handful.
+    assert info["n_iterations"] < 200
 
     intr_opt, _c, _p = ba.unpack(x_opt, n_cams, n_pts)
     # Focal is gauge-invariant in a noise-free problem, so it recovers near-exactly (~1e-4 relative) —

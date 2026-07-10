@@ -6,12 +6,20 @@ emission, the **two-stage MLX plane-sweep MVS** (§5.5) + multi-view fusion, the
 :8004 (`app/main.py` + `app/logging_setup.py`, the §6.1 contract), the `@plastiq/photogrammetry`
 client, the app `PhotoSolveSection` (both hand-offs), and the browser E2E spec. **Headless-verified:**
 171 `plastiq-photogrammetry` pytest + the app vitest suites green; `just services` boots :8004.
-**Live-gated (pending a real M4-Max run, not headless CI):** the P7 real-photo sparse gate, the P9.3
-dense-run + capture hand-off, and the P12.1 browser E2E — all need the `ref/Photogrammetry-examples`
-datasets + running services on Apple Silicon (the texture-poor committed synthetic scene cannot be
-reconstructed by the full real-feature pipeline, so a *successful* solve needs real photos; the
-service's headless test covers the degradation path instead).
-**Date:** 2026-07-04 (reconciled to shipped 2026-07-09)
+**P7 real-photo gate — RUN and PASSED on the M4 Max (2026-07-10).** On `ref/Photogrammetry-examples`:
+**Gorsedd_Stone 48/48 registered @ 0.316px** and **Stone_Mask 12/14 (85.7%) @ 0.323px** — both clear
+the gate (≥85% registered, ≤1.5px, track ≥3). Reaching this needed a real incremental-mapper hardening
+pass (the R-1 make-or-break risk), since the first real-photo run stalled at 3/14 in 79 min: (1) a BA
+gauge anchor + convergence tolerances — the missing `ftol/xtol/gtol` were grinding scipy to `max_nfev`
+(the 79-min pathology); (2) an absolute-inlier PnP registration gate (the 30% ratio rejected real
+views); (3) a reprojection-outlier filter + re-BA (5px → 0.3px); (4) geometric match verification +
+ranked init-pair fallback (cleaned contaminated tracks → recovered all real views); (5) windowed local
+BA (per-registration BA bounded to the new camera's neighbourhood — the large-set runtime fix). See
+`app/sfm.py`/`app/core/ba.py` and §5.4; regression-tested (`tests/test_sfm_mapper.py`,
+`test_ba_optimize.py`). Stone_Mask's 2 misses are genuinely non-overlapping capture-end frames.
+**Still live-gated (pending a real M4-Max run, not headless CI):** the P9.3 dense-run + capture
+hand-off and the P12.1 browser E2E (need the running services + a browser).
+**Date:** 2026-07-04 (reconciled to shipped 2026-07-09; real-photo gate passed 2026-07-10)
 **Owner:** LayerDynamics
 **ADR:** [`docs/adr/0013`](../adr/0013-photogrammetry-service-architecture.md) (authored in P0.1)
 **Plan:** [`docs/plans/2026-07-04-photogrammetry-service.md`](../plans/2026-07-04-photogrammetry-service.md) (authored 2026-07-04, alongside this spec)
@@ -407,7 +415,7 @@ Prefix **P** (photogrammetry). P7 is the identity gate, like SPEC-12's U7 and SP
 | **P4** | `core/ba.py`: sparse-LM bundle adjustment with shared-intrinsics + Brown-Conrady self-calibration; noisy synthetic scene converges (mean reprojection < 0.5px, intrinsics recovered within 2%) | ✅ 2026-07-09 |
 | **P5** | `sfm.py` incremental mapper end-to-end on the synthetic multi-view fixture: all views registered, poses match ground truth up to similarity (Umeyama-aligned RMSE < 1%) | ✅ 2026-07-09 (mapper on the GT-track synthetic fixture; the full real-feature chain needs real photos — see P7) |
 | **P6** | `normalize.py` + `core/distortion.py` + `emit.py`: normalization similarity + `applied_transform`, undistortion round-trip, §6.2 emitter + PLY writers; the **`parse_transforms` contract test** against real `services/nerf` code | ✅ 2026-07-09 |
-| **P7** | **Sparse identity gate (GATE):** real photos — `ref/Photogrammetry-examples` Stone_Mask (14) and Gorsedd_Stone (48), local skip-if-absent fixtures — solve with ≥ 85% of images registered, mean reprojection ≤ 1.5px, mean track length ≥ 3. Diagnosis tooling: optional `importorskip`-gated pycolmap comparison. **Gate fails ⇒ stop and re-plan before P8+** | 🟡 LIVE-GATED — the gate harness (`tests/_gate_run.py`, `tests/test_gate_real.py`) is written and skip-if-absent; passing it needs the real `ref/` photos on the M4 Max (not headless CI). Pending that run |
+| **P7** | **Sparse identity gate (GATE):** real photos — `ref/Photogrammetry-examples` Stone_Mask (14) and Gorsedd_Stone (48), local skip-if-absent fixtures — solve with ≥ 85% of images registered, mean reprojection ≤ 1.5px, mean track length ≥ 3. Diagnosis tooling: optional `importorskip`-gated pycolmap comparison. **Gate fails ⇒ stop and re-plan before P8+** | ✅ **PASSED 2026-07-10 (M4 Max, `ref/` photos)** — Gorsedd_Stone **48/48 @ 0.316px**, Stone_Mask **12/14 (85.7%) @ 0.323px** (both ≥85% / ≤1.5px / track≥3). Required the incremental-mapper hardening the R-1 gate anticipated — the first run stalled 3/14 @ 79 min; fixed via BA gauge-anchor + tolerances, absolute-inlier PnP gate, reprojection-outlier filter, geometric match verification + init-pair fallback, and windowed local BA (`app/sfm.py`/`app/core/ba.py`). Runs headless on the M4 Max, not in CI (needs the local `ref/` datasets) |
 | **P8** | **FR-9 nerf lockstep:** OpenGL→internal flip in `services/nerf/app/data_processing/dataparser.py`, fixtures to OpenGL `look_at`, SPEC-11 dated note; nerf suite green | ✅ 2026-07-04 — **P8.1 landed** (self-contained nerf-service change): `parse_transforms` applies `c2w[0:3,1:3]*=−1`, `look_at` emits OpenGL (+`opengl_to_internal`), SPEC-11 §5/FR-3 dated note, new `tests/test_opengl_convention.py`; **65** nerf tests green (prior 63 + 2) |
 | **P9** | `mvs/plane_sweep.py` + `mvs/fusion.py` (D-2): MLX cost volumes, depth+normals, consistency fusion; **real M4-Max test on the gate dataset**: ≥ 50k fused oriented points, and the cloud drives `services/capture` `POST /capture` locally to a real mesh (`faces > 100`) | ✅ 2026-07-09 code (the **two-stage** plane-sweep §5.5 + fusion + the `solve_dense` orchestration are green — `test_plane_sweep.py`, `test_fusion.py`, `test_solve_dense.py`); 🟡 P9.3's real dense M4-Max run + capture hand-off is LIVE-GATED (real photos + running services) |
 | **P10** | FastAPI service (`jobs.py`, `main.py`, `logging_setup.py`) per §6.1 + real submit→poll→result API test (`httpx.ASGITransport`, no mocks) + auth/CORS/429/caps tests; CI matrix row (MLX-free subset per NFR-4) | ✅ 2026-07-09 — `app/main.py` + `app/logging_setup.py` serve the §6.1 contract (`solve_dense` wires sparse+dense); `tests/test_api.py` (12 shell + 1 real-dispatcher degradation E2E, `httpx.ASGITransport`, no mocks) + the CI row (`tests/test_jobs.py tests/test_emit.py`) |

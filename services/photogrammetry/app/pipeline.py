@@ -25,7 +25,13 @@ from app.core.match import match_image_set
 from app.emit import emit_transforms_json, write_ply_dense, write_ply_sparse
 from app.exif import intrinsics_prior
 from app.normalize import normalize_scene
-from app.sfm import build_tracks, reconstruct, select_init_pair
+from app.sfm import (
+    build_tracks,
+    reconstruct,
+    select_init_pair,
+    select_init_pairs,
+    verify_pair_matches,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -101,18 +107,26 @@ def solve_sparse(
         keypoints.append(kp.xy)
         descriptors.append(desc)
 
-    # --- matching + tracks --------------------------------------------------------------------
+    # --- matching → geometric verification → tracks -------------------------------------------
     pair_matches = match_image_set(descriptors, schedule=matching, window=window, ratio=ratio)
     pair_matches = [(i, j, m) for (i, j, m) in pair_matches if m.shape[0] >= 8]
+    # Geometrically verify each pair (RANSAC fundamental) BEFORE union-find track building: on real
+    # photos a single wrong match contaminates a multi-view track and collapses PnP inlier ratios, so
+    # views that share hundreds of matches with the model still fail to register (COLMAP's verification
+    # step — the difference between a stalled mapper and one that registers real photos).
+    pair_matches = verify_pair_matches(pair_matches, keypoints, seed=seed)
     tracks = build_tracks(pair_matches, n)
 
     if not pair_matches or not tracks:
         raise ValueError("no usable matches/tracks — the images may not overlap or lack texture")
 
     # --- reconstruct ---------------------------------------------------------------------------
-    init = select_init_pair(pair_matches, keypoints, K)
-    sfm = reconstruct(tracks, keypoints, K, init_pair=init, image_names=names, seed=seed,
-                      fix_intrinsics=not self_calibrate)
+    # Ranked init candidates (with fallback in reconstruct) so verification's cleaner scores can't
+    # strand the seed on a single narrow/degenerate top pair.
+    init_candidates = select_init_pairs(pair_matches, keypoints, K)
+    init = init_candidates[0] if init_candidates else select_init_pair(pair_matches, keypoints, K)
+    sfm = reconstruct(tracks, keypoints, K, init_pair=init, init_candidates=init_candidates,
+                      image_names=names, seed=seed, fix_intrinsics=not self_calibrate)
 
     # --- normalize ----------------------------------------------------------------------------
     reg = sorted(sfm.registered)

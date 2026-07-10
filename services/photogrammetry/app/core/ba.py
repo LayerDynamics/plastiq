@@ -200,6 +200,9 @@ def run_bundle_adjustment(
     max_iter: int = 100,
     loss: str = "huber",
     f_scale: float = 1.0,
+    ftol: float = 1e-6,
+    xtol: float = 1e-6,
+    gtol: float = 1e-6,
 ):
     """Refine ``x0`` by sparse Levenberg-Marquardt-style trust-region reflective bundle adjustment.
 
@@ -249,6 +252,9 @@ def run_bundle_adjustment(
         loss=loss,
         f_scale=f_scale,
         x_scale="jac",
+        ftol=ftol,
+        xtol=xtol,
+        gtol=gtol,
         max_nfev=max_iter * (free_idx.size + 1),
     )
 
