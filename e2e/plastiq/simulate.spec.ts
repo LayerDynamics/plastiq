@@ -50,14 +50,16 @@ test("simulate the part: it drops under gravity, then returns to edit cleanly", 
     { timeout: 240_000 },
   );
 
-  // Spawn the bare part into the sim; record its initial height. The CAD frame is
-  // Z-up, so gravity pulls along −Z (the body's vertical axis is position[2]).
+  // Spawn the bare part into the sim under the default experiment recipe
+  // (drop-test: part + static ground). Record initial height. CAD frame is Z-up;
+  // gravity pulls along −Z (the body's vertical axis is position[2]).
   const start = await page.evaluate(async () => {
     const sim = (globalThis as { __plastiqSimulate?: SimApi }).__plastiqSimulate!;
     const count = await sim.start();
     return { count, z0: sim.poseOf("body0")?.position[2] ?? null };
   });
-  expect(start.count).toBe(1); // bare part → one body
+  // Default drop-test experiment: CAD body + injected __experiment_ground.
+  expect(start.count).toBeGreaterThanOrEqual(1);
   expect(start.z0).not.toBeNull();
 
   // Step a fixed number of ticks under gravity (deterministic).

@@ -11,9 +11,12 @@ import { buildAgentTools } from "./tools/toolDefs.js";
 import { buildMeshGenDeps } from "./meshGenDeps.js";
 import { summarizePlan, type PlanGraph } from "./planning.js";
 import { geometryClientProbe, type ApplyDocument } from "./tools/buildPart.js";
+import { reconstructMesh, stepToImportDocument } from "./reconstruct.js";
+import { fitMeshToCad } from "./nurbs.js";
 import type { AgentTools } from "./agentRunner.js";
 import type { MeshProbe } from "./tools/inspectGeometry.js";
 import type { ConfirmPaidJob, CreateMeshDeps } from "./tools/createMesh.js";
+import type { MeshToCadDeps } from "./tools/meshToCad.js";
 import type { AiSettings } from "./settings.js";
 import type { GenImage } from "./meshgen/types.js";
 import type { CadDocument } from "../store/types.js";
@@ -63,6 +66,23 @@ export function buildCreateMeshDeps(deps: TurnToolsDeps): CreateMeshDeps {
   };
 }
 
+/** Build the mesh→CAD dependency set (reconstruct_brep / fit_nurbs). The open mesh is read from the
+ * projects store at call time (so a mesh created earlier in the SAME turn is convertible), the local
+ * reconstruct/NURBS wrappers resolve their base URL from settings, and a successful conversion lands
+ * the STEP via loadDocument and leaves mesh mode — the same handoff the panel/context actions use. */
+export function buildMeshToCadDeps(deps: TurnToolsDeps): MeshToCadDeps {
+  return {
+    mesh: () => useProjectsStore.getState().activeMeshDoc,
+    reconstruct: reconstructMesh,
+    fitNurbs: fitMeshToCad,
+    stepToDoc: stepToImportDocument,
+    load: (doc) => useCadStore.getState().loadDocument(doc),
+    onConverted: (name) =>
+      useProjectsStore.setState({ activeMeshDoc: null, currentId: null, currentName: name }),
+    ...(deps.signal ? { signal: deps.signal } : {}),
+  };
+}
+
 /** Wire the agent's tools to the live build seam, the projects store, and create_mesh.
  * Returns null when the geometry worker seam isn't ready yet (caller surfaces a hint) —
  * deliberately NO fallback client here: the Viewport owns the app's single geometry
@@ -84,6 +104,7 @@ export function buildTurnTools(deps: TurnToolsDeps): AgentTools | null {
     probe: meshProbe,
     currentDoc: () => useCadStore.getState().toDocument(),
     createMesh: buildCreateMeshDeps(deps),
+    meshToCad: buildMeshToCadDeps(deps),
     // 9-M1: a committed plan is recorded, not discarded — the FULL validated graph
     // goes into the per-project conversation trace as its own typed entry (the
     // generic tool lines truncate args at 200 chars; this one never truncates),

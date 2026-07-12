@@ -42,7 +42,7 @@ end_header
 `;
 
 describe("parsePlyAscii", () => {
-  it("reads x/y/z + nx/ny/nz by property position, skipping colors and the face block", () => {
+  it("reads x/y/z + nx/ny/nz by property position, skipping the face block", () => {
     const cloud = parsePlyAscii(PLY_WITH_NORMALS);
     expect(cloud.points).toEqual([
       [0, 0, 1],
@@ -54,6 +54,32 @@ describe("parsePlyAscii", () => {
       [0, 1, 0],
       [1, 0, 0],
     ]);
+  });
+
+  it("reads uchar red/green/blue as 0..1 RGB (255→1), index-aligned with points", () => {
+    const cloud = parsePlyAscii(PLY_WITH_NORMALS);
+    expect(cloud.colors).toEqual([
+      [1, 0, 0],
+      [0, 1, 0],
+      [0, 0, 1],
+    ]);
+  });
+
+  it("reads float r/g/b as-is (already 0..1) and has no colors key when absent", () => {
+    const floatRgb = `ply
+format ascii 1.0
+element vertex 1
+property float x
+property float y
+property float z
+property float r
+property float g
+property float b
+end_header
+0 0 0 0.25 0.5 0.75
+`;
+    expect(parsePlyAscii(floatRgb).colors).toEqual([[0.25, 0.5, 0.75]]);
+    expect(parsePlyAscii(PLY_POINTS_ONLY).colors).toBeUndefined();
   });
 
   it("returns no normals key when the vertex element has no nx/ny/nz", () => {

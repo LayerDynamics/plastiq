@@ -29,6 +29,12 @@ import {
   type SelectionMode,
   type Workspace,
 } from "./types.js";
+import type { SectionAnalysis } from "../viewport/section.js";
+import {
+  DEFAULT_SIM_EXPERIMENT,
+  type SimExperimentConfig,
+  type SimTelemetry,
+} from "../sim/experiments.js";
 
 /** Persistent refs (SPEC-4 FR-16) for the current build's pickable entities,
  * keyed by the transient pick id — the bridge a dress-up feature stores. */
@@ -67,6 +73,12 @@ export interface CadStore {
    * and applied by the viewport's sim loop (step one frame / rewind to start). */
   simStepReq: number;
   simRewindReq: number;
+  /** Bump to rebuild the sim with the current experiment config (new run). */
+  simRestartReq: number;
+  /** Physics experiment recipe applied when the sim spawns (drop test, etc.). */
+  simExperiment: SimExperimentConfig;
+  /** Live telemetry from the running sim (null when not simulating). */
+  simTelemetry: SimTelemetry | null;
 
   // --- undo/redo history (M2.2): snapshots of the document only ---
   past: HistorySnapshot[];
@@ -95,9 +107,9 @@ export interface CadStore {
   /** Volume + centroid of the current build (mass-properties readout), or null
    *  when the document has no geometry. Density-free; mass needs a material. */
   massProps: { volume: number; com: [number, number, number] } | null;
-  /** Section view (FR-14): a clip plane cutting the model along an axis at
-   *  fraction `t` of its extent, or null when off. Transient view state. */
-  section: { axis: "x" | "y" | "z"; t: number } | null;
+  /** Section analysis (FR-14 / Fusion-style): clip plane cutting the model, or
+   *  null when off. Axis fraction or face-derived plane + optional flip. */
+  section: SectionAnalysis | null;
   /** Exploded-view factor (FR-33): instances are spread from the assembly centroid
    *  by this fraction of their offset (0 = assembled). Transient view state. */
   explodeFactor: number;
@@ -143,8 +155,8 @@ export interface CadStore {
   setSelectionRefs: (refs: SelectionRefs) => void;
   /** Publish the current build's volume + centroid (null when no geometry). */
   setMassProps: (props: { volume: number; com: [number, number, number] } | null) => void;
-  /** Enable/adjust the section clip plane, or disable it (null) (FR-14). */
-  setSection: (section: { axis: "x" | "y" | "z"; t: number } | null) => void;
+  /** Enable/adjust the section analysis plane, or disable it (null) (FR-14). */
+  setSection: (section: SectionAnalysis | null) => void;
   /** Set the exploded-view factor (0 = assembled) (FR-33). */
   setExplodeFactor: (factor: number) => void;
   /** Request an interference check (the viewport computes + publishes it) (FR-33). */
@@ -205,6 +217,12 @@ export interface CadStore {
   requestSimStep: () => void;
   /** Request a rewind to the start (applied by the viewport). */
   requestSimRewind: () => void;
+  /** Request a full sim rebuild with the current experiment config. */
+  requestSimRestart: () => void;
+  /** Patch the physics experiment recipe (drop height, gravity, …). */
+  setSimExperiment: (patch: Partial<SimExperimentConfig>) => void;
+  /** Publish live experiment telemetry (viewport → UI). */
+  setSimTelemetry: (t: SimTelemetry | null) => void;
   /** Re-solve the mate network, writing solved poses back as the new seed. */
   solveAssembly: () => void;
 
@@ -289,6 +307,9 @@ type CadStateKey =
   | "simTicks"
   | "simStepReq"
   | "simRewindReq"
+  | "simRestartReq"
+  | "simExperiment"
+  | "simTelemetry"
   | "past"
   | "future"
   | "selectedFeatureId"
@@ -329,6 +350,9 @@ function initialCadState(): CadState {
     simTicks: 0,
     simStepReq: 0,
     simRewindReq: 0,
+    simRestartReq: 0,
+    simExperiment: { ...DEFAULT_SIM_EXPERIMENT },
+    simTelemetry: null,
     past: [],
     future: [],
     selectedFeatureId: null,
@@ -474,7 +498,13 @@ export const useCadStore = create<CadStore>((set, get) => ({
   // starts a fresh playing run, leaving stops it (mirrors setSimulating). Sketch
   // mode is a contextual env handled in the UI, not a workspace.
   setWorkspace: (w) =>
-    set({ workspace: w, simulating: w === "simulate", simPaused: false, simTicks: 0 }),
+    set({
+      workspace: w,
+      simulating: w === "simulate",
+      simPaused: false,
+      simTicks: 0,
+      simTelemetry: null,
+    }),
 
   setActiveFeatureEdit: (edit) => set({ activeFeatureEdit: edit }),
 
@@ -659,11 +689,20 @@ export const useCadStore = create<CadStore>((set, get) => ({
   setJointDrive: (id, value) => set((st) => ({ jointDrive: { ...st.jointDrive, [id]: value } })),
 
   // Entering or leaving Simulate always starts from a clean, playing, t=0 state.
-  setSimulating: (on) => set({ simulating: on, simPaused: false, simTicks: 0 }),
+  setSimulating: (on) =>
+    set({ simulating: on, simPaused: false, simTicks: 0, simTelemetry: on ? null : null }),
   setSimPaused: (on) => set({ simPaused: on }),
   setSimTicks: (ticks) => set({ simTicks: ticks }),
   requestSimStep: () => set((s) => ({ simStepReq: s.simStepReq + 1 })),
   requestSimRewind: () => set((s) => ({ simRewindReq: s.simRewindReq + 1 })),
+  requestSimRestart: () => set((s) => ({ simRestartReq: s.simRestartReq + 1 })),
+  setSimExperiment: (patch) =>
+    set((s) => ({
+      simExperiment: { ...s.simExperiment, ...patch },
+      // Changing the recipe while simulating rebuilds the world.
+      simRestartReq: s.simulating ? s.simRestartReq + 1 : s.simRestartReq,
+    })),
+  setSimTelemetry: (t) => set({ simTelemetry: t }),
 
   solveAssembly: () => {
     const { assembly } = get();

@@ -3,9 +3,10 @@
 // result, so it unit-tests in Node with no WebGL/DOM — the heart of the
 // context-filtered menu ("show the actions applicable to the selected item").
 
-import type { EditorFeature, FeatureId, Pick, SelectionMode } from "../../store/types.js";
+import type { EditorFeature, FeatureId, MeshDoc, Pick, PointCloudDoc, SelectionMode } from "../../store/types.js";
 import type { SelectionRefs } from "../../store/store.js";
 import type { SketchModel } from "../../sketch/model.js";
+import type { SectionAnalysis } from "../../viewport/section.js";
 
 /** The kind of thing the menu is acting on (precedence-resolved, see below). */
 export type ContextKind =
@@ -41,8 +42,8 @@ export interface ContextTarget {
   hasProfile: boolean;
   /** planegcs loaded — gates entering a sketch. */
   solverReady: boolean;
-  /** Section clip on/off (drives the toggle label + run). */
-  section: { axis: "x" | "y" | "z"; t: number } | null;
+  /** Section analysis on/off (drives the toggle label + run). */
+  section: SectionAnalysis | null;
   /** Measure tool active (drives the toggle label). */
   measuring: boolean;
   /** Exploded-view factor (0 = assembled) — drives the explode toggle. */
@@ -51,6 +52,13 @@ export interface ContextTarget {
   gizmoMode: "translate" | "rotate";
   /** Set when an assembly instance (not the base part) was right-clicked. */
   instanceId: string | null;
+  /** The open generated mesh document (SPEC-6 decision 20), or null in a parametric/voxel/empty
+   * project. Lets mesh-only actions (reconstruct → B-rep, fit NURBS) stay PURE over ctx — they gate
+   * on `ctx.activeMeshDoc != null` instead of reaching into the projects store from a predicate. */
+  activeMeshDoc: MeshDoc | null;
+  /** The open dense point-cloud document (SPEC-13), or null. Lets cloud-only actions (cloud→mesh,
+   * complete partial scan) stay PURE over ctx — they gate on `ctx.activePointCloudDoc != null`. */
+  activePointCloudDoc: PointCloudDoc | null;
   /** drei <Html> anchor: the 3D point under the cursor. */
   worldPoint: [number, number, number];
 }
@@ -66,7 +74,7 @@ export interface CadSnapshot {
   matePicks: readonly unknown[];
   simulating: boolean;
   simPaused: boolean;
-  section: { axis: "x" | "y" | "z"; t: number } | null;
+  section: SectionAnalysis | null;
   measuring: boolean;
   explodeFactor: number;
   gizmoMode: "translate" | "rotate";
@@ -115,8 +123,14 @@ export function resolveContextTarget(input: {
   sketch: SketchSnapshot;
   hit: RightClickHit | null;
   worldPoint: [number, number, number];
+  /** The open generated mesh document, or null (parametric/voxel/empty). Threaded so mesh-only
+   * actions gate purely on ctx (default null keeps existing call sites + tests unchanged). */
+  activeMeshDoc?: MeshDoc | null;
+  /** The open dense point-cloud document, or null. Threaded so cloud-only actions gate purely
+   * on ctx (default null keeps existing call sites + tests unchanged). */
+  activePointCloudDoc?: PointCloudDoc | null;
 }): ContextTarget {
-  const { cad, sketch, hit, worldPoint } = input;
+  const { cad, sketch, hit, worldPoint, activeMeshDoc = null, activePointCloudDoc = null } = input;
   const base = {
     picks: cad.picks,
     selMode: cad.selMode,
@@ -137,6 +151,8 @@ export function resolveContextTarget(input: {
     explodeFactor: cad.explodeFactor,
     gizmoMode: cad.gizmoMode,
     instanceId: hit?.instanceId ?? null,
+    activeMeshDoc,
+    activePointCloudDoc,
     worldPoint,
   };
 

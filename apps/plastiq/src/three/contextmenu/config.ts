@@ -23,6 +23,8 @@ import { FEATURE_EDIT_SPECS } from "../../viewport/featureGizmo.js";
 import type { EditorFeature } from "../../store/types.js";
 import type { FaceRef } from "@plastiq/cad";
 import type { ContextTarget } from "./contextSelection.js";
+import { ML_CONTEXT_ACTIONS } from "./mlActions.js";
+import { CLOUD_CONTEXT_ACTIONS } from "./cloudActions.js";
 
 /** Visual grouping (drives divider order in contextOptions.ts). */
 export type ActionGroup =
@@ -147,34 +149,59 @@ const CREATE: ContextAction[] = [
   {
     id: "extrude",
     group: "create",
-    label: () => "Extrude profile",
-    visible: (ctx) => editing(ctx) && ctx.hasProfile && (ctx.kind === "empty" || ctx.kind === "body"),
-    enabled: (ctx) => ctx.hasProfile,
-    run: () => {
-      const id = cad().addFeature({ type: "extrude", params: { height: EXTRUDE_H } });
-      openEdit(id, "extrude", EXTRUDE_H);
+    label: (ctx) => (ctx.hasProfile ? "Extrude profile" : "Extrude (sketch…)"),
+    // Always available in edit context: with a profile, extrudes now; without,
+    // opens a feature-driven sketch session (ADR-0014).
+    visible: (ctx) => editing(ctx) && (ctx.kind === "empty" || ctx.kind === "body"),
+    enabled: () => true,
+    run: (ctx) => {
+      if (ctx.hasProfile) {
+        const id = cad().addFeature({ type: "extrude", params: { height: EXTRUDE_H } });
+        openEdit(id, "extrude", EXTRUDE_H);
+        return;
+      }
+      useSketchStore
+        .getState()
+        .enterSketch("XY", 0, undefined, undefined, {
+          type: "extrude",
+          params: { height: EXTRUDE_H },
+        });
     },
   },
   {
     id: "cut",
     group: "create",
-    label: () => "Cut with profile",
-    visible: (ctx) => editing(ctx) && ctx.hasProfile && (ctx.kind === "empty" || ctx.kind === "body"),
-    enabled: (ctx) => ctx.hasProfile,
-    run: () => {
-      const id = cad().addFeature({ type: "cut", params: { depth: CUT_D } });
-      openEdit(id, "cut", CUT_D);
+    label: (ctx) => (ctx.hasProfile ? "Cut with profile" : "Cut (sketch…)"),
+    visible: (ctx) => editing(ctx) && (ctx.kind === "empty" || ctx.kind === "body"),
+    enabled: () => true,
+    run: (ctx) => {
+      if (ctx.hasProfile) {
+        const id = cad().addFeature({ type: "cut", params: { depth: CUT_D } });
+        openEdit(id, "cut", CUT_D);
+        return;
+      }
+      useSketchStore.getState().enterSketch("XY", 0, undefined, undefined, {
+        type: "cut",
+        params: { depth: CUT_D },
+      });
     },
   },
   {
     id: "revolve",
     group: "create",
-    label: () => "Revolve profile",
-    visible: (ctx) => editing(ctx) && ctx.hasProfile && (ctx.kind === "empty" || ctx.kind === "body"),
-    enabled: (ctx) => ctx.hasProfile,
-    run: () => {
-      const id = cad().addFeature({ type: "revolve", params: { angle: Math.PI * 2, ay: 1 } });
-      openEdit(id, "revolve", Math.PI * 2);
+    label: (ctx) => (ctx.hasProfile ? "Revolve profile" : "Revolve (sketch…)"),
+    visible: (ctx) => editing(ctx) && (ctx.kind === "empty" || ctx.kind === "body"),
+    enabled: () => true,
+    run: (ctx) => {
+      if (ctx.hasProfile) {
+        const id = cad().addFeature({ type: "revolve", params: { angle: Math.PI * 2, ay: 1 } });
+        openEdit(id, "revolve", Math.PI * 2);
+        return;
+      }
+      useSketchStore.getState().enterSketch("XY", 0, undefined, undefined, {
+        type: "revolve",
+        params: { angle: Math.PI * 2, ay: 1 },
+      });
     },
   },
 ];
@@ -460,10 +487,33 @@ const VIEW: ContextAction[] = [
   {
     id: "section",
     group: "view",
-    label: (ctx) => (ctx.section ? "Exit section view" : "Section view"),
+    label: (ctx) => (ctx.section ? "Exit section analysis" : "Section analysis"),
     visible: (ctx) => !ctx.inSketch && !ctx.simulating,
     enabled: always,
-    run: (ctx) => cad().setSection(ctx.section ? null : { axis: "x", t: 0.5 }),
+    run: (ctx) => {
+      if (ctx.section) {
+        cad().setSection(null);
+        return;
+      }
+      // Fusion: right-click face → section on that plane; else mid-model X cut.
+      if (ctx.kind === "face" && ctx.picks[0]?.kind === "face") {
+        const ref = ctx.refs.faces[ctx.picks[0].id];
+        if (ref) {
+          const origin =
+            (ref as { centroid?: [number, number, number] }).centroid ??
+            ([0, 0, 0] as [number, number, number]);
+          cad().setSection({
+            kind: "plane",
+            origin,
+            normal: ref.normal as [number, number, number],
+            offset: 0,
+            flip: false,
+          });
+          return;
+        }
+      }
+      cad().setSection({ kind: "axis", axis: "x", t: 0.5, flip: false });
+    },
   },
   {
     id: "measure",
@@ -576,6 +626,8 @@ const SKETCH: ContextAction[] = [
 export const CONTEXT_ACTIONS: ContextAction[] = [
   ...CREATE,
   ...MODIFY,
+  ...ML_CONTEXT_ACTIONS, // mesh→CAD (reconstruct / NURBS), visible only with an open MeshDoc
+  ...CLOUD_CONTEXT_ACTIONS, // cloud→mesh (capture / complete), visible only with an open PointCloudDoc
   ...SKETCH,
   ...FEATURE,
   ...ASSEMBLY,
@@ -584,6 +636,24 @@ export const CONTEXT_ACTIONS: ContextAction[] = [
   ...VIEW,
   ...SELECTION,
 ];
+
+/** Whether an action is appropriate for the current DOCUMENT MODE. A mesh or point-cloud document is
+ * non-parametric, so ONLY that mode's conversion actions apply — a mesh shows the mesh→CAD actions
+ * (`ml-*`), a cloud shows the cloud→mesh actions (`cloud-*`). The parametric create/modify/sketch
+ * actions are hidden there because they would operate on the empty editor document underneath the
+ * mesh/cloud (FR-18, no silent wrong-doc edit). Parametric/empty targets see the whole catalog — the
+ * `ml-*`/`cloud-*` actions self-hide via their own `visible` (no active mesh/cloud). */
+function actionInDocMode(action: ContextAction, ctx: ContextTarget): boolean {
+  if (ctx.activeMeshDoc) return action.id.startsWith("ml-");
+  if (ctx.activePointCloudDoc) return action.id.startsWith("cloud-");
+  return true;
+}
+
+/** Whether an action should appear in a menu/ring for this target: pure visibility AND doc-mode
+ * appropriateness. The single visibility gate both context surfaces (menu + RECM ring) share. */
+export function isActionVisible(action: ContextAction, ctx: ContextTarget): boolean {
+  return action.visible(ctx) && actionInDocMode(action, ctx);
+}
 
 /** Run a catalog action by id against a resolved target, honouring enabled().
  * Shared by the canvas provider + the sketcher's own right-click menu. */

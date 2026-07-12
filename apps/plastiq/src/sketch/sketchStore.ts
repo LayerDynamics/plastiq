@@ -1,9 +1,10 @@
-// Transient sketch-editing state (SPEC-5 M3). Kept OUT of the document store and
-// its undo/redo: entering a sketch is a modal state, not a document mutation
-// (ADR-0013 principle). Finish commits the constrained model into the `sketch`
-// feature's data; the constraint solve runs HERE on the main thread (the kernel
-// solveSketch is pure TS, no OCCT) so dragging re-solves live without a worker
-// round-trip.
+// Transient sketch-editing state (SPEC-5 M3 / ADR-0014). Kept OUT of the document
+// store and its undo/redo: entering a sketch is a session state, not a document
+// mutation (sketch-session principle). Finish commits the constrained model into
+// the `sketch` feature's data; the constraint solve runs HERE on the main thread
+// (the kernel solveSketch is pure TS, no OCCT) so dragging re-solves live without
+// a worker round-trip. Drawing is 3D in-place (SketchScene); this store is the
+// parametric source of truth.
 
 import { create } from "zustand";
 import { solveSketch, type SolveResult } from "@plastiq/cad";
@@ -41,10 +42,18 @@ export type SketchTool =
   | "spline"
   | "point";
 
+/** Feature-driven sketch session (ADR-0014): Finish commits sketch + this feature. */
+export type SketchConsumer =
+  | { type: "extrude"; params: Record<string, number>; data?: Record<string, unknown> }
+  | { type: "cut"; params: Record<string, number>; data?: Record<string, unknown> }
+  | { type: "revolve"; params: Record<string, number>; data?: Record<string, unknown> };
+
 export interface SketchStore {
   active: boolean;
   /** The document feature being edited (null = a brand-new sketch). */
   editingFeatureId: string | null;
+  /** When set, Finish also adds this solid feature consuming the new sketch (W4). */
+  consumer: SketchConsumer | null;
   model: SketchModel;
   view: View2D;
   tool: SketchTool;
@@ -75,6 +84,7 @@ export interface SketchStore {
     offset?: number,
     featureId?: string,
     model?: SketchModel,
+    consumer?: SketchConsumer | null,
   ) => void;
   exitSketch: () => void;
   setView: (view: View2D) => void;
@@ -142,6 +152,7 @@ function id(prefix: string): string {
 export const useSketchStore = create<SketchStore>((set, get) => ({
   active: false,
   editingFeatureId: null,
+  consumer: null,
   model: emptySketch(),
   view: centeredView(800, 600),
   tool: "select",
@@ -156,7 +167,7 @@ export const useSketchStore = create<SketchStore>((set, get) => ({
   future: [],
   setSolverReady: (ready) => set({ solverReady: ready }),
 
-  enterSketch: (plane, offset = 0, featureId, model) => {
+  enterSketch: (plane, offset = 0, featureId, model, consumer = null) => {
     // The sketcher solves synchronously; refuse to open it until planegcs is
     // loaded so a constraint solve can never race the wasm. The Sketch button is
     // also disabled while !solverReady, so this is a belt-and-suspenders guard.
@@ -164,6 +175,7 @@ export const useSketchStore = create<SketchStore>((set, get) => ({
     set({
       active: true,
       editingFeatureId: featureId ?? null,
+      consumer: consumer ?? null,
       model: model ? structuredClone(model) : emptySketch(plane, offset),
       tool: "select",
       pending: [],
@@ -176,7 +188,15 @@ export const useSketchStore = create<SketchStore>((set, get) => ({
   },
 
   exitSketch: () =>
-    set({ active: false, editingFeatureId: null, selection: [], pending: [], past: [], future: [] }),
+    set({
+      active: false,
+      editingFeatureId: null,
+      consumer: null,
+      selection: [],
+      pending: [],
+      past: [],
+      future: [],
+    }),
   setView: (view) => set({ view }),
   setTool: (tool) => set({ tool, selection: [], pending: [] }),
   setConstruction: (on) => set({ construction: on }),

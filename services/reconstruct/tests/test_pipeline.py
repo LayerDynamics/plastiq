@@ -3,12 +3,14 @@
 import os
 
 import numpy as np
+import pytest
 import trimesh
 
 import app.pipeline
 from app.faceted import faceted_shape
+from app.occ_pool import IsolatedWorkerError
 from app.occ_step import shape_to_step
-from app.pipeline import reconstruct
+from app.pipeline import reconstruct, reconstruct_isolated
 
 FIX = os.path.join(os.path.dirname(__file__), "fixtures")
 
@@ -218,3 +220,28 @@ def test_report_face_type_breakdown_cylinder_counts_curved():
     assert r.planar_faces == 2  # the two circular caps
     assert r.faceted_faces == 0  # nothing fell back to per-triangle
     assert r.planar_faces + r.curved_faces + r.freeform_faces == r.faces_built
+
+
+def test_reconstruct_isolated_matches_inprocess():
+    """The crash-isolated spawn path returns the SAME wire dict as the in-process reconstruct.
+
+    A very large organic mesh can OOM/crash inside OCCT; running the build in a thread would take the
+    whole service process down. The isolated path runs it in a spawn child instead — this asserts that
+    isolation is transparent for a normal mesh (same STEP + report), so it is safe to always use."""
+    glb = trimesh.creation.box(extents=(0.03, 0.02, 0.01)).export(file_type="glb")
+    inproc = reconstruct(glb, "glb", method="faceted").to_dict()
+    isolated = reconstruct_isolated(glb, "glb", method="faceted")
+    assert isolated["report"]["method"] == inproc["report"]["method"] == "faceted"
+    assert isolated["report"]["is_valid"] == inproc["report"]["is_valid"]
+    assert isolated["report"]["is_solid"] == inproc["report"]["is_solid"]
+    assert isolated["step"].startswith("ISO-10303-21")
+    assert "END-ISO-10303-21" in isolated["step"]
+
+
+def test_reconstruct_isolated_worker_failure_degrades_not_crashes():
+    """A failure inside the isolated worker surfaces as a catchable IsolatedWorkerError — the caller
+    process survives. This is the graceful-degradation contract: an OOM/native crash on a pathological
+    mesh fails THAT job (HTTP 500) instead of SIGKILLing the service. Here an invalid GLB makes the
+    worker raise; the abnormal-death (SIGKILL) flavor is covered by the occ_pool unit tests."""
+    with pytest.raises(IsolatedWorkerError):
+        reconstruct_isolated(b"this is not a valid GLB payload", "glb")

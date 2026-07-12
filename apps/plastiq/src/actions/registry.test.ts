@@ -1,10 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { useCadStore } from "../store/store.js";
 import { useProjectsStore } from "../persistence/projectsStore.js";
-import type { MeshDoc } from "../store/types.js";
+import type { MeshDoc, PointCloudDoc } from "../store/types.js";
 import { CONTEXT_ACTIONS } from "../three/contextmenu/config.js";
 import type { ContextTarget } from "../three/contextmenu/contextSelection.js";
-import { ACTIONS, meshMode, runAction } from "./registry.js";
+import { ACTIONS, meshMode, pointCloudMode, runAction } from "./registry.js";
 
 const MESH_DOC: MeshDoc = {
   kind: "mesh",
@@ -35,6 +35,8 @@ function makeTarget(over: Partial<ContextTarget> = {}): ContextTarget {
     explodeFactor: 0,
     gizmoMode: "translate",
     instanceId: null,
+    activeMeshDoc: null,
+    activePointCloudDoc: null,
     worldPoint: [0, 0, 0],
     ...over,
   };
@@ -119,6 +121,13 @@ describe("action registry — run() invokes the real store action", () => {
     ]);
   });
 
+  it("loft / sweep set status guidance for real authoring (G10)", () => {
+    runAction("loft", makeTarget());
+    expect(useCadStore.getState().status).toMatch(/Loft:.*sections|demo frustum/i);
+    runAction("sweep", makeTarget());
+    expect(useCadStore.getState().status).toMatch(/Sweep:.*profile\/path|demo pipe/i);
+  });
+
   it("selmode-* switches the selection mode and reports active", () => {
     runAction("selmode-edge", makeTarget());
     expect(useCadStore.getState().selMode).toBe("edge");
@@ -190,6 +199,70 @@ describe("action registry — mesh mode disables B-rep ops (FR-18)", () => {
     // selection mode is always allowed
     expect(ACTIONS["selmode-edge"]!.enabled(makeTarget())).toBe(true);
     // undo still follows the history predicate (not mesh-gated), here with one feature
+    useCadStore.getState().addFeature({ type: "extrude", params: { height: 0.02 } });
+    expect(ACTIONS["undo"]!.enabled(makeTarget())).toBe(true);
+  });
+
+  it("mesh→CAD conversions (reconstruct / fit-NURBS) are ENABLED on a mesh document", () => {
+    // gateForDocMode must NOT force-disable these in mesh mode (they consume the mesh);
+    // their own `enabled` gates on the resolved target carrying the open MeshDoc.
+    const onMesh = makeTarget({ activeMeshDoc: MESH_DOC });
+    expect(ACTIONS["ml-reconstruct-brep"]!.enabled(onMesh)).toBe(true);
+    expect(ACTIONS["ml-fit-nurbs"]!.enabled(onMesh)).toBe(true);
+  });
+});
+
+describe("action registry — mesh→CAD conversions are the inverse gate of B-rep ops", () => {
+  beforeEach(() => {
+    useCadStore.getState().reset();
+    useProjectsStore.setState({ activeMeshDoc: null });
+  });
+
+  it("reconstruct / fit-NURBS are DISABLED with no mesh open (nothing to convert)", () => {
+    const noMesh = makeTarget({ activeMeshDoc: null });
+    expect(ACTIONS["ml-reconstruct-brep"]!.enabled(noMesh)).toBe(false);
+    expect(ACTIONS["ml-fit-nurbs"]!.enabled(noMesh)).toBe(false);
+  });
+
+  it("running a disabled conversion with no mesh open is a no-op", () => {
+    expect(() => runAction("ml-reconstruct-brep", makeTarget({ activeMeshDoc: null }))).not.toThrow();
+    expect(useCadStore.getState().features).toHaveLength(0);
+  });
+
+  it("both conversions are registered actions (re-exposed from the context catalog)", () => {
+    expect(ACTIONS["ml-reconstruct-brep"]).toBeDefined();
+    expect(ACTIONS["ml-fit-nurbs"]).toBeDefined();
+  });
+});
+
+describe("action registry — point-cloud mode disables B-rep ops (SPEC-13, FR-18)", () => {
+  const CLOUD_DOC: PointCloudDoc = {
+    kind: "pointcloud",
+    name: "Scan",
+    points: [0, 0, 0, 1, 0, 0],
+    source: { mode: "photos3d", providerId: "photogrammetry" },
+  };
+  beforeEach(() => {
+    useCadStore.getState().reset();
+    useProjectsStore.setState({ activeMeshDoc: null, activePointCloudDoc: CLOUD_DOC });
+  });
+  afterEach(() => useProjectsStore.setState({ activePointCloudDoc: null }));
+
+  it("pointCloudMode() reflects the open cloud document", () => {
+    expect(pointCloudMode()).toBe(true);
+    useProjectsStore.setState({ activePointCloudDoc: null });
+    expect(pointCloudMode()).toBe(false);
+  });
+
+  it("B-rep feature ops + the mesh→CAD conversions are disabled on a cloud document", () => {
+    const t = makeTarget();
+    for (const id of ["loft", "sweep", "mirror", "boolean", "ml-reconstruct-brep", "ml-fit-nurbs"]) {
+      expect(ACTIONS[id]!.enabled(t), id).toBe(false);
+    }
+  });
+
+  it("editor-state actions (undo/redo, selection mode) stay available in cloud mode", () => {
+    expect(ACTIONS["selmode-edge"]!.enabled(makeTarget())).toBe(true);
     useCadStore.getState().addFeature({ type: "extrude", params: { height: 0.02 } });
     expect(ACTIONS["undo"]!.enabled(makeTarget())).toBe(true);
   });

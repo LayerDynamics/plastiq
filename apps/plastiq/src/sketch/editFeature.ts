@@ -44,8 +44,24 @@ export function finishSketchFeature(): boolean {
     : { base: m.plane, offset: m.offset ?? 0 };
   const data = { model: structuredClone(m), profile, plane };
   const cad = useCadStore.getState();
-  if (sketch.editingFeatureId) cad.setFeatureData(sketch.editingFeatureId, data);
-  else cad.addFeature({ type: "sketch", data });
+  const consumer = sketch.consumer;
+  let sketchId: string;
+  if (sketch.editingFeatureId) {
+    cad.setFeatureData(sketch.editingFeatureId, data);
+    sketchId = sketch.editingFeatureId;
+  } else {
+    sketchId = cad.addFeature({ type: "sketch", data });
+  }
+  // Feature-driven session (ADR-0014 W4): Extrude/Cut/Revolve opened the sketch
+  // with a consumer — commit the solid feature in the same Finish step.
+  if (consumer && !sketch.editingFeatureId) {
+    cad.addFeature({
+      type: consumer.type,
+      params: consumer.params,
+      data: consumer.data,
+      deps: [sketchId],
+    });
+  }
   sketch.exitSketch();
   return true;
 }

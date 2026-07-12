@@ -26,7 +26,8 @@ import {
 
 import { useAiStore } from "./aiStore.js";
 import { meshFromPointCloud, type CaptureScanDeps } from "./capture.js";
-import type { MeshDoc } from "../store/types.js";
+import { parsedToPointCloudDoc } from "./pointcloudFile.js";
+import type { MeshDoc, PointCloudDoc } from "../store/types.js";
 
 /** Merge the persisted photogrammetry service settings under any caller-supplied overrides. */
 function withServiceSettings<T extends { apiKey?: string; baseURL?: string }>(opts: T): T {
@@ -73,6 +74,20 @@ export function parseDenseCloud(densePly: string): CaptureInput {
     );
   }
   return { points: parsed.points, normals: parsed.normals };
+}
+
+/** Parse the base64 dense-cloud PLY into a PointCloudDoc for on-canvas display (SPEC-13) — the
+ * colour-preserving sibling of {@link parseDenseCloud}. It flattens the parser's Nx3 arrays to the
+ * flat JSON buffers a PointCloudDoc persists, and (unlike the capture leg) does NOT require normals:
+ * a cloud renders fine without them, though photogrammetry dense clouds carry both normals + colour.
+ * This is what lets the dense result be SHOWN on the canvas rather than only reconstructed away. */
+export function denseCloudToPointCloudDoc(
+  densePly: string,
+  name = "Photogrammetry cloud",
+  providerId = "photogrammetry",
+): PointCloudDoc {
+  const parsed = parsePointCloud("dense.ply", atob(densePly));
+  return parsedToPointCloudDoc(parsed, name, { mode: "photos3d", providerId });
 }
 
 /** Hand-off (b): reconstruct the dense oriented cloud into a watertight MeshDoc via the capture

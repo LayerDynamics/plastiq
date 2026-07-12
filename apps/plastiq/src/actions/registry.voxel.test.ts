@@ -50,6 +50,8 @@ function makeTarget(over: Partial<ContextTarget> = {}): ContextTarget {
     explodeFactor: 0,
     gizmoMode: "translate",
     instanceId: null,
+    activeMeshDoc: null,
+    activePointCloudDoc: null,
     worldPoint: [0, 0, 0],
     ...over,
   };

@@ -8,6 +8,7 @@ import * as THREE from "three";
 import { useThree } from "@react-three/fiber";
 import { useCadStore } from "../../store/store.js";
 import { useSketchStore } from "../../sketch/sketchStore.js";
+import { useProjectsStore } from "../../persistence/projectsStore.js";
 import { useSharedPickers } from "../sharedPickers.js";
 import type { BuiltPart } from "../../viewport/buildMesh.js";
 import { resolveContextTarget, type RightClickHit } from "./contextSelection.js";
@@ -131,6 +132,8 @@ export function useCanvasRightClick(part: BuiltPart | null): void {
         sketch: snapshotSketch(),
         hit,
         worldPoint,
+        activeMeshDoc: useProjectsStore.getState().activeMeshDoc, // gates the mesh→CAD actions
+        activePointCloudDoc: useProjectsStore.getState().activePointCloudDoc, // gates the cloud→mesh actions
       });
       useContextMenu.getState().openAt(target, buildMenuSections(target));
       invalidate();

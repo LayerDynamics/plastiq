@@ -108,27 +108,34 @@ export function loftFeature(
   return { type: "loft", data: { sections, ruled } };
 }
 
-/** A sweep of `profile` along a polyline/arc `path` (FR-32). */
-export function sweepFeature(profile: Profile, path: SpinePath): NewFeature {
-  return { type: "sweep", data: { profile, path } };
+/** A sweep of `profile` along a polyline path (FR-32). Optional `plane` places
+ * the profile (defaults to world-XY at rebuild when omitted). */
+export function sweepFeature(
+  profile: Profile,
+  path: SpinePath,
+  plane?: { base: "XY" | "XZ" | "YZ"; offset: number },
+): NewFeature {
+  return { type: "sweep", data: plane ? { profile, path, plane } : { profile, path } };
 }
 
-/** A draft feature tapering the first picked face about the base plane, or null. */
+/** A draft feature tapering the picked face(s) about the base plane, or null.
+ * Multi-face selection is stored as `data.faces` (G9); a single face also sets
+ * `data.face` for back-compat with older documents. */
 export function draftFeature(
   picks: readonly Pick[],
   refs: SelectionRefs,
   angle: number,
 ): NewFeature | null {
   const faces = faceRefsFromPicks(picks, refs);
-  const face = faces[0];
-  if (!face) return null;
+  if (faces.length === 0) return null;
   // Default neutral plane = the world base (z=0, +Z), pulling along +Z; suitable
   // for tapering the upright faces of a part for mold release.
   return {
     type: "draft",
     params: { angle },
     data: {
-      face,
+      face: faces[0],
+      faces,
       pull: [0, 0, 1],
       neutralOrigin: [0, 0, 0],
       neutralNormal: [0, 0, 1],

@@ -33,10 +33,12 @@ export type FeatureType = (typeof FEATURE_TYPES)[number];
 export const LENGTH_PARAMS: Record<string, readonly string[]> = {
   box: ["dx", "dy", "dz"],
   extrude: ["height", "back"],
-  cut: ["depth"],
+  cut: ["depth", "back"],
   fillet: ["radius"],
   chamfer: ["distance"],
   shell: ["thickness"],
+  // Revolve axis origin (ox,oy,oz) is a length so AI authoring in mm converts correctly.
+  revolve: ["ox", "oy", "oz"],
   transform: ["tx", "ty", "tz"],
   mirror: ["ox", "oy", "oz"],
   linearPattern: ["spacing"],

@@ -15,6 +15,7 @@ describe("featureUnits classification", () => {
     expect(classifyParam("box", "dx")).toBe("length");
     expect(classifyParam("revolve", "angle")).toBe("angle");
     expect(classifyParam("revolve", "ax")).toBe("scalar"); // axis component
+    expect(classifyParam("revolve", "ox")).toBe("length"); // axis origin
     expect(classifyParam("linearPattern", "count")).toBe("scalar");
     expect(classifyParam("linearPattern", "spacing")).toBe("length");
     expect(classifyParam("placement", "rz")).toBe("angle");

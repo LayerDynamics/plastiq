@@ -10,6 +10,7 @@ import { cancelJob, solvePhotos } from "@plastiq/photogrammetry";
 import {
   cancelPhotogrammetry,
   denseCloudToMeshDoc,
+  denseCloudToPointCloudDoc,
   parseDenseCloud,
   solvePhotogrammetry,
 } from "./photogrammetry.js";
@@ -139,6 +140,21 @@ describe("parseDenseCloud", () => {
       ["ply", "format ascii 1.0", "element vertex 1", "property float x", "property float y", "property float z", "end_header", "0 0 0", ""].join("\n"),
     );
     expect(() => parseDenseCloud(noNormals)).toThrow(/no normals/);
+  });
+});
+
+describe("denseCloudToPointCloudDoc — the on-canvas cloud (SPEC-13), colour-preserving", () => {
+  it("flattens points + colours + normals into a PointCloudDoc (colours normalized 0..1)", () => {
+    const doc = denseCloudToPointCloudDoc(densePlyB64(), "My scan");
+    expect(doc.kind).toBe("pointcloud");
+    expect(doc.name).toBe("My scan");
+    expect(doc.source).toEqual({ mode: "photos3d", providerId: "photogrammetry" });
+    expect(doc.points).toEqual([0, 0, 0, 1, 1, 1]); // flat, from the two vertices
+    expect(doc.normals).toEqual([0, 0, 1, 0, 1, 0]);
+    // uchar 100/200 → 100/255, 200/255 (the parser's 0..1 conversion), then flattened
+    expect(doc.colors![0]).toBeCloseTo(100 / 255);
+    expect(doc.colors![3]).toBeCloseTo(200 / 255);
+    expect(doc.colors).toHaveLength(6);
   });
 });
 

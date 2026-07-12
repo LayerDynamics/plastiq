@@ -435,6 +435,27 @@ describe("CAD Studio store — sim playback (FR-41)", () => {
     s().setSimTicks(48);
     expect(s().simTicks).toBe(48);
   });
+
+  it("setSimExperiment patches the recipe and restarts only while simulating", () => {
+    const r0 = s().simRestartReq;
+    s().setSimExperiment({ kind: "free-fall", dropHeight: 0.25 });
+    expect(s().simExperiment.kind).toBe("free-fall");
+    expect(s().simExperiment.dropHeight).toBe(0.25);
+    // Not simulating → no rebuild request.
+    expect(s().simRestartReq).toBe(r0);
+
+    s().setSimulating(true);
+    const r1 = s().simRestartReq;
+    s().setSimExperiment({ gravityScale: 0.16 });
+    expect(s().simExperiment.gravityScale).toBe(0.16);
+    expect(s().simRestartReq).toBe(r1 + 1);
+  });
+
+  it("requestSimRestart bumps the rebuild token", () => {
+    const r0 = s().simRestartReq;
+    s().requestSimRestart();
+    expect(s().simRestartReq).toBe(r0 + 1);
+  });
 });
 
 describe("CAD Studio store — undo/redo & mate-id correctness (S1–S3)", () => {

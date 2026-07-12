@@ -37,6 +37,11 @@ class BaseSurfaceModel(nn.Module):
         # Hierarchical (importance) sampling — see VanillaNeRF. 0 ⇒ coarse-only (default).
         self.importance_samples = config.sampler.importance_samples
         self.pdf_sampler = PDFSampler(self.importance_samples) if self.importance_samples > 0 else None
+        # Constant background composited behind each ray (synthetic scenes); None ⇒ black (real capture).
+        self.background = (
+            mx.array(config.background, dtype=mx.float32) if config.background is not None else None
+        )
+        self.mask_weight = float(config.mask_weight)  # silhouette-loss weight (used iff targets carry alpha)
 
     def sdf_to_density(self, sdf: mx.array) -> mx.array:
         """Map a signed distance `(...)` to a non-negative volume density. Subclass responsibility
@@ -67,16 +72,26 @@ class BaseSurfaceModel(nn.Module):
             t = mx.sort(mx.concatenate([t, t_fine], axis=-1), axis=-1)
             positions = origins[:, None, :] + t[:, :, None] * directions[:, None, :]
         density, rgb, flat = self._density_rgb(positions, directions)
-        rendered = volumetric_render(density, rgb, t)["rgb"]
-        return rendered, flat
+        out = volumetric_render(density, rgb, t)
+        rendered = out["rgb"]
+        if self.background is not None:
+            # pixel = Σw·c + (1−Σw)·bg — forces the SDF to model true opacity, not explain the object
+            # as empty space over a bright background.
+            rendered = rendered + (1.0 - out["accumulation"])[:, None] * self.background
+        return rendered, flat, out["accumulation"]
 
     def render_rays(self, origins: mx.array, directions: mx.array, key: mx.array | None = None) -> mx.array:
         """Rays `(R,3)` → rendered RGB `(R,3)`."""
         return self._render(origins, directions, key)[0]
 
     def render_loss(self, origins: mx.array, directions: mx.array, target: mx.array, key: mx.array) -> mx.array:
-        """Photometric MSE + eikonal — the Trainer's per-batch objective for a surface model."""
-        rendered, flat = self._render(origins, directions, key)
-        l_photo = mse_loss(rendered, target)
+        """Photometric MSE + eikonal, plus an optional silhouette term. When `target` carries a 4th
+        (alpha) channel, add `mask_weight·(accumulation − alpha)²` so opacity is pinned to the object
+        mask — without it a plain colour loss can delete the surface (the collapse on masked scenes)."""
+        rendered, flat, accumulation = self._render(origins, directions, key)
+        l_photo = mse_loss(rendered, target[:, :3])
         grad = mx.grad(lambda p: self.field.sdf(p).sum())(flat)  # ∂sdf/∂x per sampled point (R·S,3)
-        return l_photo + self.lam_eikonal * eikonal_loss(grad)
+        loss = l_photo + self.lam_eikonal * eikonal_loss(grad)
+        if target.shape[-1] == 4:
+            loss = loss + self.mask_weight * mx.mean((accumulation - target[:, 3]) ** 2)
+        return loss

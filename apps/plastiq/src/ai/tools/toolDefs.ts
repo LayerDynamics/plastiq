@@ -10,6 +10,7 @@ import { authoringDocumentSchema } from "./schema.js";
 import { buildPart, type BuildPartDeps } from "./buildPart.js";
 import { inspectGeometry, type MeshProbe } from "./inspectGeometry.js";
 import { createMesh, type CreateMeshDeps } from "./createMesh.js";
+import { fitNurbs, reconstructBrep, type MeshToCadDeps } from "./meshToCad.js";
 import { planSchema, summarizePlan, validatePlan, type PlanGraph } from "../planning.js";
 import type { ToolDef, JsonSchema } from "../providers/types.js";
 import type { AgentTools, ToolHandler } from "../agentRunner.js";
@@ -21,6 +22,11 @@ export const ANSWER_USER = "answer_user";
 /** The creative 3D-gen tool (the paid path). Named so the prompt assembly can derive the
  * creative guidance from the actual tool surface (runGeneration) without string drift. */
 export const CREATE_MESH = "create_mesh";
+
+/** The mesh→CAD conversion tools (local services, free): reconstruct the open mesh to a B-rep,
+ * or fit smooth NURBS surfaces to it. Offered when a mesh document can be converted. */
+export const RECONSTRUCT_BREP = "reconstruct_brep";
+export const FIT_NURBS = "fit_nurbs";
 
 /** JSON Schema for the authoring document, derived from the single zod source so the
  * tool contract never drifts from the validator. Falls back to a permissive object
@@ -43,8 +49,9 @@ function planJsonSchema(): JsonSchema {
   }
 }
 
-/** The model-facing tool definitions. `creative` adds create_mesh (the paid 3D path). */
-export function toolDefs(opts: { creative: boolean }): ToolDef[] {
+/** The model-facing tool definitions. `creative` adds create_mesh (the paid 3D path); `meshToCad`
+ * adds the reconstruct_brep + fit_nurbs conversions (local services) for turning a mesh into CAD. */
+export function toolDefs(opts: { creative: boolean; meshToCad?: boolean }): ToolDef[] {
   const defs: ToolDef[] = [
     {
       name: "plan_part",
@@ -99,6 +106,26 @@ export function toolDefs(opts: { creative: boolean }): ToolDef[] {
       },
     });
   }
+  if (opts.meshToCad) {
+    defs.push(
+      {
+        name: RECONSTRUCT_BREP,
+        description:
+          "Convert the currently OPEN generated mesh document into an editable parametric B-rep (STEP) using the local reconstruction service, then load it as the live CAD part. Use when the user wants to edit, dimension, or add features to a generated/scanned mesh. Best for mechanical/planar shapes. Optional 'method': auto (analytic routes → fitted fallback, the default), fitted (freeform surface fit), or faceted (per-triangle). Requires a mesh document to be open (e.g. right after create_mesh).",
+        parameters: {
+          type: "object",
+          additionalProperties: false,
+          properties: { method: { type: "string", enum: ["auto", "fitted", "faceted"] } },
+        },
+      },
+      {
+        name: FIT_NURBS,
+        description:
+          "Fit smooth NURBS surfaces to the currently OPEN generated mesh document (local NURBS service), producing an editable CAD solid/shell, then load it as the live CAD part. Prefer this over reconstruct_brep for ORGANIC / freeform meshes where smooth surfaces beat planar reconstruction. Requires a mesh document to be open.",
+        parameters: { type: "object", additionalProperties: false, properties: {} },
+      },
+    );
+  }
   return defs;
 }
 
@@ -111,6 +138,8 @@ export interface AgentToolDeps {
   currentDoc: () => CadDocument;
   /** create_mesh deps — when present, the creative tool is offered + wired. */
   createMesh?: CreateMeshDeps;
+  /** mesh→CAD deps — when present, reconstruct_brep + fit_nurbs are offered + wired. */
+  meshToCad?: MeshToCadDeps;
   /** M5: called when the agent commits a (validated) decomposition plan, so the trace/UX
    * can show it (9-M1). Both production runners inject it: buildTurnTools (agentTurn.ts)
    * records the FULL plan into the conversation trace (kind "plan") and the panel renders
@@ -203,5 +232,15 @@ export function buildAgentTools(deps: AgentToolDeps): AgentTools {
     };
   }
 
-  return { defs: toolDefs({ creative: deps.createMesh != null }), handlers };
+  if (deps.meshToCad) {
+    const mc = deps.meshToCad;
+    const asResult = (r: { status: "ok" | "error"; message: string; errors?: string }): { result: string; isError: boolean } => ({
+      result: r.status === "ok" ? r.message : `${r.message}${r.errors ? ` Errors: ${r.errors}` : ""}`,
+      isError: r.status === "error",
+    });
+    handlers[RECONSTRUCT_BREP] = async (args) => asResult(await reconstructBrep(args, mc));
+    handlers[FIT_NURBS] = async (args) => asResult(await fitNurbs(args, mc));
+  }
+
+  return { defs: toolDefs({ creative: deps.createMesh != null, meshToCad: deps.meshToCad != null }), handlers };
 }

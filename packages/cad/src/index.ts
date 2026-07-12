@@ -59,6 +59,7 @@ export {
   extrude,
   revolve,
   type DraftOptions,
+  type ShellOptions,
   fillet,
   chamfer,
   shell,
@@ -66,12 +67,20 @@ export {
   type ExtrudeToFaceOptions,
   extrudeToFace,
   type LoftOptions,
+  type SweepOptions,
+  type SweepTransition,
   loft,
   sweep,
   linearPattern,
   circularPattern,
 } from "./action/index.js";
-export { type SpinePath, buildSpineWire } from "./sketch/spine.js";
+export {
+  type SpinePath,
+  type SpinePolyline,
+  type SpineSegmented,
+  type SpineSegment,
+  buildSpineWire,
+} from "./sketch/spine.js";
 
 // R5 — sketch constraint solver (planegcs) + 3D assembly mate solver.
 export {

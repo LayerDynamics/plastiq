@@ -189,6 +189,33 @@ describe("buildAgentTools dispatch", () => {
     const res = await withCreative.handlers["create_mesh"]!({ mode: "text3d", prompt: "x", providerId: "nope" });
     expect(res.isError).toBe(true);
   });
+
+  it("reconstruct_brep + fit_nurbs are wired + offered only when meshToCad deps are supplied", async () => {
+    const without = buildAgentTools(deps());
+    expect(without.handlers["reconstruct_brep"]).toBeUndefined();
+    expect(without.handlers["fit_nurbs"]).toBeUndefined();
+    expect(without.defs.some((d) => d.name === "reconstruct_brep")).toBe(false);
+
+    const withMeshToCad = buildAgentTools(
+      deps({
+        meshToCad: {
+          mesh: () => null, // no mesh open → the handler returns a structured error, not a throw
+          reconstruct: async () => ({ step: "", report: { triangles_in: 0, triangles_used: 0, faces_built: 0, planar_faces: 0, is_solid: false, is_valid: false, method: "auto" } }),
+          fitNurbs: async () => { throw new Error("unused"); },
+          stepToDoc: (step, name) => ({ features: [{ id: "f1", type: "importStep", name: name ?? "x", data: { step } }], params: {} }),
+          load: () => {},
+        },
+      }),
+    );
+    expect(withMeshToCad.handlers["reconstruct_brep"]).toBeDefined();
+    expect(withMeshToCad.handlers["fit_nurbs"]).toBeDefined();
+    expect(withMeshToCad.defs.some((d) => d.name === "reconstruct_brep")).toBe(true);
+    expect(withMeshToCad.defs.some((d) => d.name === "fit_nurbs")).toBe(true);
+    // No mesh open ⇒ a structured error result, not a throw.
+    const res = await withMeshToCad.handlers["reconstruct_brep"]!({});
+    expect(res.isError).toBe(true);
+    expect(res.result).toMatch(/No mesh document is open/);
+  });
 });
 
 /** A ChatProvider that yields a scripted StreamEvent[] per stream() call (drives the loop). */

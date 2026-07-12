@@ -13,9 +13,10 @@ import { BomSection } from "./BomSection.js";
 import { PropertiesPanel } from "./PropertiesPanel.js";
 import { GenerationPanel } from "../ai/GenerationPanel.js";
 import { CommandPalette } from "../ai/CommandPalette.js";
-import { Viewport } from "../three/index.js";
+import { Viewport, CanvasDropZone } from "../three/index.js";
 import { Sketcher } from "../sketch/Sketcher.js";
 import { Welcome } from "./Welcome.js";
+import { SimExperimentPanel } from "../sim/SimExperimentPanel.js";
 import { useSketchStore } from "../sketch/sketchStore.js";
 import { useCadStore } from "../store/store.js";
 import { useProjectsStore } from "../persistence/projectsStore.js";
@@ -243,8 +244,12 @@ export function App(): React.JSX.Element {
         )}
 
         <main id="viewport-root" aria-label="3D viewport" className="relative min-h-0 min-w-0 flex-1">
-          <Viewport />
-          <Sketcher />
+          {/* Files dropped on the canvas route by type (SPEC-13): photos → photogrammetry cloud,
+              .ply/.xyz/.json → a point cloud — both open as a project on this same canvas. */}
+          <CanvasDropZone>
+            <Viewport />
+            <Sketcher />
+          </CanvasDropZone>
         </main>
 
         {rightOpen ? (
@@ -262,6 +267,8 @@ export function App(): React.JSX.Element {
               <div id="properties-root">
                 <PropertiesPanel />
               </div>
+              <div className="my-3 border-t border-[#222a36]" />
+              <SimExperimentPanel />
             </aside>
           </>
         ) : (

@@ -40,10 +40,15 @@ from .faceted import faceted_shape
 from .fidelity import FIDELITY_TOL, surface_fidelity
 from .fitted import fitted_shape
 from .meshio import load_mesh
+from .occ_pool import run_isolated
 from .occ_step import shape_to_step
 from .recognition import recognize
 from .revolution import reconstruct_revolution
 from .topology import reconstruct_cut_cylinder
+
+# Wall-clock bound for the isolated OCCT build (crash-isolation, not a quality cap) — a very large
+# organic mesh that would OOM/hang is terminated and reported instead of taking the service down.
+_ISOLATION_TIMEOUT_S = 180.0
 
 logger = logging.getLogger(__name__)
 
@@ -305,3 +310,31 @@ def reconstruct(
         raise ValueError(f"unknown reconstruction method: {method!r}")
 
     return finish(shape, report)
+
+
+def _reconstruct_worker(data: bytes, file_type: str, clean: bool, method: str) -> dict:
+    """Module-level spawn worker: run :func:`reconstruct` and return its picklable wire dict.
+
+    Must be module-level so the spawn child re-imports it by reference (see occ_pool). A very large
+    organic mesh can exhaust memory inside OCCT here — that kills THIS child, not the caller."""
+    return reconstruct(data, file_type, clean=clean, method=method).to_dict()
+
+
+def reconstruct_isolated(
+    data: bytes,
+    file_type: str = "glb",
+    *,
+    clean: bool = True,
+    method: str = "auto",
+    timeout: float = _ISOLATION_TIMEOUT_S,
+) -> dict:
+    """Run :func:`reconstruct` in a crash-isolated spawn subprocess and return its wire dict.
+
+    A per-triangle B-rep of a huge organic mesh can exhaust memory and get OS-killed (SIGKILL) inside
+    OCCT; run in a thread that would take the whole service process down with it. Isolating the build
+    in a spawn child turns that into a catchable :class:`IsolatedWorkerError` (the child dies, the
+    service survives and reports the job failed) — graceful degradation without pre-capping input
+    size. The pipe is drained before join, so a multi-MB STEP result returns without deadlock."""
+    return run_isolated(
+        _reconstruct_worker, data, file_type, clean, method, timeout=timeout
+    )

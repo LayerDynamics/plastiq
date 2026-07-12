@@ -86,6 +86,20 @@ describe("dressup — picks + refs → persistent feature data (FR-30/FR-16)", (
     expect(draftFeature([], refs, 0.1)).toBeNull();
   });
 
+  it("draftFeature stores all picked faces for multi-face draft (G9)", () => {
+    const f = draftFeature(
+      [
+        { kind: "face", id: 1 },
+        { kind: "face", id: 2 },
+      ],
+      refs,
+      0.05,
+    );
+    expect(f).not.toBeNull();
+    expect(f!.data!["face"]).toEqual({ normal: [0, 0, 1] }); // first face back-compat
+    expect(f!.data!["faces"]).toEqual([{ normal: [0, 0, 1] }, { normal: [1, 0, 0] }]);
+  });
+
   it("ignores picks whose id has no ref (stale selection)", () => {
     expect(edgeRefsFromPicks([{ kind: "edge", id: 99 }], refs)).toEqual([]);
   });
@@ -153,6 +167,20 @@ describe("dressup — picks + refs → persistent feature data (FR-30/FR-16)", (
         [0, 0, 1],
       ],
     });
+
+    // Optional profile plane (G3).
+    const sfPlane = sweepFeature(
+      rect,
+      {
+        kind: "polyline",
+        points: [
+          [0, 0, 0],
+          [0, 1, 0],
+        ],
+      },
+      { base: "XZ", offset: 0.01 },
+    );
+    expect(sfPlane.data!["plane"]).toEqual({ base: "XZ", offset: 0.01 });
   });
 
   it("booleanBodyFeature stores the op + an id'd tool subtree (FR-31)", () => {

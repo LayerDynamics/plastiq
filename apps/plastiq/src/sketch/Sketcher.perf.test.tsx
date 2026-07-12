@@ -117,7 +117,8 @@ const pointerOpts = (px: Px) => ({
   clientY: px.y,
 });
 
-describe("Sketcher drag performance (rAF-coalesced solves)", () => {
+// ADR-0014: SVG pointer path removed — drag coalescing moves to SketchScene next.
+describe.skip("Sketcher drag performance (rAF-coalesced solves) [SVG path removed]", () => {
   it("coalesces a pointermove burst to one solve per flushed frame + a final flush on pointerup", () => {
     seedDraggablePoint();
     // Spy on the store's solve BEFORE render so the component captures the spy.
@@ -202,7 +203,9 @@ describe("Sketcher drag performance (rAF-coalesced solves)", () => {
     expect(unthrottledSolves).toBe(15);
   });
 
-  it("coalesces hover snap/inference to one frame per burst (drawing tool)", () => {
+  // ADR-0014: SVG no longer owns drawing hover — SketchScene/raycast does.
+  // Keep the test body as a reference for re-wiring once 3D hover coalescing lands.
+  it.skip("coalesces hover snap/inference to one frame per burst (drawing tool) [SVG path removed]", () => {
     act(() => {
       store().enterSketch("XY");
       store().setTool("line");

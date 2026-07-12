@@ -48,6 +48,7 @@ is what the GATE proves). Deterministic throughout (float64 CPU-stream solves, n
 from __future__ import annotations
 
 import base64
+import logging
 import math
 
 import mlx.core as mx
@@ -66,6 +67,7 @@ __all__ = ["fit", "fit_closed"]
 # OCCT runs in a spawned child (crash isolation); cap it so a hung solid conversion fails the
 # job instead of blocking the caller (matches app.pipeline's open-mode bound).
 _OCC_TIMEOUT_S = 60.0
+logger = logging.getLogger(__name__)
 
 
 def _surface_payload(fit: ScatteredFit) -> dict:
@@ -161,6 +163,44 @@ def _chart_region(chart, mesh_faces: np.ndarray, points: np.ndarray) -> faceted.
     )
 
 
+def _all_faceted_solid(mesh, *, degree: int, iters: int, fidelity_tol: float | None) -> dict:
+    """Degrade to a single all-faceted watertight solid when cube-map charting can't produce charts.
+
+    Cube-map charting assigns every face to one of 6 axis-aligned directions; deeply-concave genus-0
+    meshes (e.g. a carved mask with overhangs) can produce a junction whose vertex fan is fully
+    claimed, which :func:`app.param._repair_chart_labels` cannot dissolve. That is a *shape* limit,
+    not invalid input — so rather than crash the job (the contract was correct-or-raise), we sew the
+    whole mesh's triangles into one faceted solid via the SAME crash-isolated OCC assembly the mixed
+    path uses. The result is a valid watertight B-rep (no smooth NURBS patches — honestly reported
+    ``fitted_patches == 0`` with ``charting_degraded == True``)."""
+    region = faceted.FacetedRegion(
+        vertices=np.asarray(mesh.vertices, dtype=np.float64),
+        triangles=np.asarray(mesh.faces, dtype=np.int64),
+    )
+    solid = faceted.assemble_mixed_solid({"surfaces": []}, [region], timeout=_OCC_TIMEOUT_S)
+    report = {
+        "patches": 1,
+        "fitted_patches": 0,
+        "faceted_patches": 1,
+        "control_points": 0,
+        "degree_u": degree,
+        "degree_v": degree,
+        "iters": iters,
+        "chamfer": 0.0,  # faceted reproduces the mesh exactly → zero deviation
+        "scd": 0.0,
+        "rms_deviation": 0.0,
+        "max_deviation": 0.0,
+        "fidelity_tol": fidelity_tol,
+        "is_solid": solid["is_solid"],
+        "is_valid": solid["is_valid"],
+        "free_edges": solid["free_edges"],
+        "volume": solid["volume"],
+        "mode": "closed",
+        "charting_degraded": True,  # cube-map charting could not chart this shape (FR-5, honest)
+    }
+    return {"step": solid["step"], "surfaces": {"surfaces": []}, "report": report}
+
+
 def fit_closed(
     glb_bytes: bytes,
     *,
@@ -219,8 +259,15 @@ def fit_closed(
         )
 
     # U7.1: 6 cube-map charts + shared boundary polylines. U7.2: fit each shared polyline once,
-    # so both incident patches pin the SAME rim curve (watertight by construction, R-1).
-    charts = param.cube_map_charts(mesh)
+    # so both incident patches pin the SAME rim curve (watertight by construction, R-1). A deeply
+    # concave genus-0 shape can defeat cube-map charting (a fully-claimed junction fan) — that is a
+    # shape limit, not invalid input, so degrade to an all-faceted watertight solid instead of
+    # crashing the job (NFR-1 "nothing is ever dropped"; honestly reported charting_degraded).
+    try:
+        charts = param.cube_map_charts(mesh)
+    except ValueError as exc:
+        logger.warning("cube-map charting failed (%s); degrading to an all-faceted solid", exc)
+        return _all_faceted_solid(mesh, degree=degree, iters=iters, fidelity_tol=fidelity_tol)
     vertices = np.asarray(mesh.vertices, dtype=np.float64)
     mesh_faces = np.asarray(mesh.faces, dtype=np.int64)
     shared_curves = boundary.fit_shared_curves(charts, vertices, degree=degree, n_ctrl=grid)

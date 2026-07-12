@@ -104,8 +104,23 @@ export function chamfer(
   }
 }
 
+export interface ShellOptions {
+  /**
+   * Offset direction of the wall thickness.
+   * - `inward` (default): hollow the solid, wall of `thickness` (negative OCCT offset).
+   * - `outward`: grow walls outward (positive OCCT offset) (G13).
+   */
+  readonly direction?: "inward" | "outward";
+}
+
 /** Hollow `base` to a wall `thickness`, opening the picked faces. */
-export function shell(oc: Occt, base: Solid, faces: readonly FaceRef[], thickness: number): Solid {
+export function shell(
+  oc: Occt,
+  base: Solid,
+  faces: readonly FaceRef[],
+  thickness: number,
+  opts?: ShellOptions,
+): Solid {
   const list = new oc.TopTools_ListOfShape_1();
   const resolved: TopoDS_Face[] = [];
   // The face list and every resolved face are freed on EVERY exit (incl. a
@@ -132,16 +147,26 @@ export function shell(oc: Occt, base: Solid, faces: readonly FaceRef[], thicknes
     const maker = new oc.BRepOffsetAPI_MakeThickSolid();
     const progress = new oc.Message_ProgressRange_1();
     try {
-      // Negative offset hollows inward, leaving a wall of `thickness`.
+      // Negative offset hollows inward (outer envelope ≈ original). Positive
+      // grows walls outward (outer envelope expands by ~thickness). Outward
+      // needs Intersection join + the Intersection flag — Arc join with a
+      // positive offset commonly raises Standard_Failure on simple boxes (G13).
+      const outward = (opts?.direction ?? "inward") === "outward";
+      const offset = outward ? thickness : -thickness;
+      const join = (
+        outward
+          ? oc.GeomAbs_JoinType.GeomAbs_Intersection
+          : oc.GeomAbs_JoinType.GeomAbs_Arc
+      ) as unknown as GeomAbs_JoinType;
       maker.MakeThickSolidByJoin(
         base.shape,
         list,
-        -thickness,
+        offset,
         1e-3,
         oc.BRepOffset_Mode.BRepOffset_Skin as unknown as BRepOffset_Mode,
+        outward, // Intersection processing — required for reliable positive offsets
         false,
-        false,
-        oc.GeomAbs_JoinType.GeomAbs_Arc as unknown as GeomAbs_JoinType,
+        join,
         false,
         progress,
       );

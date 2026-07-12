@@ -51,6 +51,20 @@ describe("ribbonConfig — integrity", () => {
     for (const id of Object.keys(RIBBON_ICONS)) expect(ACTIONS[id], id).toBeDefined();
   });
 
+  it("the design workspace exposes the Mesh → CAD conversions (reconstruct / fit-NURBS)", () => {
+    const solid = RIBBON.design.find((t) => t.id === "solid")!;
+    const meshPanel = solid.panels.find((p) => p.title === "Mesh → CAD")!;
+    expect(meshPanel, "design/solid must have a Mesh → CAD panel").toBeDefined();
+    expect(actionIds(meshPanel.items)).toEqual(["ml-reconstruct-brep", "ml-fit-nurbs"]);
+  });
+
+  it("the design workspace exposes the point-cloud hand-offs (to-mesh / complete)", () => {
+    const solid = RIBBON.design.find((t) => t.id === "solid")!;
+    const cloudPanel = solid.panels.find((p) => p.title === "Point Cloud")!;
+    expect(cloudPanel, "design/solid must have a Point Cloud panel").toBeDefined();
+    expect(actionIds(cloudPanel.items)).toEqual(["cloud-to-mesh", "cloud-complete"]);
+  });
+
   it("no duplicate action id within a single panel", () => {
     for (const tabs of Object.values(RIBBON)) {
       for (const tab of tabs) {

@@ -56,6 +56,12 @@ def train_and_export(
     rays_per_batch: int = 1024,
     encoding: str = "frequency",
     importance_samples: int = 0,
+    background: tuple[float, float, float] | None = None,
+    masks: np.ndarray | None = None,
+    learnable_beta: bool = False,
+    grad_clip: float | None = None,
+    warmup_frac: float = 0.0,
+    lr_final_frac: float = 1.0,
     seed: int = 0,
 ) -> dict:
     """Train a field on posed views and export its surface. `transforms` is a transforms.json dict;
@@ -83,7 +89,10 @@ def train_and_export(
         o, d = generate_rays(out.poses[i], out.fx, out.fy, out.cx, out.cy, out.height, out.width)
         origins_l.append(o)
         dirs_l.append(d)
-        target_l.append(mx.array(images[i].reshape(-1, 3).astype(np.float32)))
+        rgb_i = images[i].reshape(-1, 3).astype(np.float32)
+        if masks is not None:
+            rgb_i = np.concatenate([rgb_i, masks[i].reshape(-1, 1).astype(np.float32)], axis=1)  # +alpha
+        target_l.append(mx.array(rgb_i))
     origins, dirs, target = mx.concatenate(origins_l), mx.concatenate(dirs_l), mx.concatenate(target_l)
 
     cam_dist = float(np.linalg.norm(out.poses[:, :3, 3], axis=1).mean())  # mean camera distance to origin
@@ -94,6 +103,7 @@ def train_and_export(
         # was rejected above, so the flag is never set where it would be silently ignored.
         field=FieldConfig(hidden=64, layers=4, use_hashgrid=encoding == "hashgrid"),
         sampler=SamplerConfig(n_samples=48, near=near, far=far, importance_samples=importance_samples),
+        background=background,
     )
 
     # Deterministic held-out split: ~10% of the rays (seeded, capped) are excluded from the training
@@ -103,18 +113,20 @@ def train_and_export(
     hold_o, hold_d, hold_t = mx.take(origins, hold_idx, 0), mx.take(dirs, hold_idx, 0), mx.take(target, hold_idx, 0)
     origins, dirs, target = mx.take(origins, train_idx, 0), mx.take(dirs, train_idx, 0), mx.take(target, train_idx, 0)
 
-    model = VolSDFModel(cfg, seed=seed) if method == "neus" else VanillaNeRF(cfg, seed=seed)
+    model = (VolSDFModel(cfg, learnable_beta=learnable_beta, seed=seed) if method == "neus"
+             else VanillaNeRF(cfg, seed=seed))
     # Tiny scenes (a handful of low-res views) have so few rays that subsampling them with replacement
     # only injects gradient noise — a short run then converges or collapses on the luck of the batch
     # draw. Train full-batch when the training set is within 2× the requested batch; real captures
     # (m ≫ batch) keep the requested batch size.
     m_train = int(origins.shape[0])
     batch = m_train if m_train <= 2 * rays_per_batch else rays_per_batch
-    Trainer(model, seed=seed).train(origins, dirs, target, iters=iters, rays_per_batch=batch)
+    Trainer(model, seed=seed).train(origins, dirs, target, iters=iters, rays_per_batch=batch,
+                                    grad_clip=grad_clip, warmup_frac=warmup_frac, lr_final_frac=lr_final_frac)
 
     # PSNR on the held-out rays (never trained on) — the genuine held-out quality signal for the report.
     pred = model.render_rays(hold_o, hold_d, key=make_key(seed + 1))
-    psnr = _psnr(pred, hold_t)
+    psnr = _psnr(pred, hold_t[:, :3])  # RGB only (targets may carry a 4th alpha/mask channel)
 
     grid_bound = _SCENE_RADIUS + 0.1
     if method == "neus":

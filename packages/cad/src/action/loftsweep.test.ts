@@ -69,6 +69,17 @@ describe("linearPattern", () => {
     acc.delete();
     box.delete();
   });
+
+  it("unitizes a non-unit direction so spacing is not silently scaled (G11)", () => {
+    const box = makeBox(oc, mm(10), mm(10), mm(10));
+    // dir = (2,0,0) must behave identically to (1,0,0) for the same spacing.
+    const unit = linearPattern(oc, box, [1, 0, 0], mm(20), 2);
+    const scaled = linearPattern(oc, box, [2, 0, 0], mm(20), 2);
+    expect(scaled[1]!.boundingBox().min[0]).toBeCloseTo(unit[1]!.boundingBox().min[0], 9);
+    for (const c of unit) c.delete();
+    for (const c of scaled) c.delete();
+    box.delete();
+  });
 });
 
 describe("circularPattern", () => {

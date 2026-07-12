@@ -21,6 +21,7 @@ export type {
 export {
   type SimManifest,
   type ManifestBody,
+  type HullCollider,
   type ManifestConstraint,
   type ManifestConstraintKind,
   MANIFEST_CONSTRAINT_KINDS,

@@ -9,10 +9,12 @@
 
 /** A parsed cloud in the server's shape: Nx3 `points`, plus Nx3 `normals` when the file carried
  * them (PLY `nx/ny/nz` properties or 6-column XYZ). `/capture` requires normals; `/complete`
- * ignores them. */
+ * ignores them. `colors` (Nx3 RGB in 0..1) is present when a PLY carried `red/green/blue` (or
+ * `r/g/b`) — used to render a point-cloud document; the capture/complete services ignore it. */
 export interface ParsedPointCloud {
   points: number[][];
   normals?: number[][];
+  colors?: number[][];
 }
 
 /** Parse one whitespace-separated numeric column, failing loudly with its position. */
@@ -22,11 +24,14 @@ function num(token: string | undefined, what: string, line: number): number {
   return v;
 }
 
-/** One `element <name> <count>` block of a PLY header, with its property names in order. */
+/** One `element <name> <count>` block of a PLY header, with its property names in order (and the
+ * parallel scalar type of each, so a colour channel's `uchar` vs `float` range can be resolved). */
 interface PlyElement {
   name: string;
   count: number;
   properties: string[];
+  /** Scalar type per property (`"list"` for a list property); index-aligned with `properties`. */
+  types: string[];
 }
 
 /** Parse an ASCII PLY (the `format ascii 1.0` flavor). Reads the `element vertex` block's
@@ -61,7 +66,7 @@ export function parsePlyAscii(text: string): ParsedPointCloud {
     if (parts[0] === "element") {
       const count = Number(parts[2]);
       if (!parts[1] || !Number.isInteger(count) || count < 0) throw new Error(`PLY: bad element line '${line}'`);
-      elements.push({ name: parts[1], count, properties: [] });
+      elements.push({ name: parts[1], count, properties: [], types: [] });
       continue;
     }
     if (parts[0] === "property") {
@@ -71,6 +76,7 @@ export function parsePlyAscii(text: string): ParsedPointCloud {
       const name = parts[parts.length - 1];
       if (!name) throw new Error(`PLY: bad property line '${line}'`);
       el.properties.push(name);
+      el.types.push(parts[1] === "list" ? "list" : (parts[1] ?? "float"));
       continue;
     }
     throw new Error(`PLY: unrecognized header line '${line}'`);
@@ -90,11 +96,28 @@ export function parsePlyAscii(text: string): ParsedPointCloud {
   const nzi = vertex.properties.indexOf("nz");
   const hasNormals = nxi >= 0 && nyi >= 0 && nzi >= 0;
 
+  // Colour: COLMAP/MeshLab use `red/green/blue`, some tools use `r/g/b`. A `uchar` channel is 0..255
+  // (normalize to 0..1); a `float`/`double` channel is already 0..1.
+  const colorIndex = (a: string, b: string): number => {
+    const i = vertex.properties.indexOf(a);
+    return i >= 0 ? i : vertex.properties.indexOf(b);
+  };
+  const ri = colorIndex("red", "r");
+  const gi = colorIndex("green", "g");
+  const bi = colorIndex("blue", "b");
+  const hasColors = ri >= 0 && gi >= 0 && bi >= 0;
+  const colorFloat = hasColors && /^(float|float32|float64|double)$/.test(vertex.types[ri] ?? "");
+  const chan = (raw: number): number => {
+    const v = colorFloat ? raw : raw / 255;
+    return v < 0 ? 0 : v > 1 ? 1 : v;
+  };
+
   // Data blocks appear in element-declaration order — skip the lines of elements before vertex.
   for (let e = 0; e < vertexIndex; e++) for (let k = 0; k < elements[e]!.count; k++) nextLine();
 
   const points: number[][] = [];
   const normals: number[][] = [];
+  const colors: number[][] = [];
   for (let v = 0; v < vertex.count; v++) {
     const lineNo = i + 1; // 1-based, for error messages (nextLine advances i past the line)
     const cols = nextLine().split(/\s+/);
@@ -102,8 +125,15 @@ export function parsePlyAscii(text: string): ParsedPointCloud {
     if (hasNormals) {
       normals.push([num(cols[nxi], "PLY normal", lineNo), num(cols[nyi], "PLY normal", lineNo), num(cols[nzi], "PLY normal", lineNo)]);
     }
+    if (hasColors) {
+      colors.push([chan(num(cols[ri], "PLY color", lineNo)), chan(num(cols[gi], "PLY color", lineNo)), chan(num(cols[bi], "PLY color", lineNo))]);
+    }
   }
-  return hasNormals ? { points, normals } : { points };
+  return {
+    points,
+    ...(hasNormals ? { normals } : {}),
+    ...(hasColors ? { colors } : {}),
+  };
 }
 
 /** Parse a plain-column XYZ file: one point per line, whitespace-separated. 3 columns = `x y z`,

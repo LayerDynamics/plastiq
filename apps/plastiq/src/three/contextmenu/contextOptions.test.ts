@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { FaceRef } from "@plastiq/cad";
 import { buildMenuSections, menuItemIds } from "./contextOptions.js";
 import type { ContextTarget } from "./contextSelection.js";
+import type { MeshDoc, PointCloudDoc } from "../../store/types.js";
 import type { SketchModel } from "../../sketch/model.js";
 
 const lineModel: SketchModel = {
@@ -36,6 +37,8 @@ function makeTarget(over: Partial<ContextTarget> = {}): ContextTarget {
     explodeFactor: 0,
     gizmoMode: "translate",
     instanceId: null,
+    activeMeshDoc: null,
+    activePointCloudDoc: null,
     worldPoint: [0, 0, 0],
     ...over,
   };
@@ -74,10 +77,19 @@ describe("contextOptions — buildMenuSections (context-filtered)", () => {
     expect(ids).toEqual(expect.arrayContaining(["gizmo-translate", "gizmo-rotate"]));
   });
 
-  it("extrude/cut/revolve appear only when a profile exists", () => {
-    expect(menuItemIds(makeTarget({ kind: "empty", hasProfile: false }))).not.toContain("extrude");
+  it("extrude/cut/revolve are always available in edit context; the profile switches label + behavior (ADR-0014)", () => {
+    // Without a profile they still appear — running one opens a feature-driven sketch session.
+    const noProfile = menuItemIds(makeTarget({ kind: "empty", hasProfile: false }));
+    expect(noProfile).toEqual(expect.arrayContaining(["extrude", "cut", "revolve"]));
     const withProfile = menuItemIds(makeTarget({ kind: "empty", hasProfile: true }));
     expect(withProfile).toEqual(expect.arrayContaining(["extrude", "cut", "revolve"]));
+    // The label is what distinguishes the two states (extrude-now vs enter-sketch).
+    const labelOf = (hasProfile: boolean): string | undefined =>
+      buildMenuSections(makeTarget({ kind: "empty", hasProfile }))
+        .flatMap((s) => s.items)
+        .find((i) => i.id === "extrude")?.label;
+    expect(labelOf(true)).toBe("Extrude profile");
+    expect(labelOf(false)).toBe("Extrude (sketch…)");
   });
 
   it("extrude-to-face is disabled (shown) until a profile exists", () => {
@@ -153,5 +165,32 @@ describe("contextOptions — buildMenuSections (context-filtered)", () => {
     expect(order.indexOf("create")).toBeLessThan(order.indexOf("modify"));
     expect(order.indexOf("modify")).toBeLessThan(order.indexOf("view"));
     expect(order.indexOf("view")).toBeLessThan(order.indexOf("selection"));
+  });
+});
+
+// The doc-mode filter (isActionVisible) is what makes the SAME menu correct when the canvas shows a
+// mesh or a point cloud instead of a parametric part: only that mode's conversions appear, never the
+// parametric create/sketch actions that would edit the empty editor doc underneath (FR-18).
+describe("contextOptions — doc-mode filtering (mesh / cloud documents)", () => {
+  const MESH: MeshDoc = { kind: "mesh", name: "M", glb: "x", source: { mode: "img3d", providerId: "p" } };
+  const CLOUD: PointCloudDoc = { kind: "pointcloud", name: "C", points: [0, 0, 0], source: { mode: "import", providerId: "f" } };
+
+  it("a mesh document shows ONLY the mesh→CAD conversions (no parametric create/sketch)", () => {
+    const ids = menuItemIds(makeTarget({ kind: "empty", hasProfile: true, activeMeshDoc: MESH }));
+    expect(ids).toEqual(["ml-reconstruct-brep", "ml-fit-nurbs"]);
+    expect(ids).not.toContain("extrude"); // the parametric action is hidden, not just disabled
+    expect(ids).not.toContain("new-sketch-xy");
+  });
+
+  it("a point-cloud document shows ONLY the cloud→mesh conversions", () => {
+    const ids = menuItemIds(makeTarget({ kind: "empty", activePointCloudDoc: CLOUD }));
+    expect(ids).toEqual(["cloud-to-mesh", "cloud-complete"]);
+  });
+
+  it("a parametric target is unchanged — no mesh/cloud conversions leak in, sketch actions remain", () => {
+    const ids = menuItemIds(makeTarget({ kind: "empty" }));
+    expect(ids).not.toContain("ml-reconstruct-brep");
+    expect(ids).not.toContain("cloud-to-mesh");
+    expect(ids).toContain("extrude"); // ADR-0014: available in edit context
   });
 });

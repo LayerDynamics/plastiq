@@ -56,7 +56,15 @@ const sketchPlaneSpec = z.union([
   z.object({ base: datumPlaneId, offset: z.number() }),
   z.object({ kind: z.literal("face"), face: faceRef, offset: z.number() }),
 ]);
-const spinePath = z.object({ kind: z.literal("polyline"), points: z.array(vec3) });
+const spineSegment = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("line"), to: vec3 }),
+  z.object({ kind: z.literal("arc"), through: vec3, to: vec3 }),
+]);
+/** Polyline (legacy) or mixed line/arc spine (G4). */
+const spinePath = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("polyline"), points: z.array(vec3) }),
+  z.object({ kind: z.literal("path"), start: vec3, segments: z.array(spineSegment).min(1) }),
+]);
 
 const base = {
   id: z.string().min(1),
@@ -80,18 +88,67 @@ const featureSchema: z.ZodTypeAny = z.lazy(() =>
       ...base,
       type: z.literal("extrude"),
       params: z.object({ height: z.number(), back: z.number().optional() }),
-      data: z.object({ direction: vec3.optional(), directionEdge: edgeRef.optional(), toFace: faceRef.optional() }).optional(),
+      data: z
+        .object({
+          direction: vec3.optional(),
+          directionEdge: edgeRef.optional(),
+          toFace: faceRef.optional(),
+          // "join" fuses the pad with the existing body; "new" (default) replaces it (G7).
+          op: z.enum(["join", "new"]).optional(),
+        })
+        .optional(),
     }),
-    z.object({ ...base, type: z.literal("revolve"), params: z.object({ angle: z.number(), ax: z.number().optional(), ay: z.number().optional(), az: z.number().optional() }), data: z.unknown().optional() }),
-    z.object({ ...base, type: z.literal("cut"), params: z.object({ depth: z.number() }), data: z.unknown().optional() }),
+    z.object({
+      ...base,
+      type: z.literal("revolve"),
+      params: z.object({
+        angle: z.number(),
+        // Axis direction (unitless) + origin in length units (mm authoring / SI after convert).
+        ax: z.number().optional(),
+        ay: z.number().optional(),
+        az: z.number().optional(),
+        ox: z.number().optional(),
+        oy: z.number().optional(),
+        oz: z.number().optional(),
+      }),
+      data: z.unknown().optional(),
+    }),
+    z.object({
+      ...base,
+      type: z.literal("cut"),
+      // `back` = two-sided pocket (G5); direction / directionEdge mirror extrude.
+      params: z.object({ depth: z.number(), back: z.number().optional() }),
+      data: z
+        .object({ direction: vec3.optional(), directionEdge: edgeRef.optional() })
+        .optional(),
+    }),
     z.object({ ...base, type: z.literal("fillet"), params: z.object({ radius: z.number() }), data: z.object({ edges: z.array(edgeRef).optional(), selector: z.unknown().optional() }).optional() }),
     z.object({ ...base, type: z.literal("chamfer"), params: z.object({ distance: z.number() }), data: z.object({ edges: z.array(edgeRef).optional(), selector: z.unknown().optional() }).optional() }),
-    z.object({ ...base, type: z.literal("shell"), params: z.object({ thickness: z.number() }), data: z.object({ faces: z.array(faceRef).optional(), selector: z.unknown().optional() }).optional() }),
+    z.object({
+      ...base,
+      type: z.literal("shell"),
+      params: z.object({ thickness: z.number() }),
+      data: z
+        .object({
+          faces: z.array(faceRef).optional(),
+          selector: z.unknown().optional(),
+          // "outward" grows walls; default inward hollows (G13).
+          direction: z.enum(["inward", "outward"]).optional(),
+        })
+        .optional(),
+    }),
     z.object({
       ...base,
       type: z.literal("draft"),
       params: z.object({ angle: z.number() }),
-      data: z.object({ face: faceRef, pull: vec3.optional(), neutralOrigin: vec3.optional(), neutralNormal: vec3.optional() }),
+      // face (singular) for back-compat; faces[] for multi-face draft (G9).
+      data: z.object({
+        face: faceRef.optional(),
+        faces: z.array(faceRef).optional(),
+        pull: vec3.optional(),
+        neutralOrigin: vec3.optional(),
+        neutralNormal: vec3.optional(),
+      }),
     }),
     z.object({ ...base, type: z.literal("transform"), params: numParams.optional(), data: z.unknown().optional() }),
     z.object({ ...base, type: z.literal("mirror"), params: numParams.optional(), data: z.unknown().optional() }),
@@ -101,9 +158,33 @@ const featureSchema: z.ZodTypeAny = z.lazy(() =>
       ...base,
       type: z.literal("loft"),
       params: numParams.optional(),
-      data: z.object({ sections: z.array(z.object({ z: z.number(), profile })).min(2), ruled: z.boolean().optional() }),
+      // Sections: legacy `{z, profile}` on world-XY, or `{plane, profile}` (G6).
+      data: z.object({
+        sections: z
+          .array(
+            z.object({
+              profile,
+              z: z.number().optional(),
+              plane: sketchPlaneSpec.optional(),
+            }),
+          )
+          .min(2),
+        ruled: z.boolean().optional(),
+      }),
     }),
-    z.object({ ...base, type: z.literal("sweep"), params: numParams.optional(), data: z.object({ profile, path: spinePath }) }),
+    z.object({
+      ...base,
+      type: z.literal("sweep"),
+      params: numParams.optional(),
+      // Optional plane (G3) + MakePipeShell mode/transition (G8).
+      data: z.object({
+        profile,
+        path: spinePath,
+        plane: sketchPlaneSpec.optional(),
+        mode: z.enum(["correctedFrenet", "frenet", "fixed"]).optional(),
+        transition: z.enum(["right", "round", "transformed"]).optional(),
+      }),
+    }),
     z.object({
       ...base,
       type: z.literal("boolean"),
@@ -184,20 +265,47 @@ function convData(type: string, data: Record<string, unknown> | undefined, s: Sc
     }
     case "loft": {
       if (Array.isArray(d.sections)) {
-        d.sections = (d.sections as Record<string, unknown>[]).map((sec) => ({
-          ...sec,
-          z: L(sec.z as number),
-          profile: convProfile(sec.profile, L),
-        }));
+        d.sections = (d.sections as Record<string, unknown>[]).map((sec) => {
+          const out: Record<string, unknown> = {
+            ...sec,
+            profile: convProfile(sec.profile, L),
+          };
+          if (typeof sec.z === "number") out.z = L(sec.z);
+          const plane = sec.plane as Record<string, unknown> | undefined;
+          if (plane && typeof plane.offset === "number") {
+            out.plane = { ...plane, offset: L(plane.offset) };
+          }
+          return out;
+        });
       }
       break;
     }
     case "sweep": {
       if (d.profile) d.profile = convProfile(d.profile, L);
       const path = d.path as Record<string, unknown> | undefined;
-      if (path && Array.isArray(path.points)) {
-        d.path = { ...path, points: (path.points as V3[]).map((p) => cv3(p, L)) };
+      if (path) {
+        if (path.kind === "polyline" && Array.isArray(path.points)) {
+          d.path = { ...path, points: (path.points as V3[]).map((p) => cv3(p, L)) };
+        } else if (path.kind === "path" && Array.isArray(path.segments)) {
+          d.path = {
+            kind: "path",
+            start: cv3(path.start as V3, L),
+            segments: (path.segments as Record<string, unknown>[]).map((seg) => {
+              if (seg.kind === "arc") {
+                return {
+                  kind: "arc",
+                  through: cv3(seg.through as V3, L),
+                  to: cv3(seg.to as V3, L),
+                };
+              }
+              return { kind: "line", to: cv3(seg.to as V3, L) };
+            }),
+          };
+        }
       }
+      // Profile plane offset is a length (same as sketch.plane).
+      const plane = d.plane as Record<string, unknown> | undefined;
+      if (plane && typeof plane.offset === "number") d.plane = { ...plane, offset: L(plane.offset) };
       break;
     }
     case "draft": {

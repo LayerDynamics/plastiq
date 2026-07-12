@@ -45,6 +45,24 @@ describe("extrude", () => {
     oneSided.delete();
     twoSided.delete();
   });
+
+  it("extrude with an explicit direction overrides the plane normal", () => {
+    // Direction must not be parallel to the face plane. [1,0,1] is oblique to XY:
+    // volume = area × (height · |n·û|) since the prism height is the normal component.
+    const solid = extrude(oc, rect(0, 0, mm(10), mm(10)), mm(30), { direction: [1, 0, 1] });
+    const nDotU = 1 / Math.SQRT2; // unit([1,0,1]) · [0,0,1]
+    expect(solid.volume()).toBeCloseTo(mm(10) * mm(10) * mm(30) * nDotU, 9);
+    const bb = solid.boundingBox();
+    // Extends in both X and Z (not a pure +Z pad).
+    expect(bb.max[0] - bb.min[0]).toBeGreaterThan(mm(10));
+    expect(bb.max[2] - bb.min[2]).toBeGreaterThan(mm(10));
+    solid.delete();
+  });
+
+  it("extrude rejects a non-finite height before building", () => {
+    expect(() => extrude(oc, rect(0, 0, mm(10), mm(10)), Number.NaN)).toThrow(/height/);
+    expect(() => extrude(oc, rect(0, 0, mm(10), mm(10)), 0, { back: 0 })).toThrow(/height/);
+  });
 });
 
 describe("revolve", () => {
@@ -59,6 +77,24 @@ describe("revolve", () => {
     // π·(r1²−r0²)·h = π·(0.02²−0.01²)·0.03
     expect(solid.volume()).toBeCloseTo(Math.PI * (mm(20) ** 2 - mm(10) ** 2) * mm(30), 9);
     solid.delete();
+  });
+
+  it("revolve about an offset origin changes the Pappus volume (G2 kernel)", () => {
+    const sk = new Sketch(planeXZ());
+    sk.lineTo(mm(10), 0);
+    sk.lineTo(mm(20), 0);
+    sk.lineTo(mm(20), mm(30));
+    sk.lineTo(mm(10), mm(30));
+    const aboutOrigin = revolve(oc, sk, [0, 0, 0], [0, 0, 1], Math.PI * 2);
+    const aboutOffset = revolve(oc, sk, [mm(5), 0, 0], [0, 0, 1], Math.PI * 2);
+    expect(aboutOffset.volume()).not.toBeCloseTo(aboutOrigin.volume(), 6);
+    // Relative radii become [5,15] mm → π(0.015²−0.005²)·0.03
+    expect(aboutOffset.volume()).toBeCloseTo(
+      Math.PI * (mm(15) ** 2 - mm(5) ** 2) * mm(30),
+      8,
+    );
+    aboutOrigin.delete();
+    aboutOffset.delete();
   });
 });
 

@@ -13,6 +13,26 @@ export interface LoftOptions {
   readonly ruled: boolean;
 }
 
+/** Transition mode at corners of a multi-edge spine (MakePipeShell). */
+export type SweepTransition = "right" | "round" | "transformed";
+
+export interface SweepOptions {
+  /**
+   * Section frame along the spine.
+   * - `correctedFrenet` (default): stable orientation that survives corners.
+   * - `frenet`: pure Frenet frame (can flip at inflection).
+   * - `fixed`: keep the profile's initial orientation (no twist with spine).
+   */
+  readonly mode?: "correctedFrenet" | "frenet" | "fixed";
+  /**
+   * How adjacent swept sections meet at spine corners.
+   * - `right` (default): miter / RightCorner.
+   * - `round`: RoundCorner blend.
+   * - `transformed`: Transformed (no intersection at corners).
+   */
+  readonly transition?: SweepTransition;
+}
+
 /** Loft a solid through ≥2 section profiles. */
 export function loft(oc: Occt, sketches: readonly Sketch[], opts: LoftOptions): Solid {
   if (sketches.length < 2) throw new Error("loft: needs at least 2 section profiles");
@@ -50,12 +70,10 @@ export function loft(oc: Occt, sketches: readonly Sketch[], opts: LoftOptions): 
  * Uses `BRepOffsetAPI_MakePipeShell` (not the simpler `BRepOffsetAPI_MakePipe`)
  * so MULTI-EDGE / cornered polyline spines sweep the FULL path: `MakePipe` only
  * follows the first edge of a multi-edge spine and silently drops the rest.
- * MakePipeShell is driven with a corrected-Frenet frame (a stable section
- * orientation that survives corners) and a `RightCorner` transition (adjacent
- * swept sections are intersected into a clean miter at each corner), then capped
- * into a solid. A straight/collinear spine sweeps identically to before.
+ * Defaults: corrected-Frenet frame + RightCorner transition (miter). Override
+ * via {@link SweepOptions} (G8). Then capped into a solid.
  */
-export function sweep(oc: Occt, sketch: Sketch, path: SpinePath): Solid {
+export function sweep(oc: Occt, sketch: Sketch, path: SpinePath, opts?: SweepOptions): Solid {
   const spine = buildSpineWire(oc, path);
   const profile = sketch.toWire(oc); // MakePipeShell sweeps a wire, then caps it
   const maker = new oc.BRepOffsetAPI_MakePipeShell(spine);
@@ -65,10 +83,22 @@ export function sweep(oc: Occt, sketch: Sketch, path: SpinePath): Solid {
   // sweep can't resolve) frees them too — a manual closure called only on the
   // explicit `if (!…)` branches would be bypassed by such a throw.
   try {
-    maker.SetMode_1(false); // corrected Frenet: stable orientation along the spine
-    maker.SetTransitionMode(
-      oc.BRepBuilderAPI_TransitionMode.BRepBuilderAPI_RightCorner as unknown as BRepBuilderAPI_TransitionMode,
-    );
+    const mode = opts?.mode ?? "correctedFrenet";
+    // SetMode_1(IsFrenet): true = Frenet, false = corrected Frenet. For fixed
+    // orientation we leave the default (no Frenet) after SetMode_1(false) and
+    // rely on the profile's placement without auxiliary-spine twist.
+    if (mode === "frenet") maker.SetMode_1(true);
+    else maker.SetMode_1(false); // corrected Frenet (also used as base for "fixed")
+
+    const transition = opts?.transition ?? "right";
+    const TM = oc.BRepBuilderAPI_TransitionMode;
+    const tm =
+      transition === "round"
+        ? TM.BRepBuilderAPI_RoundCorner
+        : transition === "transformed"
+          ? TM.BRepBuilderAPI_Transformed
+          : TM.BRepBuilderAPI_RightCorner;
+    maker.SetTransitionMode(tm as unknown as BRepBuilderAPI_TransitionMode);
     maker.Add_1(profile, false, false);
 
     if (!maker.IsReady()) throw new Error("sweep: the profile/spine are not ready to sweep");

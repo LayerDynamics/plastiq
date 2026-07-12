@@ -26,10 +26,12 @@ import {
 import type { ProjectMeta, ProjectStore } from "./types.js";
 import {
   isMeshDoc,
+  isPointCloudDoc,
   isVoxelDoc,
   type CadDocument,
   type MeshDoc,
   type PersistedDoc,
+  type PointCloudDoc,
   type VoxelDoc,
 } from "../store/types.js";
 
@@ -83,8 +85,9 @@ function errMessage(err: unknown): string {
  * the mesh branch, save()/autosave on an open mesh project would clobber its stored
  * GLB with the (empty) parametric editor document. */
 function liveDocument(): PersistedDoc {
-  const mesh = useProjectsStore.getState().activeMeshDoc;
-  if (mesh) return structuredClone(mesh);
+  const { activeMeshDoc, activePointCloudDoc } = useProjectsStore.getState();
+  if (activeMeshDoc) return structuredClone(activeMeshDoc);
+  if (activePointCloudDoc) return structuredClone(activePointCloudDoc);
   const voxel = useVoxelStore.getState().doc;
   return voxel ? structuredClone(voxel) : useCadStore.getState().toDocument();
 }
@@ -100,6 +103,7 @@ function liveDocument(): PersistedDoc {
 function toRecoveryDoc(doc: PersistedDoc): CadDocument {
   if (isVoxelDoc(doc)) return { features: [], params: {}, voxel: doc } as CadDocument;
   if (isMeshDoc(doc)) return { features: [], params: {}, mesh: doc } as CadDocument;
+  if (isPointCloudDoc(doc)) return { features: [], params: {}, pointCloud: doc } as CadDocument;
   return doc as CadDocument;
 }
 
@@ -115,6 +119,12 @@ export function meshOfRecoveryDoc(doc: CadDocument): MeshDoc | null {
   return typeof m === "object" && m !== null && isMeshDoc(m as PersistedDoc)
     ? (m as MeshDoc)
     : null;
+}
+
+/** The point-cloud document inside a recovery snapshot's envelope, or null. */
+export function pointCloudOfRecoveryDoc(doc: CadDocument): PointCloudDoc | null {
+  const p = (doc as { pointCloud?: unknown }).pointCloud;
+  return isPointCloudDoc(p) ? p : null;
 }
 
 /** Enter/leave the Sculpt workspace to match the document kind being opened, so a
@@ -181,6 +191,10 @@ export interface ProjectsState {
    * decision 20); null for a parametric project. The viewport renders it from its
    * GLB; the parametric editor (cad store) stays empty for a mesh project. */
   activeMeshDoc: MeshDoc | null;
+  /** The open project's point-cloud document when it is a cloud-kind project (SPEC-13); null
+   * otherwise. Mutually exclusive with activeMeshDoc + the voxel/parametric modes: the viewport
+   * renders it as a THREE.Points cloud and the parametric editor stays empty for it. */
+  activePointCloudDoc: PointCloudDoc | null;
 
   init: () => Promise<void>;
   refresh: () => Promise<void>;
@@ -195,6 +209,9 @@ export interface ProjectsState {
    * project or set activeMeshDoc — the caller opens it AFTER the agent loop finishes so
    * a successful generation never yanks the panel out from under a still-running run. */
   createMeshProject: (doc: MeshDoc) => Promise<string>;
+  /** Persist a dense point-cloud document as a NEW project (SPEC-13), returning its id. Like
+   * createMeshProject it does NOT switch the open project — the caller opens it afterwards. */
+  createPointCloudProject: (doc: PointCloudDoc) => Promise<string>;
   open: (id: string) => Promise<void>;
   save: () => Promise<void>;
   saveAs: (name: string) => Promise<void>;
@@ -216,6 +233,7 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
   busy: false,
   recoverable: null,
   activeMeshDoc: null,
+  activePointCloudDoc: null,
 
   init: async () => {
     if (get().store) return;
@@ -245,7 +263,7 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
     useVoxelStore.getState().close(); // a new parametric doc leaves voxel mode
     syncWorkspace(false);
     useCadStore.getState().loadDocument(defaultDocument());
-    set({ activeMeshDoc: null, currentId: null, currentName: "Untitled", status: "new document", busy: false });
+    set({ activeMeshDoc: null, activePointCloudDoc: null, currentId: null, currentName: "Untitled", status: "new document", busy: false });
     void useAiStore.getState().openConversation(null); // fresh untitled → empty conversation
   },
 
@@ -253,7 +271,7 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
     set({ busy: true });
     useVoxelStore.getState().open(defaultVoxelDoc());
     syncWorkspace(true);
-    set({ activeMeshDoc: null, currentId: null, currentName: "Untitled", status: "new voxel sculpt", busy: false });
+    set({ activeMeshDoc: null, activePointCloudDoc: null, currentId: null, currentName: "Untitled", status: "new voxel sculpt", busy: false });
     void useAiStore.getState().openConversation(null); // fresh untitled → empty conversation
   },
 
@@ -261,6 +279,14 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
     const store = get().store;
     if (!store) throw new Error("projects store not initialised");
     const meta = await store.create(doc.name ?? "Generated mesh", doc);
+    await get().refresh();
+    return meta.id;
+  },
+
+  createPointCloudProject: async (doc) => {
+    const store = get().store;
+    if (!store) throw new Error("projects store not initialised");
+    const meta = await store.create(doc.name ?? "Point cloud", doc);
     await get().refresh();
     return meta.id;
   },
@@ -279,18 +305,24 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
       // from its GLB by the viewport; the parametric cad store stays empty for it.
       useVoxelStore.getState().close();
       syncWorkspace(false);
-      set({ activeMeshDoc: project.doc, currentId: id, currentName: project.meta.name, status: "opened", busy: false });
+      set({ activeMeshDoc: project.doc, activePointCloudDoc: null, currentId: id, currentName: project.meta.name, status: "opened", busy: false });
+    } else if (isPointCloudDoc(project.doc)) {
+      // A dense point-cloud project (SPEC-13): held as activePointCloudDoc and rendered as a
+      // THREE.Points cloud; the parametric cad store + voxel store stay empty for it.
+      useVoxelStore.getState().close();
+      syncWorkspace(false);
+      set({ activeMeshDoc: null, activePointCloudDoc: project.doc, currentId: id, currentName: project.meta.name, status: "opened", busy: false });
     } else if (isVoxelDoc(project.doc)) {
       // A voxel sculpt (ADR-0010): opened into the voxel store and edited in the
       // Sculpt workspace; the parametric cad store stays untouched for it.
       useVoxelStore.getState().open(project.doc);
       syncWorkspace(true);
-      set({ activeMeshDoc: null, currentId: id, currentName: project.meta.name, status: "opened", busy: false });
+      set({ activeMeshDoc: null, activePointCloudDoc: null, currentId: id, currentName: project.meta.name, status: "opened", busy: false });
     } else {
       useVoxelStore.getState().close();
       syncWorkspace(false);
       useCadStore.getState().loadDocument(project.doc);
-      set({ activeMeshDoc: null, currentId: id, currentName: project.meta.name, status: "opened", busy: false });
+      set({ activeMeshDoc: null, activePointCloudDoc: null, currentId: id, currentName: project.meta.name, status: "opened", busy: false });
     }
     // Load the project's AI conversation (messages + generation trace) so the
     // GenerationPanel shows this project's history (SPEC-6 FR-32). Empty if none.
@@ -389,23 +421,31 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
     set({ busy: true });
     const voxel = voxelOfRecoveryDoc(snap.doc);
     const mesh = meshOfRecoveryDoc(snap.doc);
+    const pointCloud = pointCloudOfRecoveryDoc(snap.doc);
     if (voxel) {
       // A crashed voxel sculpt (ADR-0010): reopen it in the voxel store + workspace.
       useVoxelStore.getState().open(voxel);
       syncWorkspace(true);
-      set({ activeMeshDoc: null });
+      set({ activeMeshDoc: null, activePointCloudDoc: null });
     } else if (mesh) {
       // A crashed mesh project (SPEC-6 decision 20): restore it as activeMeshDoc —
       // the viewport re-renders it from its GLB; the parametric editor stays out of
       // the loop, exactly as open() routes a mesh project.
       useVoxelStore.getState().close();
       syncWorkspace(false);
-      set({ activeMeshDoc: mesh });
+      set({ activeMeshDoc: mesh, activePointCloudDoc: null });
+    } else if (pointCloud) {
+      // A crashed point-cloud project (SPEC-13): restore it as activePointCloudDoc — the viewport
+      // re-renders it as a THREE.Points cloud, exactly as open() routes a cloud project.
+      useVoxelStore.getState().close();
+      syncWorkspace(false);
+      set({ activeMeshDoc: null, activePointCloudDoc: pointCloud });
     } else {
       useVoxelStore.getState().close();
       syncWorkspace(false);
       useCadStore.getState().loadDocument(snap.doc);
-      set({ activeMeshDoc: null }); // a stale open mesh doc must not shadow the recovered editor doc
+      // a stale open mesh/cloud doc must not shadow the recovered editor doc
+      set({ activeMeshDoc: null, activePointCloudDoc: null });
     }
     set({
       currentId: snap.currentId,

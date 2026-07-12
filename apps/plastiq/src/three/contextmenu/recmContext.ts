@@ -9,7 +9,7 @@ import {
   type RecmRenderedMenu,
   type RecmRenderedObject,
 } from "@plastiq/recm";
-import { CONTEXT_ACTIONS, runContextAction, type ActionGroup, type ContextAction } from "./config.js";
+import { CONTEXT_ACTIONS, isActionVisible, runContextAction, type ActionGroup, type ContextAction } from "./config.js";
 import type { ContextTarget } from "./contextSelection.js";
 
 export interface PlastiqRecmAppContext {
@@ -48,7 +48,7 @@ export const ACTION_GROUP_ORDER: ActionGroup[] = [
 ];
 
 function actionVisible(action: ContextAction, ctx: RecmContext<PlastiqRecmAppContext>): boolean {
-  return action.visible(ctx.app!.target);
+  return isActionVisible(action, ctx.app!.target);
 }
 
 function actionEnabled(action: ContextAction, ctx: RecmContext<PlastiqRecmAppContext>): boolean {

@@ -19,17 +19,23 @@ export interface ExtrudeOptions {
   readonly direction?: Vec3;
 }
 
-/** Shift a shape by `delta`, returning an independent copy. */
+/** Shift a shape by `delta`, returning an independent copy.
+ * Temporaries are freed on every exit (incl. a Standard_Failure from Transform). */
 function shifted(oc: Occt, shape: TopoDS_Shape, delta: Vec3): TopoDS_Shape {
   const trsf = new oc.gp_Trsf_1();
   const v = new oc.gp_Vec_4(delta[0], delta[1], delta[2]);
-  trsf.SetTranslation_1(v);
-  const t = new oc.BRepBuilderAPI_Transform_2(shape, trsf, true);
-  const out = t.Shape();
-  t.delete();
-  v.delete();
-  trsf.delete();
-  return out;
+  try {
+    trsf.SetTranslation_1(v);
+    const t = new oc.BRepBuilderAPI_Transform_2(shape, trsf, true);
+    try {
+      return t.Shape();
+    } finally {
+      t.delete();
+    }
+  } finally {
+    v.delete();
+    trsf.delete();
+  }
 }
 
 /**
@@ -50,29 +56,42 @@ export function extrude(
   if (!Number.isFinite(height + back) || height + back === 0) {
     throw new Error("extrude: total height (height + back) must be non-zero");
   }
+  // Validate before allocating so a bad height+back leaves nothing to free.
   const face = sketch.toFace(oc);
+  // try/finally so a Standard_Failure from MakePrism (or from the two-sided
+  // shift) still frees the face, the vector, and the prism maker — parity with
+  // revolve/loft/sweep/dress-up in the long-lived geometry worker.
+  let baseFace: TopoDS_Face | TopoDS_Shape = face;
+  let shiftedFace: TopoDS_Shape | null = null;
+  const trash: Array<{ delete(): void }> = [face];
+  try {
+    if (back !== 0) {
+      shiftedFace = shifted(oc, face, scale(dir, -back));
+      trash.push(shiftedFace);
+      baseFace = shiftedFace;
+      // Original face is still in trash; baseFace now points at the shifted copy.
+    }
 
-  let baseFace = face;
-  if (back !== 0) {
-    baseFace = shifted(oc, face, scale(dir, -back));
-    face.delete();
+    const total = height + back;
+    const ext = scale(dir, total);
+    const v = new oc.gp_Vec_4(ext[0], ext[1], ext[2]);
+    trash.push(v);
+    const prism = new oc.BRepPrimAPI_MakePrism_1(baseFace, v, false, true);
+    trash.push(prism);
+    const shape = prism.Shape();
+    // Guard the result for parity with loft/sweep/dress-up: reject a null shape
+    // rather than wrapping an empty Solid and returning it as a success.
+    // The null handle is itself an owned allocation — free it before the throw.
+    // On success the returned Solid owns it, so it is freed exactly once.
+    if (shape.IsNull()) {
+      shape.delete();
+      throw new Error("extrude: produced an empty shape");
+    }
+    return new Solid(oc, shape);
+  } finally {
+    // Reverse order: prism before vec before faces.
+    for (let i = trash.length - 1; i >= 0; i--) trash[i]!.delete();
   }
-
-  const total = height + back;
-  const ext = scale(dir, total);
-  const v = new oc.gp_Vec_4(ext[0], ext[1], ext[2]);
-  const prism = new oc.BRepPrimAPI_MakePrism_1(baseFace, v, false, true);
-  const shape = prism.Shape();
-  prism.delete();
-  v.delete();
-  baseFace.delete();
-  // Guard the result for parity with loft/sweep/dress-up: reject a null shape
-  // rather than wrapping an empty Solid and returning it as a success.
-  if (shape.IsNull()) {
-    shape.delete();
-    throw new Error("extrude: produced an empty shape");
-  }
-  return new Solid(oc, shape);
 }
 
 export interface ExtrudeToFaceOptions {

@@ -3,6 +3,7 @@
 
 export { Viewport } from "./Viewport.js";
 export { Viewport3D } from "./Viewport3D.js";
+export { CanvasDropZone } from "./CanvasDropZone.js";
 export { Scene } from "./Scene.js";
 export { Part } from "./Part.js";
 export * from "./colors.js";

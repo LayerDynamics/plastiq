@@ -175,6 +175,140 @@ describe("R0 unit conversion — mm/deg → SI", () => {
     expect(pts[1]![2]).toBeCloseTo(mm(20), 12);
   });
 
+  it("converts revolve origin lengths (ox/oy/oz) and leaves axis unitless (G2)", () => {
+    const doc: AuthoringDocument = {
+      features: [
+        {
+          id: "r1",
+          type: "revolve",
+          params: { angle: 180, ay: 1, ox: 5, oy: 0, oz: 2 },
+        },
+      ],
+      params: {},
+    };
+    expect(authoringDocumentSchema.safeParse(doc).success).toBe(true);
+    const si = toCadDocument(doc);
+    expect(si.features[0]!.params!.angle).toBeCloseTo(deg(180), 12);
+    expect(si.features[0]!.params!.ox).toBeCloseTo(mm(5), 12);
+    expect(si.features[0]!.params!.oz).toBeCloseTo(mm(2), 12);
+    expect(si.features[0]!.params!.ay).toBe(1);
+  });
+
+  it("converts cut back depth and accepts direction data (G5)", () => {
+    const doc: AuthoringDocument = {
+      features: [
+        {
+          id: "c1",
+          type: "cut",
+          params: { depth: 10, back: 5 },
+          data: { direction: [0, 0, -1] },
+        },
+      ],
+      params: {},
+    };
+    expect(authoringDocumentSchema.safeParse(doc).success).toBe(true);
+    const si = toCadDocument(doc);
+    expect(si.features[0]!.params!.depth).toBeCloseTo(mm(10), 12);
+    expect(si.features[0]!.params!.back).toBeCloseTo(mm(5), 12);
+    expect(si.features[0]!.data!.direction).toEqual([0, 0, -1]);
+  });
+
+  it("converts mixed line/arc sweep spine path + plane offset (G3/G4)", () => {
+    const doc: AuthoringDocument = {
+      features: [
+        {
+          id: "s1",
+          type: "sweep",
+          data: {
+            profile: { kind: "circle", center: [0, 0], radius: 2 },
+            plane: { base: "XZ", offset: 3 },
+            mode: "frenet",
+            transition: "round",
+            path: {
+              kind: "path",
+              start: [0, 0, 0],
+              segments: [
+                { kind: "line", to: [0, 0, 20] },
+                { kind: "arc", through: [5, 0, 30], to: [10, 0, 20] },
+              ],
+            },
+          },
+        },
+      ],
+      params: {},
+    };
+    expect(authoringDocumentSchema.safeParse(doc).success).toBe(true);
+    const si = toCadDocument(doc);
+    const d = si.features[0]!.data!;
+    expect((d.plane as { offset: number }).offset).toBeCloseTo(mm(3), 12);
+    expect(d.mode).toBe("frenet");
+    expect(d.transition).toBe("round");
+    const path = d.path as {
+      kind: string;
+      start: number[];
+      segments: { kind: string; to: number[]; through?: number[] }[];
+    };
+    expect(path.kind).toBe("path");
+    expect(path.start[2]).toBeCloseTo(0, 12);
+    expect(path.segments[0]!.to[2]).toBeCloseTo(mm(20), 12);
+    expect(path.segments[1]!.through![0]).toBeCloseTo(mm(5), 12);
+  });
+
+  it("accepts loft sections with plane specs and converts their offsets (G6)", () => {
+    const doc: AuthoringDocument = {
+      features: [
+        {
+          id: "l1",
+          type: "loft",
+          data: {
+            ruled: true,
+            sections: [
+              {
+                profile: { kind: "circle", center: [0, 0], radius: 10 },
+                plane: { base: "XY", offset: 0 },
+              },
+              {
+                profile: { kind: "circle", center: [0, 0], radius: 4 },
+                plane: { base: "XY", offset: 50 },
+              },
+            ],
+          },
+        },
+      ],
+      params: {},
+    };
+    expect(authoringDocumentSchema.safeParse(doc).success).toBe(true);
+    const si = toCadDocument(doc);
+    const secs = si.features[0]!.data!.sections as { plane: { offset: number }; profile: { radius: number } }[];
+    expect(secs[1]!.plane.offset).toBeCloseTo(mm(50), 12);
+    expect(secs[0]!.profile.radius).toBeCloseTo(mm(10), 12);
+  });
+
+  it("accepts extrude join op and shell outward direction (G7/G13)", () => {
+    const doc: AuthoringDocument = {
+      features: [
+        {
+          id: "e1",
+          type: "extrude",
+          params: { height: 10 },
+          data: { op: "join" },
+        },
+        {
+          id: "sh1",
+          type: "shell",
+          params: { thickness: 2 },
+          data: { faces: [{ normal: [0, 0, 1] }], direction: "outward" },
+        },
+      ],
+      params: {},
+    };
+    expect(authoringDocumentSchema.safeParse(doc).success).toBe(true);
+    const si = toCadDocument(doc);
+    expect(si.features[0]!.data!.op).toBe("join");
+    expect(si.features[1]!.data!.direction).toBe("outward");
+    expect(si.features[1]!.params!.thickness).toBeCloseTo(mm(2), 12);
+  });
+
   it("converts draft angle + neutralOrigin (length) but not normals", () => {
     const si = toCadDocument(sampleAuthoring());
     const d = si.features.find((f) => f.id === "f10")!;

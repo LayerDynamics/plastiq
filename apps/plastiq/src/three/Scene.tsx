@@ -22,19 +22,53 @@ import { Section } from "./Section.js";
 import { Assembly, type InstanceBody } from "./Assembly.js";
 import { VoxelSculpt } from "./VoxelSculpt.js";
 import { MeshEditing } from "./MeshEditing.js";
+import { SketchScene } from "../sketch/SketchScene.js";
 import type { DatumPlane } from "@plastiq/cad";
 import { GRID_CENTER, GRID_CELL } from "./colors.js";
 import { buildPart, buildMeshBody, disposePart, type BuiltPart, type BuiltMeshBody } from "../viewport/buildMesh.js";
+import { buildPointCloud, type BuiltPointCloud } from "../viewport/buildPointCloud.js";
 import { applyPlacement, findPlacement, placementFromFeature } from "../viewport/placement.js";
 import { useCadStore } from "../store/store.js";
 import { useVoxelStore } from "../voxel/voxelStore.js";
 import type { TransferMesh } from "../worker/protocol.js";
 import type { MeshBody } from "../mesh/meshBody.js";
+import type { PointCloudDoc } from "../store/types.js";
+
+/** Static ground slab visual for physics experiments (matches applyExperiment half-height 0.02). */
+function ExperimentGround(): React.JSX.Element | null {
+  const simulating = useCadStore((s) => s.simulating);
+  const telemetry = useCadStore((s) => s.simTelemetry);
+  const ground = telemetry?.bodies.find((b) => b.id === "__experiment_ground");
+  if (!simulating || !ground) return null;
+  // Hull half-height is 0.02 m; surface sits at COM.z + halfH.
+  const halfH = 0.02;
+  const surfaceZ = ground.z + halfH;
+  return (
+    <mesh
+      position={[0, 0, surfaceZ - 0.002]}
+      userData={{ experimentGround: true }}
+      // Non-pickable decoration.
+      raycast={() => null}
+    >
+      <boxGeometry args={[4, 4, 0.004]} />
+      <meshStandardMaterial
+        color="#3d5266"
+        transparent
+        opacity={0.55}
+        metalness={0.05}
+        roughness={0.85}
+      />
+    </mesh>
+  );
+}
 
 interface ViewportGlobal {
   builtPart: BuiltPart | null;
   /** Number of rendered mesh-document bodies (SPEC-6 R4.2); 0 in the parametric path. */
   meshBodyCount?: number;
+  /** The rendered dense point cloud (SPEC-13), or null. Published so fitToView frames it — a
+   * photogrammetry cloud is not centred at the origin, so the default box would leave it off-screen. */
+  builtPointCloud?: THREE.Points | null;
   fitToView?: () => void;
   /** Orient the camera to look along `dir` (target → camera), keeping framing. */
   setView?: (dir: readonly [number, number, number]) => void;
@@ -61,12 +95,14 @@ interface OrbitLike {
 export function Scene({
   mesh,
   meshBodies,
+  pointCloud,
   sketchFrame,
   instances,
   onMeshBodiesChange,
 }: {
   mesh: TransferMesh | null;
   meshBodies: MeshBody[] | null;
+  pointCloud: PointCloudDoc | null;
   sketchFrame: DatumPlane | null;
   instances: InstanceBody[] | null;
   onMeshBodiesChange: (bodies: MeshBody[], persist?: boolean) => void;
@@ -113,6 +149,28 @@ export function Scene({
     };
   }, [builtBodies]);
 
+  // A dense point-cloud document (SPEC-13) renders as one THREE.Points cloud, bypassing both the
+  // OCCT B-rep path and the mesh-body path. Built once per doc; published so fitToView frames it,
+  // and disposed on swap.
+  const builtCloud = useMemo<BuiltPointCloud | null>(
+    () => (pointCloud ? buildPointCloud(pointCloud) : null),
+    [pointCloud],
+  );
+  useEffect(() => {
+    const vp = ((globalThis as { __plastiqViewport?: ViewportGlobal }).__plastiqViewport ??= {
+      builtPart: null,
+    });
+    vp.builtPointCloud = builtCloud?.points ?? null;
+    // The auto-fit is triggered from the fitToView effect below (which OWNS vp.fitToView and lists
+    // builtCloud in its deps) — doing it here would no-op on first mount, since that effect runs
+    // later and vp.fitToView is still undefined when this one fires (e.g. a recovery-restored cloud).
+    return () => {
+      builtCloud?.dispose();
+      const v = (globalThis as { __plastiqViewport?: ViewportGlobal }).__plastiqViewport;
+      if (v) v.builtPointCloud = null;
+    };
+  }, [builtCloud]);
+
   // Build the renderable part once per tessellation; shared by render + picking +
   // highlight (same object), and published for the test seams. Disposed on swap.
   const part = useMemo(() => (mesh ? buildPart(mesh) : null), [mesh]);
@@ -147,6 +205,7 @@ export function Scene({
       const part = vp.builtPart;
       const box = new THREE.Box3();
       if (part) box.setFromObject(part.group);
+      if (vp.builtPointCloud) box.expandByObject(vp.builtPointCloud);
       if (box.isEmpty())
         box.setFromCenterAndSize(new THREE.Vector3(), new THREE.Vector3(0.1, 0.1, 0.1));
       const center = box.getCenter(new THREE.Vector3());
@@ -175,11 +234,15 @@ export function Scene({
       if (controls) controls.update();
       camera.lookAt(target);
     };
+    // A point cloud is not centred at the origin, so frame it once it (and fitToView) exist — on
+    // first mount AND whenever the open cloud changes (builtCloud is in the deps). This is the sole
+    // auto-fit call, so it fires correctly even for a crash-recovered cloud open at mount.
+    if (builtCloud) vp.fitToView();
     return () => {
       delete vp.fitToView;
       delete vp.setView;
     };
-  }, [camera, controls]);
+  }, [camera, controls, builtCloud]);
 
   // A voxel sculpt (ADR-0010): the standard stage, the VoxelSculpt component (surface
   // mesh + sculpt tools + hover preview), and NONE of the B-rep editor surfaces —
@@ -224,6 +287,36 @@ export function Scene({
           ))}
         </group>
         <MeshEditing bodies={meshBodies ?? []} builtBodies={builtBodies} onBodiesChange={onMeshBodiesChange} />
+        {/* Right-click here surfaces the mesh→CAD actions (Reconstruct / Fit NURBS). The menu is
+            doc-mode-filtered (contextOptions.isActionVisible) so it shows ONLY those, not the
+            parametric create/sketch actions. No B-rep part, so pick-under-cursor is null. */}
+        <RightClickDropdownGizmo part={null} />
+        <OrbitControls
+          makeDefault
+          enableDamping
+          target={[0, 0, 0.02]}
+          mouseButtons={{ LEFT: THREE.MOUSE.ROTATE, MIDDLE: THREE.MOUSE.PAN }}
+        />
+      </>
+    );
+  }
+
+  // A dense point cloud (SPEC-13): shown as a THREE.Points cloud on the same stage. Like the mesh
+  // and voxel branches, none of the B-rep editor surfaces apply (FR-18); it is a viewing/hand-off
+  // mode (cloud→mesh via capture, or completion) driven from the context menu / ribbon.
+  if (builtCloud) {
+    return (
+      <>
+        <ambientLight intensity={0.55} />
+        <directionalLight intensity={1.1} position={[0.3, -0.4, 0.6]} />
+        <directionalLight intensity={0.35} color={0x88aaff} position={[-0.3, 0.3, 0.2]} />
+        <gridHelper args={[0.4, 40, GRID_CENTER, GRID_CELL]} rotation={[Math.PI / 2, 0, 0]} />
+        <group name="point-cloud-document">
+          <primitive object={builtCloud.points} />
+        </group>
+        {/* Right-click surfaces the cloud→mesh actions (Point cloud → mesh / Complete partial scan),
+            doc-mode-filtered to just those. */}
+        <RightClickDropdownGizmo part={null} />
         <OrbitControls
           makeDefault
           enableDamping
@@ -245,6 +338,7 @@ export function Scene({
           when instances exist (M4) or a simulation is running (M6). */}
       {instances == null && <Part part={part} />}
       <Assembly mesh={mesh} instances={instances} />
+      <ExperimentGround />
       <Picking part={part} />
       <Section part={part} />
       <OriginGizmo />
@@ -258,16 +352,18 @@ export function Scene({
       {/* Right-click context menu: reads the same part for pick-under-cursor;
           renders a world-anchored DOM dropdown of the actions for the target. */}
       <RightClickDropdownGizmo part={part} />
-      {/* While sketching, render through the plane-locked ortho camera and lock
-          orbit (the 2D overlay owns interaction). */}
-      <SketchCamera frame={sketchFrame} />
-      {/* Left = orbit, middle = pan, wheel = zoom. The RIGHT button is deliberately
-          left unbound so it's free for the right-click context menu (otherwise
-          OrbitControls' default right-drag pan steals the contextmenu gesture). */}
+      {/* In-place sketch (ADR-0014): 3D curves + plane pick on the resolved frame.
+          Orbit stays enabled so the user can look around while drawing on the plane. */}
+      <SketchScene frame={sketchFrame} />
+      {/* Optional Look-At ortho (still available); free orbit is the default. */}
+      <SketchCamera frame={null} />
+      {/* Left = orbit when not sketch-tooling; middle = pan, wheel = zoom.
+          While sketching, left-drag on the sketch plane is consumed by SketchPlanePick;
+          empty space still orbits. RIGHT stays free for the context menu. */}
       <OrbitControls
         makeDefault
         enableDamping
-        enabled={sketchFrame == null}
+        enabled
         target={[0, 0, 0.02]}
         mouseButtons={{ LEFT: THREE.MOUSE.ROTATE, MIDDLE: THREE.MOUSE.PAN }}
       />

@@ -26,6 +26,7 @@ import { resolveEdgeRef, resolveFaceRef } from "../mesh/resolve.js";
 import { buildSpineWire } from "../sketch/spine.js";
 import { chamfer, draft, fillet, shell } from "./dressup.js";
 import { loft, sweep } from "./loft.js";
+import { extrude } from "./extrude.js";
 import { union } from "./boolean.js";
 
 // The resolve / spine helpers reach into real geometry; stub them so each op can
@@ -92,6 +93,53 @@ describe("boolean finish() frees the null Shape() handle on the failure return",
     // The fix: the null Shape() handle is freed (it leaked before).
     expect(deleted).toContain("shape");
     expect(deleted).toEqual(expect.arrayContaining(["shape", "op", "range"]));
+  });
+});
+
+describe("extrude frees face/vec/prism (and a null Shape()) on the failure path", () => {
+  const sketchWithFace = (): Sketch =>
+    ({ toFace: () => ({ delete: del("face") }), plane: { normal: [0, 0, 1] } }) as unknown as Sketch;
+
+  it("deletes the null shape plus face/vec/prism when Shape() is null", () => {
+    const prism = { Shape: () => nullShape(), delete: del("prism") };
+    const oc = {
+      gp_Vec_4: function () {
+        return { delete: del("v") };
+      },
+      BRepPrimAPI_MakePrism_1: function () {
+        return prism;
+      },
+    } as unknown as Occt;
+
+    expect(() => extrude(oc, sketchWithFace(), 0.02)).toThrow(/empty shape/);
+    expect(deleted).toContain("shape");
+    expect(deleted).toEqual(expect.arrayContaining(["face", "v", "prism", "shape"]));
+  });
+
+  it("frees face/vec/prism when MakePrism throws a Standard_Failure", () => {
+    const oc = {
+      gp_Vec_4: function () {
+        return { delete: del("v") };
+      },
+      BRepPrimAPI_MakePrism_1: function () {
+        throw new Error("Standard_Failure: cannot prism this face");
+      },
+    } as unknown as Occt;
+
+    expect(() => extrude(oc, sketchWithFace(), 0.02)).toThrow(/Standard_Failure/);
+    // No shape was allocated; face and vec are still freed (prism never existed).
+    expect(deleted).toEqual(expect.arrayContaining(["face", "v"]));
+  });
+
+  it("rejects a zero total height before allocating a face", () => {
+    const sketch = {
+      toFace: () => {
+        throw new Error("toFace must not be called before validation");
+      },
+      plane: { normal: [0, 0, 1] },
+    } as unknown as Sketch;
+    expect(() => extrude({} as unknown as Occt, sketch, 0)).toThrow(/height/);
+    expect(deleted).toEqual([]);
   });
 });
 
@@ -163,7 +211,11 @@ describe("sweep frees the null Shape() handle before cleanup", () => {
       Message_ProgressRange_1: function () {
         return { delete: del("progress") };
       },
-      BRepBuilderAPI_TransitionMode: { BRepBuilderAPI_RightCorner: 0 },
+      BRepBuilderAPI_TransitionMode: {
+        BRepBuilderAPI_RightCorner: 0,
+        BRepBuilderAPI_RoundCorner: 1,
+        BRepBuilderAPI_Transformed: 2,
+      },
     } as unknown as Occt;
     const sketch = { toWire: () => ({ delete: del("profile") }) } as unknown as Sketch;
     const path = { kind: "polyline", points: [[0, 0, 0], [1, 0, 0]] } as unknown as SpinePath;
@@ -195,7 +247,11 @@ describe("sweep frees the null Shape() handle before cleanup", () => {
       Message_ProgressRange_1: function () {
         return { delete: del("progress") };
       },
-      BRepBuilderAPI_TransitionMode: { BRepBuilderAPI_RightCorner: 0 },
+      BRepBuilderAPI_TransitionMode: {
+        BRepBuilderAPI_RightCorner: 0,
+        BRepBuilderAPI_RoundCorner: 1,
+        BRepBuilderAPI_Transformed: 2,
+      },
     } as unknown as Occt;
     const sketch = { toWire: () => ({ delete: del("profile") }) } as unknown as Sketch;
     const path = { kind: "polyline", points: [[0, 0, 0], [1, 0, 0]] } as unknown as SpinePath;

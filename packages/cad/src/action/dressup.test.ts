@@ -83,6 +83,26 @@ describe("shell", () => {
     box.delete();
     hollow.delete();
   });
+
+  it("outward shell expands the outer envelope vs inward (G13)", () => {
+    const { top } = refs(mm(40), mm(40), mm(20));
+    const box = makeBox(oc, mm(40), mm(40), mm(20));
+    const baseBB = box.boundingBox();
+    const baseSpanX = baseBB.max[0] - baseBB.min[0];
+    const outward = shell(oc, box, [top], mm(2), { direction: "outward" });
+    expect(outward.isValid()).toBe(true);
+    // Outward offset expands the outer envelope (walls grow outside the solid).
+    const outBB = outward.boundingBox();
+    expect(outBB.max[0] - outBB.min[0]).toBeGreaterThan(baseSpanX + mm(1));
+    // Both are hollowed shells (volume < solid); outward's larger envelope holds more wall.
+    const inward = shell(oc, box, [top], mm(2), { direction: "inward" });
+    expect(outward.volume()).toBeLessThan(box.volume());
+    expect(inward.volume()).toBeLessThan(box.volume());
+    expect(outward.volume()).toBeGreaterThan(inward.volume() * 0.5); // same order of magnitude
+    box.delete();
+    outward.delete();
+    inward.delete();
+  });
 });
 
 describe("partial-resolution safety (no silent partial dress-up)", () => {

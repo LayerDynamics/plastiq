@@ -26,7 +26,7 @@ from pydantic import BaseModel
 
 from .jobs import JobState, JobStore
 from .logging_setup import setup_logging
-from .pipeline import reconstruct
+from .pipeline import reconstruct_isolated
 
 setup_logging()
 logger = logging.getLogger(__name__)
@@ -108,9 +108,12 @@ async def submit_reconstruction(body: SubmitBody) -> JobView:
     method = body.method
 
     async def work() -> dict:
-        # OCCT reconstruction is CPU-bound → run off the event loop.
-        result = await asyncio.to_thread(reconstruct, data, file_type, method=method)
-        return result.to_dict()
+        # OCCT reconstruction is CPU-bound AND can OOM/crash on a huge organic mesh → run it in a
+        # crash-isolated spawn subprocess (not just off the event loop). A worker death raises
+        # IsolatedWorkerError, which fails THIS job cleanly instead of taking the service down.
+        return await asyncio.to_thread(
+            reconstruct_isolated, data, file_type, method=method
+        )
 
     job = await store.submit(work)
     return JobView(id=job.id, state=job.state.value)

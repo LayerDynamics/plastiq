@@ -33,6 +33,7 @@ import {
   planeXY,
   revolve,
   sweep,
+  type SweepOptions,
   type DatumPlane,
   type SpinePath,
   rotate,
@@ -42,6 +43,7 @@ import {
   tessellateTagged,
   translate,
   union,
+  type ShellOptions,
   type EdgeRef,
   type FaceRef,
   type Occt,
@@ -225,48 +227,150 @@ export function rebuildDocument(oc: Occt, doc: CadDocument): Solid | null {
             pad.delete();
           }
         } else {
-          replace(extrude(oc, sk, num(f, "height"), { back: opt(f, "back", 0), direction }));
+          // Default "new" replaces the current body (historical single-body model).
+          // data.op === "join" fuses the pad with the existing solid so a second
+          // boss adds material instead of destroying the prior body (G7).
+          const pad = extrude(oc, sk, num(f, "height"), { back: opt(f, "back", 0), direction });
+          const join = f.data?.["op"] === "join";
+          if (join && solid) {
+            try {
+              const r = union(oc, solid, pad);
+              if (!r.ok) throw new Error(`feature '${f.id}' (extrude join): ${r.error}`);
+              replace(r.solid);
+            } finally {
+              pad.delete();
+            }
+          } else {
+            replace(pad);
+          }
         }
         break;
       }
       case "revolve": {
         if (!activeSketch)
           throw new Error(`feature '${f.id}' (revolve): no sketch profile upstream`);
-        // Revolve the active profile about an axis (default: world Y through
-        // origin) by `angle` radians (FR-29).
+        // Revolve the active profile about an axis through (ox,oy,oz) along
+        // (ax,ay,az) by `angle` radians (FR-29). Defaults: world Y through origin.
         const angle = num(f, "angle");
-        const axis: [number, number, number] = [opt(f, "ax", 0), opt(f, "ay", 1), opt(f, "az", 0)];
+        const origin: Vec3 = [opt(f, "ox", 0), opt(f, "oy", 0), opt(f, "oz", 0)];
+        const axis: Vec3 = [opt(f, "ax", 0), opt(f, "ay", 1), opt(f, "az", 0)];
         replace(
-          revolve(oc, profileSketch(activeSketch.profile, activeSketch.plane), [0, 0, 0], axis, angle),
+          revolve(oc, profileSketch(activeSketch.profile, activeSketch.plane), origin, axis, angle),
         );
         break;
       }
       case "loft": {
-        // Loft through ≥2 section profiles, each on an offset XY plane (FR-32).
-        const sections = f.data?.["sections"] as { profile: Profile; z: number }[] | undefined;
+        // Loft through ≥2 section profiles (FR-32). Each section is either on an
+        // offset of its own plane (G6: `plane` / legacy `z` on world-XY) so
+        // non-XY / non-parallel stacks are expressible.
+        const sections = f.data?.["sections"] as
+          | { profile: Profile; z?: number; plane?: SketchPlaneSpec }[]
+          | undefined;
         if (!Array.isArray(sections) || sections.length < 2) {
           throw new Error(`feature '${f.id}' (loft): needs ≥2 section profiles`);
         }
-        const sketches = sections.map((s) => profileSketch(s.profile, offsetPlane(planeXY(), s.z)));
+        const sketches = sections.map((s, i) => {
+          let plane: DatumPlane;
+          if (s.plane && isFaceSketchPlane(s.plane)) {
+            if (!solid)
+              throw new Error(
+                `feature '${f.id}' (loft): section ${i} on-face plane needs an upstream body`,
+              );
+            const face = resolveFaceRef(oc, solid, s.plane.face);
+            if (!face)
+              throw new Error(
+                `feature '${f.id}' (loft): section ${i} on-face plane's face was not found`,
+              );
+            try {
+              plane = offsetPlane(faceDatumPlane(oc, face), s.plane.offset);
+            } finally {
+              face.delete();
+            }
+          } else if (s.plane) {
+            plane = resolveSketchPlane(s.plane);
+          } else {
+            // Legacy: z offset on world-XY (back-compat with existing documents).
+            plane = offsetPlane(planeXY(), typeof s.z === "number" ? s.z : 0);
+          }
+          return profileSketch(s.profile, plane);
+        });
         replace(loft(oc, sketches, { ruled: Boolean(f.data?.["ruled"]) }));
         break;
       }
       case "sweep": {
-        // Sweep a profile along a polyline/arc path (FR-32).
+        // Sweep a profile along a polyline or mixed line/arc path (FR-32 / G4).
+        // The profile plane is taken from data.plane (explicit), else the active
+        // sketch's plane, else world-XY — so a non-XY profile is not forced onto
+        // XY (G3).
         const prof = f.data?.["profile"] as Profile | undefined;
         const path = f.data?.["path"] as SpinePath | undefined;
         if (!isProfile(prof)) throw new Error(`feature '${f.id}' (sweep): no profile`);
         if (!path) throw new Error(`feature '${f.id}' (sweep): no path`);
-        replace(sweep(oc, profileSketch(prof), path));
+        const planeSpec = f.data?.["plane"] as SketchPlaneSpec | undefined;
+        let sweepPlane: DatumPlane;
+        if (isFaceSketchPlane(planeSpec)) {
+          if (!solid)
+            throw new Error(`feature '${f.id}' (sweep): an on-face plane needs an upstream body`);
+          const face = resolveFaceRef(oc, solid, planeSpec.face);
+          if (!face)
+            throw new Error(`feature '${f.id}' (sweep): the on-face plane's face was not found`);
+          try {
+            sweepPlane = offsetPlane(faceDatumPlane(oc, face), planeSpec.offset);
+          } finally {
+            face.delete();
+          }
+        } else if (planeSpec) {
+          sweepPlane = resolveSketchPlane(planeSpec);
+        } else if (activeSketch) {
+          sweepPlane = activeSketch.plane;
+        } else {
+          sweepPlane = planeXY();
+        }
+        const modeRaw = f.data?.["mode"];
+        const transitionRaw = f.data?.["transition"];
+        const sweepOpts: SweepOptions | undefined =
+          modeRaw === "frenet" ||
+          modeRaw === "correctedFrenet" ||
+          modeRaw === "fixed" ||
+          transitionRaw === "right" ||
+          transitionRaw === "round" ||
+          transitionRaw === "transformed"
+            ? {
+                ...(modeRaw === "frenet" ||
+                modeRaw === "correctedFrenet" ||
+                modeRaw === "fixed"
+                  ? { mode: modeRaw as SweepOptions["mode"] }
+                  : {}),
+                ...(transitionRaw === "right" ||
+                transitionRaw === "round" ||
+                transitionRaw === "transformed"
+                  ? { transition: transitionRaw as SweepOptions["transition"] }
+                  : {}),
+              }
+            : undefined;
+        replace(sweep(oc, profileSketch(prof, sweepPlane), path, sweepOpts));
         break;
       }
       case "cut": {
         const base = solid;
         if (!base) throw new Error(`feature '${f.id}' (cut): no solid to cut into`);
         if (!activeSketch) throw new Error(`feature '${f.id}' (cut): no sketch profile upstream`);
-        // Subtract the active profile, extruded `depth`, from the current solid
-        // (a pocket/through-cut; FR-29).
-        const tool = extrude(oc, profileSketch(activeSketch.profile, activeSketch.plane), num(f, "depth"));
+        // Subtract the active profile, extruded `depth` (optionally two-sided via
+        // `back`, optionally along a baked/edge direction — parity with extrude, G5),
+        // from the current solid (a pocket/through-cut; FR-29).
+        let direction: Vec3 | undefined;
+        const dirVec = f.data?.["direction"];
+        if (Array.isArray(dirVec) && dirVec.length === 3) {
+          direction = [Number(dirVec[0]), Number(dirVec[1]), Number(dirVec[2])];
+        } else if (f.data?.["directionEdge"]) {
+          const d = resolveEdgeDirection(oc, base, f.data["directionEdge"] as EdgeRef);
+          if (!d) throw new Error(`feature '${f.id}' (cut): direction edge unresolved`);
+          direction = d;
+        }
+        const tool = extrude(oc, profileSketch(activeSketch.profile, activeSketch.plane), num(f, "depth"), {
+          back: opt(f, "back", 0),
+          direction,
+        });
         try {
           replace(cut(oc, base, tool));
         } finally {
@@ -296,29 +400,55 @@ export function rebuildDocument(oc: Occt, doc: CadDocument): Solid | null {
         if (!base) throw new Error(`feature '${f.id}' (shell): no solid to shell`);
         const faces = dressFaces(oc, base, f);
         if (faces.length === 0) throw new Error(`feature '${f.id}' (shell): no faces selected`);
-        replace(shell(oc, base, faces, num(f, "thickness")));
+        const shellOpts: ShellOptions | undefined =
+          f.data?.["direction"] === "outward" ? { direction: "outward" } : undefined;
+        replace(shell(oc, base, faces, num(f, "thickness"), shellOpts));
         break;
       }
       case "draft": {
         const base = solid;
         if (!base) throw new Error(`feature '${f.id}' (draft): no solid to draft`);
-        const face = (f.data?.["face"] as FaceRef | undefined) ?? dressFaces(oc, base, f)[0];
-        if (!face) throw new Error(`feature '${f.id}' (draft): no face selected`);
+        // Prefer multi-face selection (G9); fall back to single `data.face` or first dress face.
+        const facesFromData = f.data?.["faces"] as FaceRef[] | undefined;
+        const faces: FaceRef[] =
+          Array.isArray(facesFromData) && facesFromData.length > 0
+            ? facesFromData
+            : f.data?.["face"]
+              ? [f.data["face"] as FaceRef]
+              : dressFaces(oc, base, f);
+        if (faces.length === 0) throw new Error(`feature '${f.id}' (draft): no face selected`);
         const vec = (key: string, d: Vec3): Vec3 => {
           const v = f.data?.[key];
           return Array.isArray(v) && v.length === 3
             ? [Number(v[0]), Number(v[1]), Number(v[2])]
             : d;
         };
-        replace(
-          draft(oc, base, {
-            face,
-            pullDirection: vec("pull", [0, 0, 1]),
-            neutralOrigin: vec("neutralOrigin", [0, 0, 0]),
-            neutralNormal: vec("neutralNormal", [0, 0, 1]),
-            angle: num(f, "angle"),
-          }),
-        );
+        const pull = vec("pull", [0, 0, 1]);
+        const neutralOrigin = vec("neutralOrigin", [0, 0, 0]);
+        const neutralNormal = vec("neutralNormal", [0, 0, 1]);
+        const angle = num(f, "angle");
+        // Apply draft sequentially per face; each step re-bases on the prior solid
+        // so multi-face mold draft is expressible without a kernel multi-Add API.
+        let current: Solid = base;
+        let owned: Solid | null = null;
+        try {
+          for (const face of faces) {
+            const next = draft(oc, current, {
+              face,
+              pullDirection: pull,
+              neutralOrigin,
+              neutralNormal,
+              angle,
+            });
+            if (owned) owned.delete();
+            owned = next;
+            current = next;
+          }
+          replace(current);
+          owned = null; // ownership passed via replace
+        } finally {
+          owned?.delete();
+        }
         break;
       }
       case "transform": {

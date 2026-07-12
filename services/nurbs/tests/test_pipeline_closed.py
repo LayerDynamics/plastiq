@@ -277,6 +277,37 @@ def test_all_faceted_extreme_is_watertight_solid(all_faceted_result, blob_mesh_v
     assert "B_SPLINE_SURFACE_WITH_KNOTS" not in step_text, "all-faceted STEP has no NURBS faces"
     shape = _reimport(step_text, tmp_path)
     assert _count(shape, TopAbs_SOLID) == 1, "all-faceted mesh must re-import as one closed solid"
+
+
+def test_charting_stall_degrades_to_faceted_solid(monkeypatch, tmp_path) -> None:
+    """A cube-map charting STALL degrades to an all-faceted watertight solid — it must not crash.
+
+    Deeply-concave genus-0 meshes (a carved mask with overhangs) can produce a junction whose vertex
+    fan is fully claimed, which ``_repair_chart_labels`` cannot dissolve and raises on. That is a
+    *shape* limit, not invalid input, so ``fit_closed`` must degrade (NFR-1 "nothing is ever
+    dropped") rather than propagate the crash. Forcing the stall deterministically (the real trigger
+    needs a specific concave mesh) proves the exception boundary emits a valid solid + honest report.
+    """
+    from app import param, pipeline_closed
+
+    def _stall(_mesh):
+        raise ValueError("cube-map chart repair stalled: the fan of vertex 0 is fully claimed")
+
+    monkeypatch.setattr(param, "cube_map_charts", _stall)
+    result = pipeline_closed.fit_closed(_bytes("blob.glb"))
+    report = result["report"]
+
+    assert report["charting_degraded"] is True, "the degradation must be flagged honestly"
+    assert report["fitted_patches"] == 0 and report["faceted_patches"] == 1
+    assert report["mode"] == "closed"
+    # The degraded path still emits a real, verified watertight solid — never a crash or a fake.
+    assert report["is_solid"] is True
+    assert report["is_valid"] is True
+    assert report["free_edges"] == 0
+    assert report["volume"] > 0.0
+    assert "B_SPLINE_SURFACE_WITH_KNOTS" not in result["step"], "degraded STEP has no NURBS faces"
+    shape = _reimport(result["step"], tmp_path)
+    assert _count(shape, TopAbs_SOLID) == 1, "degraded mesh must re-import as one closed solid"
     assert _count(shape, TopAbs_FACE) > 6, "the faceted solid has one face per mesh triangle"
 
 

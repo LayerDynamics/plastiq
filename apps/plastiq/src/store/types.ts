@@ -82,9 +82,34 @@ export interface VoxelDoc {
   cells: number[];
 }
 
-/** A persisted document: a parametric CadDocument, a generated MeshDoc, or a voxel
- * sculpt. A CadDocument carries no `kind` (back-compat: an absent `kind` ⇒ parametric). */
-export type PersistedDoc = CadDocument | MeshDoc | VoxelDoc;
+/** How a point cloud entered the app. `photos3d` = the photogrammetry dense cloud (SPEC-13),
+ * `scan` = the capture service's oriented cloud, `import` = a dropped .ply/.xyz/.json file. */
+export interface PointCloudSource {
+  mode: "photos3d" | "scan" | "import";
+  providerId: string;
+}
+
+/** A dense point-cloud document (SPEC-13): the raw oriented cloud a photogrammetry/scan pipeline
+ * produces, shown on the SAME canvas as a THREE.Points cloud rather than discarded at
+ * reconstruction. Like MeshDoc/VoxelDoc it is a non-parametric mode (no B-rep ops); its points feed
+ * the capture service (cloud→mesh) or completion (partial→full). Buffers are stored as flat JSON
+ * number[] triples (x0,y0,z0,x1,… — mirroring VoxelDoc.cells) so a project round-trips as plain JSON;
+ * they are re-uploaded to Float32 attributes on render. */
+export interface PointCloudDoc {
+  readonly kind: "pointcloud";
+  name?: string;
+  /** Flat XYZ triples in metres; `points.length === 3 · pointCount`. */
+  points: number[];
+  /** Optional flat per-point RGB in 0..1, same length as `points`. Absent ⇒ a uniform colour. */
+  colors?: number[];
+  /** Optional flat per-point normals, same length as `points` (needed for cloud→mesh via capture). */
+  normals?: number[];
+  source: PointCloudSource;
+}
+
+/** A persisted document: a parametric CadDocument, a generated MeshDoc, a voxel sculpt, or a dense
+ * point cloud. A CadDocument carries no `kind` (back-compat: an absent `kind` ⇒ parametric). */
+export type PersistedDoc = CadDocument | MeshDoc | VoxelDoc | PointCloudDoc;
 
 /** Discriminate a persisted document as a mesh document. */
 export function isMeshDoc(doc: PersistedDoc): doc is MeshDoc {
@@ -94,6 +119,11 @@ export function isMeshDoc(doc: PersistedDoc): doc is MeshDoc {
 /** Discriminate any value as a voxel document. */
 export function isVoxelDoc(doc: unknown): doc is VoxelDoc {
   return typeof doc === "object" && doc !== null && (doc as Partial<VoxelDoc>).kind === "voxel";
+}
+
+/** Discriminate any value as a point-cloud document. */
+export function isPointCloudDoc(doc: unknown): doc is PointCloudDoc {
+  return typeof doc === "object" && doc !== null && (doc as Partial<PointCloudDoc>).kind === "pointcloud";
 }
 
 /** Which kind of sub-entity the 3D viewport selects. */

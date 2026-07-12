@@ -1,0 +1,8 @@
+schema: 1
+output_directory: packaging/dist/bundles
+exclude_names:
+  - .DS_Store
+  - .pytest_cache
+  - .ruff_cache
+  - __pycache__
+  - node_modules

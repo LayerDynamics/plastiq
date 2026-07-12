@@ -217,20 +217,27 @@ const RIBBON_ONLY: ActionDef[] = [
     label: () => "Loft",
     icon: "⬗",
     enabled: always,
-    run: () =>
+    // Demo loft with two stacked rectangles — documents the data shape; for real
+    // authoring the AI or document edit supplies section profiles (G10 guidance).
+    run: () => {
       cad().addFeature(
         loftFeature([
           { profile: rectProfile(0.04, 0.03), z: 0 },
           { profile: rectProfile(0.02, 0.015), z: 0.06 },
         ])!,
-      ),
+      );
+      cad().setStatus(
+        "Loft: demo frustum added — edit feature data.sections (or use AI build_part) for custom profiles",
+      );
+    },
   },
   {
     id: "sweep",
     label: () => "Sweep",
     icon: "❧",
     enabled: always,
-    run: () =>
+    // Demo sweep along a cornered polyline — same authoring guidance as loft (G10).
+    run: () => {
       cad().addFeature(
         sweepFeature(rectProfile(0.01, 0.01), {
           kind: "polyline",
@@ -240,7 +247,11 @@ const RIBBON_ONLY: ActionDef[] = [
             [0.03, 0, 0.07],
           ],
         }),
-      ),
+      );
+      cad().setStatus(
+        "Sweep: demo pipe added — edit feature data.profile/path (or use AI build_part) for custom geometry",
+      );
+    },
   },
   // COMBINE
   {
@@ -483,9 +494,17 @@ export const meshMode = (): boolean => useProjectsStore.getState().activeMeshDoc
  * voxel-legal set (sculpt tools, surface-mesh export, Convert-to-CAD) stays live. */
 export const voxelMode = (): boolean => useVoxelStore.getState().doc != null;
 
-/** Actions that remain meaningful while a mesh document is open: editor-state only, not
- * B-rep feature operations. An ALLOWLIST (not a blocklist) so any action added later is
- * disabled in mesh mode by default — exactly the FR-18 "no silent no-op" guarantee. */
+/** True when a dense point-cloud document is open (SPEC-13). The live document is neither a B-rep nor
+ * a mesh, so B-rep/mesh ops are disabled-not-hidden (FR-18); only the editor-state set (and, once
+ * added, the cloud→mesh / completion hand-offs) stays live. */
+export const pointCloudMode = (): boolean => useProjectsStore.getState().activePointCloudDoc != null;
+
+/** Actions that remain meaningful while a mesh document is open: editor-state (undo/redo,
+ * selection mode) AND the mesh→CAD conversions that CONSUME the open mesh (reconstruct to
+ * B-rep, fit NURBS surfaces) — those are enabled precisely in mesh mode, so gateForDocMode
+ * must not force-disable them there (their own `enabled` already gates on an open MeshDoc).
+ * Everything else is a B-rep feature op. An ALLOWLIST (not a blocklist) so any action added
+ * later is disabled in mesh mode by default — exactly the FR-18 "no silent no-op" guarantee. */
 const MESH_SAFE_IDS: ReadonlySet<string> = new Set([
   "undo",
   "redo",
@@ -493,6 +512,8 @@ const MESH_SAFE_IDS: ReadonlySet<string> = new Set([
   "selmode-edge",
   "selmode-vertex",
   "selmode-body",
+  "ml-reconstruct-brep",
+  "ml-fit-nurbs",
 ]);
 
 /** Actions that remain meaningful while a voxel sculpt is open: the mesh-safe
@@ -506,17 +527,39 @@ const VOXEL_SAFE_IDS: ReadonlySet<string> = new Set([
   "voxel-export-glb",
 ]);
 
+/** Actions that remain meaningful while a dense point cloud is open (SPEC-13): editor-state (undo/redo,
+ * selection mode) AND the cloud→mesh / completion hand-offs that CONSUME the open cloud (their own
+ * `enabled` gates on an open PointCloudDoc, so gateForDocMode must not force-disable them here).
+ * Deliberately NOT the mesh→CAD conversions — those need an open MESH, not a cloud. Same allowlist
+ * discipline: anything not listed is disabled in cloud mode (FR-18, no silent no-op). */
+const POINTCLOUD_SAFE_IDS: ReadonlySet<string> = new Set([
+  "undo",
+  "redo",
+  "selmode-face",
+  "selmode-edge",
+  "selmode-vertex",
+  "selmode-body",
+  "cloud-to-mesh",
+  "cloud-complete",
+]);
+
 /** Augment an action so it is disabled while a document mode it doesn't apply to is
- * open: B-rep/parametric ops grey out on a mesh document AND on a voxel sculpt; the
- * voxel tools grey out on a mesh document (their own `enabled` already scopes them). */
+ * open: B-rep/parametric ops grey out on a mesh document, a voxel sculpt, AND a point
+ * cloud; the voxel tools grey out on a mesh/cloud document (their own `enabled` already
+ * scopes them). Each mode is an independent allowlist conjunct. */
 function gateForDocMode(a: ActionDef): ActionDef {
   const meshSafe = MESH_SAFE_IDS.has(a.id);
   const voxelSafe = VOXEL_SAFE_IDS.has(a.id);
-  if (meshSafe && voxelSafe) return a;
+  const cloudSafe = POINTCLOUD_SAFE_IDS.has(a.id);
+  if (meshSafe && voxelSafe && cloudSafe) return a;
   const base = a.enabled;
   return {
     ...a,
-    enabled: (ctx) => (meshSafe || !meshMode()) && (voxelSafe || !voxelMode()) && base(ctx),
+    enabled: (ctx) =>
+      (meshSafe || !meshMode()) &&
+      (voxelSafe || !voxelMode()) &&
+      (cloudSafe || !pointCloudMode()) &&
+      base(ctx),
   };
 }
 

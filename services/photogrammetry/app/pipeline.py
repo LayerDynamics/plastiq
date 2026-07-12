@@ -251,6 +251,9 @@ def solve_dense(
     K: np.ndarray,
     *,
     max_dense_points: int = 200_000,
+    min_views: int = 2,
+    rel_depth_tol: float = 0.01,
+    normal_dot: float = 0.7,
 ):
     """Dense MVS orchestration: per-view plane-sweep + fusion → a coloured oriented cloud (P9, §5.5).
 
@@ -259,6 +262,13 @@ def solve_dense(
     depth range); the camera-frame normals are rotated to world (``n_world = n_cam @ R``); the maps are
     fused (:func:`app.mvs.fusion.fuse`) into a downsampled cloud, coloured from the source images, and
     written as an ``x y z nx ny nz r g b`` PLY.
+
+    Dense resolution is independent of the sparse solve: ``images_arr`` may be higher-resolution than
+    the images poses were solved on, as long as ``K`` is scaled to match (extrinsics are
+    resolution-free) — this is how a robust reduced-res registration is densified at full input
+    resolution. ``min_views``/``rel_depth_tol``/``normal_dot`` tune the fusion's geometric-consistency
+    gate (forwarded to :func:`app.mvs.fusion.fuse`): raise ``min_views`` for a cleaner (fewer-floater)
+    cloud, keep it at 2 to favour density. Defaults reproduce fuse's own defaults.
 
     Returns ``(dense_ply: str | None, dense_points: int, views_swept: int)``. Degradation (SPEC-13 §7):
     a per-view sweep that raises is skipped (logged, counted); zero fused points ⇒ ``(None, 0, …)``.
@@ -290,7 +300,8 @@ def solve_dense(
 
     points, normals = fuse(
         np.stack(depth_maps), np.stack(world_normals), np.stack(valids), poses_w2c, K,
-        max_points=max_dense_points,
+        max_points=max_dense_points, min_views=min_views, rel_depth_tol=rel_depth_tol,
+        normal_dot=normal_dot,
     )
     if points.shape[0] == 0:
         return None, 0, swept
@@ -308,6 +319,11 @@ def solve(
     *,
     dense: bool = True,
     max_dense_points: int = 200_000,
+    min_views: int = 2,
+    rel_depth_tol: float = 0.01,
+    normal_dot: float = 0.7,
+    dense_images=None,
+    dense_K=None,
     **sparse_kwargs,
 ) -> SolveResult:
     """Run the full photogrammetry solve: sparse SfM, then (``dense``) the MLX plane-sweep MVS + fusion.
@@ -317,6 +333,14 @@ def solve(
     views into a coloured oriented cloud (``report.dense_points`` = its size; ``dense_ply=None`` when
     that is zero — SPEC-13 §7). ``**sparse_kwargs`` are forwarded to :func:`solve_sparse` (``K``,
     ``exif_images``, ``matching``, ``max_features``, ``seed``, ``self_calibrate``, ``image_names``, …).
+
+    Density controls: ``max_dense_points`` caps the fused cloud; ``min_views``/``rel_depth_tol``/
+    ``normal_dot`` tune the fusion gate (→ :func:`solve_dense`). Resolution decoupling: pass
+    ``dense_images`` (a list parallel to ``images``, higher-resolution) to densify at full input
+    resolution while registering on the robust reduced-res ``images`` — extrinsics are
+    resolution-free, so only ``K`` scales, and ``dense_K`` is auto-derived from the resolution ratio
+    when omitted (pass it explicitly to override). Both default to ``None`` (dense runs at the sparse
+    resolution, unchanged).
     """
     res = solve_sparse(images, **sparse_kwargs)
     report = dict(res.report)
@@ -326,10 +350,25 @@ def solve(
     report["dense_points"] = 0
 
     if dense and len(reg) >= 2:
-        imgs_arr = np.stack([np.asarray(images[v])[:, :, :3] for v in reg], axis=0)  # (N,H,W,3) uint8
+        src_imgs = dense_images if dense_images is not None else images
+        if dense_K is not None:
+            dense_KK = np.asarray(dense_K, dtype=np.float64)
+        elif dense_images is not None:
+            # Scale the sparse K to the dense resolution — extrinsics are resolution-free, only K
+            # scales. Ratio from the actual pixel heights; principal point scaled pixel-centre-consistent.
+            ratio = np.asarray(src_imgs[reg[0]]).shape[0] / np.asarray(images[reg[0]]).shape[0]
+            dense_KK = res.K.copy()
+            dense_KK[0, 0] *= ratio
+            dense_KK[1, 1] *= ratio
+            dense_KK[0, 2] = (res.K[0, 2] + 0.5) * ratio - 0.5
+            dense_KK[1, 2] = (res.K[1, 2] + 0.5) * ratio - 0.5
+        else:
+            dense_KK = res.K
+        imgs_arr = np.stack([np.asarray(src_imgs[v])[:, :, :3] for v in reg], axis=0)  # (N,H,W,3) uint8
         poses_arr = np.stack([res.poses_w2c[v] for v in reg], axis=0)  # (N,3,4) normalized
         dense_ply, dense_points, swept = solve_dense(
-            imgs_arr, poses_arr, res.points3d, res.K, max_dense_points=max_dense_points,
+            imgs_arr, poses_arr, res.points3d, dense_KK, max_dense_points=max_dense_points,
+            min_views=min_views, rel_depth_tol=rel_depth_tol, normal_dot=normal_dot,
         )
         report["dense_points"] = dense_points
         report["dense_views_swept"] = swept
