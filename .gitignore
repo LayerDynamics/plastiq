@@ -31,3 +31,4 @@ local/
 
 # carabiner (lore framework) local tooling state — SQLite DBs, chat/memory stores, traces
 .carabiner/
+Grok.md
