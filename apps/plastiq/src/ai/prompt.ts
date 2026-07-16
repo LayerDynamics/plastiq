@@ -37,11 +37,14 @@ feature types: ${AUTHORABLE.join(", ")}.
   { "kind": "loop", "start": [0,0], "segments": [ {"kind":"line","to":[60,0]},
   {"kind":"line","to":[60,10]}, {"kind":"line","to":[10,10]}, {"kind":"line","to":[10,40]},
   {"kind":"line","to":[0,40]} ] } then an "extrude" of the wanted length.
-- ADD vs REMOVE material: "extrude" and "revolve" REPLACE the current body with the new
-  shape. To ADD material onto an existing body (a boss, rib, pad, lug), use a "boolean"
-  with data.op "union" — its operand is either an inline box (params dx/dy/dz plus
-  tx/ty/tz = the operand's MINIMUM corner) or its own data.toolFeatures subtree. To
-  REMOVE material, use "cut" (a pocket/hole) or a "boolean" with data.op "subtract".
+- ADD vs REMOVE material (JOIN BY DEFAULT): when a solid body already exists, "extrude"
+  and "revolve" JOIN (fuse) onto it unless data.op is "new". Do NOT replace the body and
+  do NOT invent a "boolean" union just to add a boss, rib, pad, or lug — emit another
+  sketch + extrude/revolve and it will join. Use data.op "new" only when you deliberately
+  want a separate solid that replaces the accumulator. To REMOVE material, use "cut" (a
+  pocket/hole) or a "boolean" with data.op "subtract" (toolFeatures or inline box).
+  Prefer data.toFace on extrude when the pad should stop at a known face (height optional
+  with toFace).
 - "extrude", "revolve", and "cut" consume the MOST RECENT "sketch", so you MUST add a
   "sketch" feature IMMEDIATELY BEFORE each of them. A "cut" or "extrude" with no
   preceding "sketch" FAILS to build — never emit one on its own.

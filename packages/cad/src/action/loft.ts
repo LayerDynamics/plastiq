@@ -21,9 +21,9 @@ export interface SweepOptions {
    * Section frame along the spine.
    * - `correctedFrenet` (default): stable orientation that survives corners.
    * - `frenet`: pure Frenet frame (can flip at inflection).
-   * - `fixed`: keep the profile's initial orientation (no twist with spine).
+   * (`fixed` was removed: it was not distinct from corrected Frenet — T17/C8.)
    */
-  readonly mode?: "correctedFrenet" | "frenet" | "fixed";
+  readonly mode?: "correctedFrenet" | "frenet";
   /**
    * How adjacent swept sections meet at spine corners.
    * - `right` (default): miter / RightCorner.
@@ -84,11 +84,9 @@ export function sweep(oc: Occt, sketch: Sketch, path: SpinePath, opts?: SweepOpt
   // explicit `if (!…)` branches would be bypassed by such a throw.
   try {
     const mode = opts?.mode ?? "correctedFrenet";
-    // SetMode_1(IsFrenet): true = Frenet, false = corrected Frenet. For fixed
-    // orientation we leave the default (no Frenet) after SetMode_1(false) and
-    // rely on the profile's placement without auxiliary-spine twist.
+    // SetMode_1(IsFrenet): true = Frenet, false = corrected Frenet.
     if (mode === "frenet") maker.SetMode_1(true);
-    else maker.SetMode_1(false); // corrected Frenet (also used as base for "fixed")
+    else maker.SetMode_1(false);
 
     const transition = opts?.transition ?? "right";
     const TM = oc.BRepBuilderAPI_TransitionMode;

@@ -73,6 +73,7 @@ export async function solvePhotos(
   if (input.undistort !== undefined) body.undistort = input.undistort;
   if (input.maxFeatures !== undefined) body.max_features = input.maxFeatures;
   if (input.seed !== undefined) body.seed = input.seed;
+  if (input.sparseMaxDim !== undefined) body.sparse_max_dim = input.sparseMaxDim;
 
   const submitRes = await f(`${base}/solve`, {
     method: "POST",

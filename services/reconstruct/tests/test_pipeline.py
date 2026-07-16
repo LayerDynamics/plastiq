@@ -109,6 +109,7 @@ def test_attempted_records_no_match_for_clean_declines():
     r = reconstruct(glb, "glb", method="auto").report
     assert [(a.route, a.outcome) for a in r.attempted] == [
         ("single_primitive", "no_match"),
+        ("cut_sphere", "no_match"),
         ("revolution", "no_match"),
         ("csg", "no_match"),
         ("cut_cylinder", "no_match"),

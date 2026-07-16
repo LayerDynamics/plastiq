@@ -9,6 +9,7 @@
 ## 1. Executive Summary
 
 Every ML service already has a package client (`@plastiq/{capture,nerf,nurbs,photogrammetry,recon}`) **and** an app wrapper (`apps/plastiq/src/ai/{capture,nerf,nurbs,photogrammetry,reconstruct}.ts`), each returning a **`MeshDoc` or `CadDocument`** that reaches the canvas through **exactly two terminal seams**:
+
 - **`createMeshProject(doc)`** → new mesh project → `activeMeshDoc` → `Scene.tsx:130 buildMeshBody` (GLB path) — used by capture/nerf/photogrammetry.
 - **`useCadStore.loadDocument(doc)`** → active parametric store rebuild (STEP `importStep` path) — used by reconstruct/nurbs.
 
@@ -41,6 +42,7 @@ The integration points below (§4) were implemented this pass, in order, each wi
 ## 2. Primary Execution Trace (canvas result ← ML service)
 
 ### 2.1 reconstruct / nurbs — the STEP → parametric path
+
 ```
 GenerationPanel button                                   ai/GenerationPanel.tsx:412 (Convert) / :423 (Fit smooth)
   → reconstructMesh(doc.glb, {baseURL, method, signal})  ai/reconstruct.ts:90
@@ -51,9 +53,11 @@ GenerationPanel button                                   ai/GenerationPanel.tsx:
   → useCadStore.getState().loadDocument(cadDoc)           ai/GenerationPanel.tsx:320  ← SEAM #1
   → cad store rebuilds the importStep feature → editable B-rep part on canvas
 ```
+
 `fitMeshToCad(...)` (`ai/nurbs.ts:41`) lands through the **same** `stepToImportDocument` terminus (`GenerationPanel.tsx:381`, comment `:285`).
 
 ### 2.2 capture / nerf / photogrammetry — the GLB → mesh-project path
+
 ```
 GenerationPanel button                                   ai/GenerationPanel.tsx:701 (capture) / :1035 (solve) / :1058 (to-surface)
   → captureFromPhotos(...) | meshFromPointCloud(...) | solvePhotogrammetry(...)   ai/nerf.ts:41 | ai/capture.ts:41 | ai/photogrammetry.ts:46
@@ -86,6 +90,7 @@ A project is parametric **or** mesh **or** voxel, never mixed (`store/types.ts:5
 ## 4. Every Integration Point (exact anchors · exists vs missing)
 
 ### 4.1 Context menu + RECM radial ring — ONE definition, TWO surfaces — ✅ SHIPPED (§1a): `mlActions.ts` + `cloudActions.ts`
+
 - **Interface:** `ContextAction {id, group, label(ctx), danger?, visible(ctx), enabled(ctx), active?, run(ctx)}` where `run` calls the real store fn (`three/contextmenu/config.ts:40-55`). Catalog `CONTEXT_ACTIONS` holds only parametric ops today: `new-sketch-*` (`:126`), `sketch-on-face` (`:135`), `extrude` (`:148`), `cut` (`:170`), `revolve` (`:188`), `fillet` (`:210`), etc.
 - **Rendered by:** `contextOptions.ts:37 buildContextOptions(CONTEXT_ACTIONS)` → `PlastiqContextMenu.tsx` (via `useCanvasRightClick.ts`) **and** `recmContext.ts:12,37` (the RECM radial ring imports the *same* `CONTEXT_ACTIONS` + `runContextAction` + `ACTION_GROUP_ORDER`).
 - **Input available:** `ContextTarget` (`contextSelection.ts:23`) carries `kind`, `picks`, `refs`, `features`, `selectedFeatureId`, mode flags — the full selection an ML op needs.
@@ -97,27 +102,33 @@ A project is parametric **or** mesh **or** voxel, never mixed (`store/types.ts:5
 - **BLOCKER:** `ContextKind` has no `mesh`/`pointcloud`/`voxel` member (`contextSelection.ts:12`). Either add kinds + resolve them in `contextSelection`, or gate the new actions on the **active-doc kind** (`isMeshDoc(activeMeshDoc)`), read in `visible(ctx)`.
 
 ### 4.2 Action registry → ribbon + command palette — ✅ SHIPPED (§1a)
+
 - **Interface:** `ActionDef {id, label, enabled?, run(ctx:ContextTarget)}` — "single source of run/enabled/label logic" for ribbon + menu (`actions/registry.ts:27-33`). Already wraps `exportMeshGlb` (`:18`) and the `__plastiqExport` file seam (`:71-92`).
 - **Ribbon:** `ribbon/ribbonConfig.ts:150,169` maps actions → buttons (icons/labels); widgets in `ribbon/widgets/`. **Command palette:** `ai/CommandPalette.tsx` (searchable launcher).
 - **ADD:** register `reconstruct`/`fit-nurbs`/`cloud-to-mesh`/`photo-solve`/`nerf-capture` as `ActionDef`s → they surface in the ribbon **and** command palette from one definition.
 
 ### 4.3 AI tool-calling — let the agent run ML ops — ✅ SHIPPED (§1a): `create_mesh` + `reconstruct_brep` + `fit_nurbs`
+
 - **Loop:** `agentRunner.ts` drives `handlers: Record<string, ToolHandler>` (`:26`); a `ToolHandler` gets parsed args → returns a result string (`:20`); tool-call/result events (`:15-16`); a failed tool returns its error so the model self-corrects (`:5-6`).
 - **Defs:** `ai/tools/toolDefs.ts:47 toolDefs()` exposes only `plan_part` (`:50`), `build_part` (`:56`), `inspect_geometry` (`:67`), `answer_user` (`:73`), `create_mesh` (`:85`, schema `{mode,prompt,imageId,providerId,quality}`). Deps: `AgentToolDeps` (`toolDefs.ts` ~`:110`) — `buildPart`, `probe`, snapshot, `createMesh`. Persist wiring: `agentTurn.ts:57 createMeshProject`, `:86 buildCreateMeshDeps`. Schemas: `ai/tools/schema.ts`.
 - **ADD tools** (mirror `create_mesh`): `reconstruct_brep`, `fit_nurbs`, `cloud_to_mesh`, `solve_photogrammetry`, `capture_from_photos` — each = a schema in `schema.ts` + a handler in `ai/tools/` (added to the `handlers` record) + a `ToolDef` in `toolDefs.ts` + deps in `agentTurn.ts` → result to a seam. Then "reconstruct the selected mesh" works from chat.
 
 ### 4.4 Live point-cloud viewer — ✅ SHIPPED (§1a): `PointCloudDoc` + `viewport/buildPointCloud.ts`
+
 - **Exists:** `buildMeshBody` already renders "the B-rep corners as one **Points** cloud with per-point vertex colours" (`viewport/buildMesh.ts:8`); `THREE.Points` is also used for section analysis (`three/Section.tsx:36`).
 - **Missing:** a `PointCloudDoc` document kind and a canvas layer that shows the **dense** photogrammetry/capture cloud. Today `parseDenseCloud` → `{points,normals}` (`ai/photogrammetry.ts:67-72`) is fed straight to `denseCloudToMeshDoc` and the raw cloud is dropped.
 - **ADD:** a `PointCloudDoc` (parallel to `MeshDoc` in `store/types.ts`) + a `<PointCloud>` renderer reusing the `buildMeshBody` Points primitive (per-point normal/colour) + show it *before* meshing with an in-canvas "mesh this" affordance. This makes the pipeline visible instead of a black box.
 
 ### 4.5 Ribbon "Capture/ML" workspace — ◑ PARTIAL (§1a): panels in the `design` workspace, not a new one
+
 - `ribbon/WorkspacePanel.tsx` + `WorkspaceSwitcher.tsx` define workspaces. **Chosen instead:** "Mesh → CAD" + "Point Cloud" panels in the existing `design` workspace's Solid tab (`ribbon/ribbonConfig.ts`), greyed-not-hidden outside their doc mode (FR-18). A mesh/cloud document already opens in `design`, so a separate workspace would fragment the flow; a dedicated "Capture/ML" workspace remains a future option if the tool set grows.
 
 ### 4.6 Drag-and-drop / import routing — ✅ SHIPPED (§1a)
+
 - Import seam: `actions/registry.ts:102 LARGE_IMPORT_WARN_BYTES`, `:105 importStatusMessage`, `mesh/importGltf.ts`. **DONE:** `three/canvasDrop.ts` classifies a canvas drop by type and routes it — a photo folder (≥3) → `solvePhotogrammetry` → dense `PointCloudDoc`; a `.ply`/`.xyz`/`.json` → `parseCloudFileToDoc` → `PointCloudDoc`; both open on the same canvas. `CanvasDropZone.tsx` is the DOM glue (`app/App.tsx` wraps the viewport).
 
 ### 4.7 In-viewport gizmos / hover affordances — ▢ NOT DONE (optional, as predicted)
+
 - `three/gizmos/` (e.g. `sectionAnalysis.gizmo.tsx`) shows the gizmo pattern; an ML op could hang a hover-button off a selected mesh. Left unbuilt: the menu/ring/ribbon/palette reach (§4.1/4.2/4.3) delivered the surface, exactly as this section predicted "likely suffices."
 
 ---

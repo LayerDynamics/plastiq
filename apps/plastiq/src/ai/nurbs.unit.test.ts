@@ -6,8 +6,9 @@
 // (isSolid/facetedPatches — NFR-5).
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { fitNurbs, type NurbsReport } from "@plastiq/nurbs";
+import { cancelJob, fitNurbs, type NurbsReport } from "@plastiq/nurbs";
 import {
+  cancelFit,
   fitMeshToCad,
   nurbsFitStatusMessage,
   nurbsUnreachableMessage,
@@ -17,8 +18,9 @@ import { useAiStore } from "./aiStore.js";
 import type { AiSettings } from "./settings.js";
 import type { CadDocument } from "../store/types.js";
 
-vi.mock("@plastiq/nurbs", () => ({ fitNurbs: vi.fn() }));
+vi.mock("@plastiq/nurbs", () => ({ fitNurbs: vi.fn(), cancelJob: vi.fn() }));
 const fitNurbsMock = vi.mocked(fitNurbs);
+const cancelJobMock = vi.mocked(cancelJob);
 
 /** Minimal valid settings (the resolution tests spread nurbs fields on top). */
 const BASE_SETTINGS: AiSettings = { providerKey: "anthropic", providerId: "anthropic", model: "m", apiKeys: {} };
@@ -52,6 +54,8 @@ beforeEach(() => {
   useAiStore.setState({ settings: null, loaded: false });
   fitNurbsMock.mockReset();
   fitNurbsMock.mockResolvedValue({ step: STEP, surfaces: [], report: report() });
+  cancelJobMock.mockReset();
+  cancelJobMock.mockResolvedValue(undefined as never);
 });
 
 describe("fitMeshToCad — STEP → CadDocument wiring (FR-8)", () => {
@@ -110,11 +114,29 @@ describe("fitMeshToCad — settings resolution (nurbsBaseURL/nurbsApiKey, SPEC-1
     expect(fitNurbsMock.mock.calls[2]![1]?.apiKey).toBe("explicit-key");
   });
 
-  it("passes the remaining options (signal/onState/…) through to fitNurbs", async () => {
+  it("passes the remaining options (signal/onState/onJob/…) through to fitNurbs", async () => {
     const onState = (): void => {};
-    await fitMeshToCad("R0xC", deps, { onState, pollIntervalMs: 5 });
+    const onJob = (): void => {};
+    await fitMeshToCad("R0xC", deps, { onState, onJob, pollIntervalMs: 5 });
     expect(fitNurbsMock.mock.calls[0]![1]?.onState).toBe(onState);
+    expect(fitNurbsMock.mock.calls[0]![1]?.onJob).toBe(onJob);
     expect(fitNurbsMock.mock.calls[0]![1]?.pollIntervalMs).toBe(5);
+  });
+});
+
+describe("cancelFit — server-side job cancel (M4b)", () => {
+  it("threads settings and DELETEs the job", async () => {
+    useAiStore.setState({ settings: { ...BASE_SETTINGS, nurbsApiKey: "nurbs-secret" }, loaded: true });
+    await cancelFit("job-9");
+    expect(cancelJobMock).toHaveBeenCalledTimes(1);
+    expect(cancelJobMock.mock.calls[0]![0]).toBe("job-9");
+    expect(cancelJobMock.mock.calls[0]![1]?.apiKey).toBe("nurbs-secret");
+  });
+
+  it("a caller-supplied opts.apiKey wins over the persisted setting", async () => {
+    useAiStore.setState({ settings: { ...BASE_SETTINGS, nurbsApiKey: "from-settings" }, loaded: true });
+    await cancelFit("job-9", { apiKey: "explicit-key" });
+    expect(cancelJobMock.mock.calls[0]![1]?.apiKey).toBe("explicit-key");
   });
 });
 

@@ -9,7 +9,16 @@ export {
   extrudeToFace,
 } from "./extrude.js";
 export { revolve } from "./revolve.js";
-export { type DraftOptions, type ShellOptions, fillet, chamfer, shell, draft } from "./dressup.js";
+export {
+  type DraftOptions,
+  type ShellOptions,
+  type FilletOptions,
+  type ChamferOptions,
+  fillet,
+  chamfer,
+  shell,
+  draft,
+} from "./dressup.js";
 export {
   type LoftOptions,
   type SweepOptions,

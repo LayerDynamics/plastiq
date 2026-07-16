@@ -13,10 +13,12 @@ import { summarizePlan, type PlanGraph } from "./planning.js";
 import { geometryClientProbe, type ApplyDocument } from "./tools/buildPart.js";
 import { reconstructMesh, stepToImportDocument } from "./reconstruct.js";
 import { fitMeshToCad } from "./nurbs.js";
+import { meshFromPartialScan, meshFromPointCloud } from "./capture.js";
 import type { AgentTools } from "./agentRunner.js";
 import type { MeshProbe } from "./tools/inspectGeometry.js";
 import type { ConfirmPaidJob, CreateMeshDeps } from "./tools/createMesh.js";
 import type { MeshToCadDeps } from "./tools/meshToCad.js";
+import type { CloudCaptureDeps } from "./tools/cloudCapture.js";
 import type { AiSettings } from "./settings.js";
 import type { GenImage } from "./meshgen/types.js";
 import type { CadDocument } from "../store/types.js";
@@ -83,6 +85,20 @@ export function buildMeshToCadDeps(deps: TurnToolsDeps): MeshToCadDeps {
   };
 }
 
+/** Point-cloud → mesh tools (cloud_to_mesh / complete_scan). Always wired so the agent can
+ * convert a cloud opened earlier in the turn (T34). */
+export function buildCloudCaptureDeps(deps: TurnToolsDeps): CloudCaptureDeps {
+  return {
+    cloud: () => useProjectsStore.getState().activePointCloudDoc,
+    meshFromCloud: meshFromPointCloud,
+    completeScan: meshFromPartialScan,
+    persist: (doc) => useProjectsStore.getState().createMeshProject(doc),
+    open: (id) => useProjectsStore.getState().open(id),
+    ...(deps.settings.captureBaseURL ? { captureBaseURL: deps.settings.captureBaseURL } : {}),
+    ...(deps.signal ? { signal: deps.signal } : {}),
+  };
+}
+
 /** Wire the agent's tools to the live build seam, the projects store, and create_mesh.
  * Returns null when the geometry worker seam isn't ready yet (caller surfaces a hint) —
  * deliberately NO fallback client here: the Viewport owns the app's single geometry
@@ -105,6 +121,7 @@ export function buildTurnTools(deps: TurnToolsDeps): AgentTools | null {
     currentDoc: () => useCadStore.getState().toDocument(),
     createMesh: buildCreateMeshDeps(deps),
     meshToCad: buildMeshToCadDeps(deps),
+    cloudCapture: buildCloudCaptureDeps(deps),
     // 9-M1: a committed plan is recorded, not discarded — the FULL validated graph
     // goes into the per-project conversation trace as its own typed entry (the
     // generic tool lines truncate args at 200 chars; this one never truncates),

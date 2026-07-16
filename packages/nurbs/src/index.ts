@@ -8,7 +8,7 @@
 /** Package version, surfaced for tooling/diagnostics. */
 export const NURBS_VERSION = "0.1.0" as const;
 
-export { fitNurbs } from "./client.js";
+export { cancelJob, fitNurbs } from "./client.js";
 export type {
   NurbsFitMode,
   NurbsFitInput,
@@ -16,4 +16,5 @@ export type {
   NurbsReport,
   NurbsResult,
   NurbsOptions,
+  NurbsCancelOptions,
 } from "./types.js";

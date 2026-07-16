@@ -45,7 +45,7 @@ The frozen wire contract is [SPEC-13 §6.1](../../docs/specs/SPEC-13-photogramme
 | Method | Path | Body / result |
 | --- | --- | --- |
 | `GET` | `/health` | `{ status, service }` |
-| `POST` | `/solve` | `{ images, names?, matching?, dense?, undistort?, max_features?, seed? }` → `{ id, state }` |
+| `POST` | `/solve` | `{ images, names?, matching?, dense?, undistort?, max_features?, seed?, sparse_max_dim? }` → `{ id, state }` |
 | `GET` | `/jobs/{id}/status` | `{ id, state, error? }` — `state ∈ {queued, running, completed, failed}` |
 | `GET` | `/jobs/{id}/result` | `{ transforms_json, images_undistorted?, sparse_ply_base64, dense_ply_base64?, report }` |
 | `DELETE` | `/jobs/{id}` | `204` — job dropped (cancel/cleanup; an in-flight worker's result is discarded); `404` unknown id |
@@ -53,6 +53,13 @@ The frozen wire contract is [SPEC-13 §6.1](../../docs/specs/SPEC-13-photogramme
 `PHOTOGRAMMETRY_MAX_CONCURRENT_JOBS` defaults to **1** (one SfM+MVS job is the heaviest workload in
 the service fleet); submits beyond it get `429`. `PHOTOGRAMMETRY_API_KEY`, when set, requires
 `Authorization: Bearer <key>` on `POST /solve` + `DELETE /jobs/{id}` (unset ⇒ open dev default).
+
+**Sparse vs dense resolution (T39):** optional `sparse_max_dim` (256..4096) downscales uploads for
+sparse SfM only; dense MVS still runs on the full native frames (`pipeline.solve(dense_images=…)`).
+Recommended ~640 when photos are multi-megapixel — RANSAC thresholds are pixel-absolute and tuned
+near that scale. Omit to run both stages at native resolution. Client: `sparseMaxDim` on
+`@plastiq/photogrammetry` `solvePhotos`. The app (`solvePhotogrammetry` / PhotoSolveSection) defaults
+`sparseMaxDim` to **1600** so large photos always dual-res unless the user overrides.
 
 ## Browser client (`@plastiq/photogrammetry`)
 

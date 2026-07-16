@@ -15,10 +15,26 @@ import { Solid } from "../solid/solid.js";
 import { resolveEdgeRef, resolveFaceRef } from "../mesh/resolve.js";
 import type { EdgeRef, FaceRef } from "../mesh/tagged.js";
 
-/** Round the picked edges of `base` to a constant `radius` (SI metres). */
-export function fillet(oc: Occt, base: Solid, edges: readonly EdgeRef[], radius: number): Solid {
+export interface FilletOptions {
+  /**
+   * End radius for a variable-radius fillet along each edge (SI metres).
+   * When set (and ≠ `radius`), uses OCCT Add_3(R1, R2, edge) (T20 / C10a).
+   */
+  readonly endRadius?: number;
+}
+
+/** Round the picked edges of `base` to `radius` (SI metres). Optional endRadius → variable fillet. */
+export function fillet(
+  oc: Occt,
+  base: Solid,
+  edges: readonly EdgeRef[],
+  radius: number,
+  opts?: FilletOptions,
+): Solid {
   const shapeType = oc.ChFi3d_FilletShape.ChFi3d_Rational as unknown as ChFi3d_FilletShape;
   const maker = new oc.BRepFilletAPI_MakeFillet(base.shape, shapeType);
+  const endR = opts?.endRadius;
+  const variable = endR != null && Number.isFinite(endR) && endR !== radius;
   // The maker is freed on EVERY exit — incl. a Standard_Failure thrown by `Add_2`
   // or `Shape()` (a fillet radius the local geometry can't absorb is reachable in
   // normal editing) — so a failed fillet doesn't leak it in the long-lived worker.
@@ -28,7 +44,8 @@ export function fillet(oc: Occt, base: Solid, edges: readonly EdgeRef[], radius:
       const edge = resolveEdgeRef(oc, base, ref);
       if (edge) {
         try {
-          maker.Add_2(radius, edge);
+          if (variable) maker.Add_3(radius, endR!, edge);
+          else maker.Add_2(radius, edge);
         } finally {
           edge.delete();
         }
@@ -59,46 +76,70 @@ export function fillet(oc: Occt, base: Solid, edges: readonly EdgeRef[], radius:
   }
 }
 
-/** Chamfer the picked edges of `base` by a symmetric setback `distance`. */
+export interface ChamferOptions {
+  /**
+   * Second setback for a two-distance chamfer (SI metres). Requires `face` —
+   * the face on which `distance` is measured (OCCT Add_3) (T20 / C10a).
+   */
+  readonly distance2?: number;
+  /** Face adjacent to the edges for two-distance chamfer. */
+  readonly face?: FaceRef;
+}
+
+/** Chamfer the picked edges of `base` by setback `distance` (symmetric unless opts). */
 export function chamfer(
   oc: Occt,
   base: Solid,
   edges: readonly EdgeRef[],
   distance: number,
+  opts?: ChamferOptions,
 ): Solid {
   const maker = new oc.BRepFilletAPI_MakeChamfer(base.shape);
+  const d2 = opts?.distance2;
+  const twoDist =
+    d2 != null && Number.isFinite(d2) && d2 !== distance && opts?.face != null;
   // Free the maker on every exit, including a Standard_Failure from `Add_2`/`Shape`
   // — see the note in `fillet`.
   try {
-    let added = 0;
-    for (const ref of edges) {
-      const edge = resolveEdgeRef(oc, base, ref);
-      if (edge) {
-        try {
-          maker.Add_2(distance, edge);
-        } finally {
-          edge.delete();
+    let face: TopoDS_Face | null = null;
+    if (twoDist) {
+      face = resolveFaceRef(oc, base, opts!.face!);
+      if (!face) throw new Error("chamfer: two-distance face did not resolve on the current body");
+    }
+    try {
+      let added = 0;
+      for (const ref of edges) {
+        const edge = resolveEdgeRef(oc, base, ref);
+        if (edge) {
+          try {
+            if (twoDist && face) maker.Add_3(distance, d2!, edge, face);
+            else maker.Add_2(distance, edge);
+          } finally {
+            edge.delete();
+          }
+          added++;
         }
-        added++;
       }
+      // Every requested edge must resolve — see the note in `fillet`. Chamfering only
+      // the subset that resolved would silently return partial geometry as success.
+      if (edges.length === 0 || added < edges.length) {
+        throw new Error(
+          edges.length === 0
+            ? "chamfer: no edges selected"
+            : `chamfer: ${edges.length - added} of ${edges.length} selected edge(s) did not resolve on the current body`,
+        );
+      }
+      // BRepFilletAPI_MakeChamfer.IsDone() may stay false until Shape() builds; guard
+      // on a non-null result instead. The null handle is freed before the throw.
+      const shape = maker.Shape();
+      if (shape.IsNull()) {
+        shape.delete();
+        throw new Error("chamfer: produced an empty shape");
+      }
+      return new Solid(oc, shape);
+    } finally {
+      face?.delete();
     }
-    // Every requested edge must resolve — see the note in `fillet`. Chamfering only
-    // the subset that resolved would silently return partial geometry as success.
-    if (edges.length === 0 || added < edges.length) {
-      throw new Error(
-        edges.length === 0
-          ? "chamfer: no edges selected"
-          : `chamfer: ${edges.length - added} of ${edges.length} selected edge(s) did not resolve on the current body`,
-      );
-    }
-    // BRepFilletAPI_MakeChamfer.IsDone() may stay false until Shape() builds; guard
-    // on a non-null result instead. The null handle is freed before the throw.
-    const shape = maker.Shape();
-    if (shape.IsNull()) {
-      shape.delete();
-      throw new Error("chamfer: produced an empty shape");
-    }
-    return new Solid(oc, shape);
   } finally {
     maker.delete();
   }

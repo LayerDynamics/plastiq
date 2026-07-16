@@ -83,6 +83,299 @@ function PlacementEditor(): React.JSX.Element {
   );
 }
 
+/** Feature `data` editors: op, shell dir, sweep opts, boolean op, loft ruled, deps, refs (C10). */
+function FeatureDataFields({
+  featureId,
+  type,
+  data,
+  params,
+}: {
+  featureId: string;
+  type: string;
+  data: Record<string, unknown> | undefined;
+  params?: Record<string, number>;
+}): React.JSX.Element | null {
+  const setFeatureData = useCadStore((s) => s.setFeatureData);
+  const setFeatureDeps = useCadStore((s) => s.setFeatureDeps);
+  const features = useCadStore((s) => s.features);
+  const picks = useCadStore((s) => s.picks);
+  const selectionRefs = useCadStore((s) => s.selectionRefs);
+  const d = data ?? {};
+  const edges = Array.isArray(d["edges"]) ? (d["edges"] as unknown[]).length : 0;
+  const faces = Array.isArray(d["faces"])
+    ? (d["faces"] as unknown[]).length
+    : d["face"] != null
+      ? 1
+      : 0;
+  const showOp = type === "extrude" || type === "revolve" || type === "loft" || type === "sweep";
+  const showShellDir = type === "shell";
+  const showBooleanOp = type === "boolean";
+  const showLoftRuled = type === "loft";
+  const showDeps =
+    type === "extrude" ||
+    type === "cut" ||
+    type === "revolve" ||
+    type === "sweep" ||
+    type === "boolean";
+  const showCounts =
+    edges > 0 ||
+    faces > 0 ||
+    type === "fillet" ||
+    type === "chamfer" ||
+    type === "shell" ||
+    type === "draft";
+  const showSweepOpts = type === "sweep";
+  const showChamferFace = type === "chamfer";
+  if (
+    !showOp &&
+    !showShellDir &&
+    !showCounts &&
+    !showSweepOpts &&
+    !showBooleanOp &&
+    !showLoftRuled &&
+    !showDeps &&
+    !showChamferFace
+  ) {
+    return null;
+  }
+
+  const op = d["op"] === "new" || d["op"] === "join" ? (d["op"] as string) : "join";
+  const boolOp =
+    d["op"] === "union" || d["op"] === "intersect" || d["op"] === "subtract"
+      ? (d["op"] as string)
+      : "subtract";
+  const shellDir = d["direction"] === "outward" ? "outward" : "inward";
+  const transition =
+    d["transition"] === "round" || d["transition"] === "transformed" || d["transition"] === "right"
+      ? (d["transition"] as string)
+      : "right";
+  const mode =
+    d["mode"] === "frenet" || d["mode"] === "correctedFrenet"
+      ? (d["mode"] as string)
+      : "correctedFrenet";
+  const ruled = Boolean(d["ruled"]);
+  const feature = features.find((f) => f.id === featureId);
+  const boundDeps = feature?.deps ?? [];
+  const sketchCandidates = features.filter(
+    (f) => f.id !== featureId && f.type === "sketch" && !f.suppressed,
+  );
+  const hasChamferFace = d["face"] != null;
+  const d2 = params?.["distance2"];
+  const d1 = params?.["distance"];
+  // Two-distance chamfer only when distance2 is set and differs from distance (or face is expected).
+  const needsChamferFace =
+    type === "chamfer" &&
+    typeof d2 === "number" &&
+    Number.isFinite(d2) &&
+    (typeof d1 !== "number" || Math.abs(d2 - d1) > 1e-12 || d2 > 0);
+
+  const attachFaceFromSelection = (): void => {
+    const facePick = picks.find((p) => p.kind === "face");
+    if (!facePick) return;
+    const ref = selectionRefs.faces[facePick.id];
+    if (!ref) return;
+    setFeatureData(featureId, { face: ref });
+  };
+
+  /** Replace data.edges with currently selected edges that resolve in selectionRefs (C10). */
+  const attachEdgesFromSelection = (): void => {
+    const edgeRefs = picks
+      .filter((p) => p.kind === "edge")
+      .map((p) => selectionRefs.edges[p.id])
+      .filter(Boolean);
+    if (edgeRefs.length === 0) return;
+    setFeatureData(featureId, { edges: edgeRefs });
+  };
+
+  /** Replace data.faces with currently selected faces (shell/draft multi-face) (C10). */
+  const attachFacesFromSelection = (): void => {
+    const faceRefs = picks
+      .filter((p) => p.kind === "face")
+      .map((p) => selectionRefs.faces[p.id])
+      .filter(Boolean);
+    if (faceRefs.length === 0) return;
+    // Draft also accepts singular face for back-compat; write faces[] as primary.
+    setFeatureData(featureId, { faces: faceRefs, face: faceRefs[0] });
+  };
+
+  const showAttachEdges = type === "fillet" || type === "chamfer";
+  const showAttachFaces = type === "shell" || type === "draft";
+  const edgePickCount = picks.filter((p) => p.kind === "edge").length;
+  const facePickCount = picks.filter((p) => p.kind === "face").length;
+
+  return (
+    <div data-testid="feature-data" className="mt-2 space-y-1 border-t border-[#1a2230] pt-2">
+      <div className="text-[10px] uppercase tracking-wide text-[#567]">Data</div>
+      {showOp && (
+        <label className="flex items-center justify-between gap-2 text-xs text-[#9ab]">
+          <span className="text-[#789]">op</span>
+          <select
+            data-testid="feature-op"
+            value={op}
+            onChange={(e) => setFeatureData(featureId, { op: e.currentTarget.value })}
+            className="rounded border border-[#2a3444] bg-[#0e1219] px-1.5 py-0.5 text-[#cfe] outline-none focus:border-[#4ea1ff]"
+          >
+            <option value="join">join</option>
+            <option value="new">new</option>
+          </select>
+        </label>
+      )}
+      {showBooleanOp && (
+        <label className="flex items-center justify-between gap-2 text-xs text-[#9ab]">
+          <span className="text-[#789]">boolean op</span>
+          <select
+            data-testid="feature-boolean-op"
+            value={boolOp}
+            onChange={(e) => setFeatureData(featureId, { op: e.currentTarget.value })}
+            className="rounded border border-[#2a3444] bg-[#0e1219] px-1.5 py-0.5 text-[#cfe] outline-none focus:border-[#4ea1ff]"
+          >
+            <option value="subtract">subtract</option>
+            <option value="union">union</option>
+            <option value="intersect">intersect</option>
+          </select>
+        </label>
+      )}
+      {showLoftRuled && (
+        <label className="flex items-center justify-between gap-2 text-xs text-[#9ab]">
+          <span className="text-[#789]">ruled</span>
+          <input
+            data-testid="feature-loft-ruled"
+            type="checkbox"
+            checked={ruled}
+            onChange={(e) => setFeatureData(featureId, { ruled: e.currentTarget.checked || undefined })}
+          />
+        </label>
+      )}
+      {showDeps && sketchCandidates.length > 0 && (
+        <label className="flex items-center justify-between gap-2 text-xs text-[#9ab]">
+          <span className="text-[#789]">sketch dep</span>
+          <select
+            data-testid="feature-deps"
+            value={boundDeps[0] ?? ""}
+            onChange={(e) => {
+              const id = e.currentTarget.value;
+              setFeatureDeps(featureId, id ? [id] : undefined);
+            }}
+            className="rounded border border-[#2a3444] bg-[#0e1219] px-1.5 py-0.5 text-[#cfe] outline-none focus:border-[#4ea1ff]"
+          >
+            <option value="">(none / last sketch)</option>
+            {sketchCandidates.map((s) => (
+              <option key={s.id} value={s.id}>
+                {s.name ?? s.id}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
+      {showShellDir && (
+        <label className="flex items-center justify-between gap-2 text-xs text-[#9ab]">
+          <span className="text-[#789]">direction</span>
+          <select
+            data-testid="feature-shell-dir"
+            value={shellDir}
+            onChange={(e) =>
+              setFeatureData(featureId, {
+                direction: e.currentTarget.value === "outward" ? "outward" : undefined,
+              })
+            }
+            className="rounded border border-[#2a3444] bg-[#0e1219] px-1.5 py-0.5 text-[#cfe] outline-none focus:border-[#4ea1ff]"
+          >
+            <option value="inward">inward</option>
+            <option value="outward">outward</option>
+          </select>
+        </label>
+      )}
+      {showSweepOpts && (
+        <>
+          <label className="flex items-center justify-between gap-2 text-xs text-[#9ab]">
+            <span className="text-[#789]">mode</span>
+            <select
+              data-testid="feature-sweep-mode"
+              value={mode}
+              onChange={(e) => setFeatureData(featureId, { mode: e.currentTarget.value })}
+              className="rounded border border-[#2a3444] bg-[#0e1219] px-1.5 py-0.5 text-[#cfe] outline-none focus:border-[#4ea1ff]"
+            >
+              <option value="correctedFrenet">correctedFrenet</option>
+              <option value="frenet">frenet</option>
+            </select>
+          </label>
+          <label className="flex items-center justify-between gap-2 text-xs text-[#9ab]">
+            <span className="text-[#789]">transition</span>
+            <select
+              data-testid="feature-sweep-transition"
+              value={transition}
+              onChange={(e) => setFeatureData(featureId, { transition: e.currentTarget.value })}
+              className="rounded border border-[#2a3444] bg-[#0e1219] px-1.5 py-0.5 text-[#cfe] outline-none focus:border-[#4ea1ff]"
+            >
+              <option value="right">right</option>
+              <option value="round">round</option>
+              <option value="transformed">transformed</option>
+            </select>
+          </label>
+        </>
+      )}
+      {showCounts && (
+        <div className="space-y-1" data-testid="feature-refs-editor">
+          <p className="text-[10px] text-[#567]" data-testid="feature-ref-counts">
+            {edges > 0 ? `${edges} edge ref(s)` : null}
+            {edges > 0 && faces > 0 ? " · " : null}
+            {faces > 0 ? `${faces} face ref(s)` : null}
+            {edges === 0 && faces === 0 ? "no edge/face refs" : null}
+          </p>
+          {showAttachEdges && (
+            <button
+              type="button"
+              data-testid="feature-attach-edges"
+              disabled={edgePickCount === 0}
+              onClick={attachEdgesFromSelection}
+              className="rounded border border-[#3a5a7a] bg-[#14253a] px-1.5 py-0.5 text-[10px] text-[#bfe] disabled:opacity-40"
+            >
+              Attach selected edges{edgePickCount > 0 ? ` (${edgePickCount})` : ""}
+            </button>
+          )}
+          {showAttachFaces && (
+            <button
+              type="button"
+              data-testid="feature-attach-faces"
+              disabled={facePickCount === 0}
+              onClick={attachFacesFromSelection}
+              className="rounded border border-[#3a5a7a] bg-[#14253a] px-1.5 py-0.5 text-[10px] text-[#bfe] disabled:opacity-40"
+            >
+              Attach selected faces{facePickCount > 0 ? ` (${facePickCount})` : ""}
+            </button>
+          )}
+        </div>
+      )}
+      {showChamferFace && (
+        <div className="space-y-1" data-testid="feature-chamfer-face">
+          <p className="text-[10px] text-[#789]">
+            two-distance face:{" "}
+            {hasChamferFace ? (
+              <span className="text-[#9fc]">set</span>
+            ) : (
+              <span className="text-[#fc9]">required when distance2 ≠ distance</span>
+            )}
+          </p>
+          <button
+            type="button"
+            data-testid="feature-attach-face"
+            disabled={!picks.some((p) => p.kind === "face")}
+            onClick={attachFaceFromSelection}
+            className="rounded border border-[#3a5a7a] bg-[#14253a] px-1.5 py-0.5 text-[10px] text-[#bfe] disabled:opacity-40"
+          >
+            Attach selected face
+          </button>
+          {needsChamferFace && !hasChamferFace && (
+            <p className="text-[10px] text-[#fc9]" data-testid="feature-chamfer-face-warn">
+              distance2 is set but no data.face — rebuild uses symmetric chamfer until a face is attached
+            </p>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function FeatureEditor(): React.JSX.Element | null {
   const selectedFeatureId = useCadStore((s) => s.selectedFeatureId);
   const features = useCadStore((s) => s.features);
@@ -90,7 +383,21 @@ function FeatureEditor(): React.JSX.Element | null {
 
   const feature = features.find((f) => f.id === selectedFeatureId);
   if (!feature || feature.type === PLACEMENT_TYPE) return null;
-  const entries = Object.entries(feature.params ?? {});
+  const params = { ...(feature.params ?? {}) };
+  // Surface optional params that may be absent until edited (T15/C8).
+  if ((feature.type === "extrude" || feature.type === "cut") && params["back"] == null) {
+    params["back"] = 0;
+  }
+  if (feature.type === "fillet" && params["radius2"] == null && params["radius"] != null) {
+    // Leave radius2 absent until user adds it — inject 0 only when already variable?
+  }
+  if (feature.type === "fillet" && params["radius"] != null && !("radius2" in params)) {
+    params["radius2"] = params["radius"]; // editable second radius (variable fillet)
+  }
+  if (feature.type === "chamfer" && params["distance"] != null && !("distance2" in params)) {
+    params["distance2"] = params["distance"];
+  }
+  const entries = Object.entries(params);
 
   return (
     <section data-testid="feature-editor">
@@ -116,6 +423,12 @@ function FeatureEditor(): React.JSX.Element | null {
           <p className="pt-1 text-[10px] text-[#567]">lengths in mm, angles in °</p>
         </div>
       )}
+      <FeatureDataFields
+        featureId={feature.id}
+        type={feature.type}
+        data={feature.data}
+        params={params as Record<string, number>}
+      />
     </section>
   );
 }

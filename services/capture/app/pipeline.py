@@ -4,16 +4,21 @@ The capture service's core: fit a Softplus/IGR SDF to points + normals (app.sdf_
 M4 Max in MLX), marching-cubes the zero level-set, and export a GLB the browser imports as a MeshDoc
 (then reconstruct → editable B-rep). Points/normals come from a depth scan (app.geometry, served as
 `POST /points-from-depth`) or an external SfM/MVS (COLMAP). See docs/adr/0007.
+
+Process-isolated entrypoints (``*_job``) return plain dicts and are picklable top-level callables so
+``JobStore.submit_process`` can force-kill them on cancel (P0.2).
 """
 
 from __future__ import annotations
 
+import base64
+import os
 from dataclasses import dataclass
 
 import numpy as np
 import trimesh
 
-from .completion_mlx import CompletionNet, complete
+from .completion_mlx import CompletionNet, complete, fit_completion
 from .sdf_mlx import extract_mesh, fit_sdf
 
 
@@ -67,3 +72,52 @@ def complete_partial(
     verts = verts * scale + center  # undo the unit-scale normalization, back to world frame
     mesh = trimesh.Trimesh(vertices=verts, faces=faces, process=False)
     return CaptureResult(mesh=mesh, vertices=len(verts), faces=len(faces))
+
+
+def reconstruct_surface_job(
+    points: list[list[float]],
+    normals: list[list[float]],
+    iters: int = 600,
+    grid_res: int = 64,
+) -> dict:
+    """Picklable /capture worker: oriented cloud → result dict (process-isolated)."""
+    res = reconstruct_surface(
+        np.asarray(points, dtype=np.float32),
+        np.asarray(normals, dtype=np.float32),
+        iters=iters,
+        grid_res=grid_res,
+    )
+    return {
+        "glb_base64": base64.b64encode(res.to_glb()).decode("ascii"),
+        "vertices": res.vertices,
+        "faces": res.faces,
+    }
+
+
+def complete_partial_job(
+    points: list[list[float]],
+    grid_res: int = 48,
+) -> dict:
+    """Picklable /complete worker: partial cloud → result dict (process-isolated).
+
+    Loads the completion checkpoint in the child (or trains the demo completer). Sets
+    ``demo_weights`` so the client can refuse silent demo success (P0.3).
+    """
+    pts = np.asarray(points, dtype=np.float32)
+    ckpt = os.environ.get("CAPTURE_COMPLETION_CHECKPOINT")
+    demo = not bool(ckpt)
+    if ckpt:
+        import mlx.core as mx
+
+        net = CompletionNet()
+        net.load_weights(ckpt)
+        mx.eval(net.parameters())
+    else:
+        net = fit_completion(iters=int(os.environ.get("CAPTURE_COMPLETION_ITERS", "500")), seed=0)
+    res = complete_partial(net, pts, grid_res=grid_res)
+    return {
+        "glb_base64": base64.b64encode(res.to_glb()).decode("ascii"),
+        "vertices": res.vertices,
+        "faces": res.faces,
+        "demo_weights": demo,
+    }

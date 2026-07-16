@@ -56,11 +56,20 @@ describe("R2.4 parametric system prompt", () => {
     // Each phrase guards a real failure observed in generation:
     expect(p).toMatch(/silently ignored/i);   // features dumped under "assembly" vanish
     expect(p).toMatch(/round.*sketch|cylinder/i); // a cylinder is sketch-circle+extrude, not a box
-    expect(p).toContain("boolean");           // ADD material (boss) via a boolean union
-    expect(p).toMatch(/\bunion\b/i);
+    expect(p).toContain("boolean");           // REMOVE / multi-body tools, not boss pads
+    expect(p).toMatch(/\bsubtract\b/i);
     expect(p).toContain("convexEdges");        // fillet EVERY edge via the whole-part selector
     expect(p).toContain("data.edges or data.faces"); // dress-ups: selector only, no explicit edges
     expect(p).toMatch(/"to":\s*\[60,0\]/);     // a worked closed-loop (L-profile) example
+  });
+
+  it("teaches join-by-default for extrude/revolve (matches rebuild; C11)", () => {
+    expect(p).toMatch(/JOIN BY DEFAULT/i);
+    expect(p).toMatch(/JOIN \(fuse\)|join \(fuse\)|JOIN onto/i);
+    // Must NOT teach replace-body as the default for pads/revolves.
+    expect(p).not.toMatch(/REPLACE the current body/i);
+    expect(p).toMatch(/data\.op is "new"|data\.op "new"/i);
+    expect(p).toMatch(/toFace/i);
   });
 });
 

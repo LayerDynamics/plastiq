@@ -13,13 +13,24 @@ import { useProjectsStore } from "../persistence/projectsStore.js";
 import { buildProvider, keyResolverFor } from "./providers/registry.js";
 import { isFirstRun, toProviderSettings, type AiSettings } from "./settings.js";
 import { runGeneration } from "./runGeneration.js";
-import { reconstructMesh, stepToImportDocument } from "./reconstruct.js";
-import { fitMeshToCad, nurbsFitStatusMessage, nurbsUnreachableMessage, NURBS_DEFAULT_BASE_URL } from "./nurbs.js";
+import { cancelReconstruct, reconstructMesh, stepToImportDocument } from "./reconstruct.js";
+import {
+  cancelFit,
+  fitMeshToCad,
+  nurbsFitStatusMessage,
+  nurbsUnreachableMessage,
+  NURBS_DEFAULT_BASE_URL,
+} from "./nurbs.js";
 import { cancelCapture, captureFromPhotos } from "./nerf.js";
 import type { NerfEncoding, NerfMethod } from "@plastiq/nerf";
-import { meshFromPartialScan, meshFromPointCloud } from "./capture.js";
+import { cancelCaptureJob, meshFromPartialScan, meshFromPointCloud } from "./capture.js";
 import { parsePointCloud, MIN_POINTS, type ParsedPointCloud } from "@plastiq/capture";
-import { cancelPhotogrammetry, denseCloudToMeshDoc, solvePhotogrammetry } from "./photogrammetry.js";
+import {
+  cancelPhotogrammetry,
+  DEFAULT_SPARSE_MAX_DIM,
+  denseCloudToMeshDoc,
+  solvePhotogrammetry,
+} from "./photogrammetry.js";
 import type { PhotogrammetryResult } from "@plastiq/photogrammetry";
 import {
   checkServiceHealth,
@@ -289,12 +300,19 @@ function MeshConvertSection(): React.JSX.Element {
   const [status, setStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
+  /** In-flight job id from reconstructMesh/fitMeshToCad onJob — Cancel DELETEs it so the server
+   * stops working a job nobody will collect (M4b), not just the client-side polling. */
+  const jobIdRef = useRef<string | null>(null);
+  /** Which service owns `jobIdRef` — reconstruct (:8000) vs nurbs (:8003); only one runs at a time. */
+  const jobKindRef = useRef<"reconstruct" | "nurbs" | null>(null);
 
   const convert = useCallback(async (): Promise<void> => {
     const doc = useProjectsStore.getState().activeMeshDoc;
     if (!doc || busy) return;
     const controller = new AbortController();
     abortRef.current = controller;
+    jobIdRef.current = null;
+    jobKindRef.current = "reconstruct";
     setBusy(true);
     setError(null);
     setStatus("checking service…");
@@ -307,6 +325,7 @@ function MeshConvertSection(): React.JSX.Element {
       setStatus(null);
       setBusy(false);
       abortRef.current = null;
+      jobKindRef.current = null;
       return;
     }
     setStatus("submitting…");
@@ -315,6 +334,9 @@ function MeshConvertSection(): React.JSX.Element {
         ...(baseURL ? { baseURL } : {}),
         signal: controller.signal,
         onState: (s) => setStatus(s),
+        onJob: (id) => {
+          jobIdRef.current = id;
+        },
       });
       const name = doc.name ?? "Reconstructed mesh";
       useCadStore.getState().loadDocument(stepToImportDocument(result.step, name));
@@ -345,11 +367,16 @@ function MeshConvertSection(): React.JSX.Element {
       });
       setStatus(null);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-      setStatus(null);
+      if (e instanceof DOMException && e.name === "AbortError") setStatus("cancelled");
+      else {
+        setError(e instanceof Error ? e.message : String(e));
+        setStatus(null);
+      }
     } finally {
       setBusy(false);
       abortRef.current = null;
+      jobIdRef.current = null;
+      jobKindRef.current = null;
     }
   }, [busy]);
 
@@ -361,6 +388,8 @@ function MeshConvertSection(): React.JSX.Element {
     if (!doc || busy) return;
     const controller = new AbortController();
     abortRef.current = controller;
+    jobIdRef.current = null;
+    jobKindRef.current = "nurbs";
     setBusy(true);
     setError(null);
     setStatus("checking service…");
@@ -373,6 +402,7 @@ function MeshConvertSection(): React.JSX.Element {
       setStatus(null);
       setBusy(false);
       abortRef.current = null;
+      jobKindRef.current = null;
       return;
     }
     setStatus("submitting…");
@@ -381,7 +411,13 @@ function MeshConvertSection(): React.JSX.Element {
       const { report } = await fitMeshToCad(
         doc.glb,
         { load: (d) => useCadStore.getState().loadDocument(d) },
-        { signal: controller.signal, onState: (s) => setStatus(s) },
+        {
+          signal: controller.signal,
+          onState: (s) => setStatus(s),
+          onJob: (id) => {
+            jobIdRef.current = id;
+          },
+        },
         name,
       );
       // Switch out of mesh mode: the viewport now renders the fitted B-rep as a fresh untitled
@@ -399,8 +435,33 @@ function MeshConvertSection(): React.JSX.Element {
     } finally {
       setBusy(false);
       abortRef.current = null;
+      jobIdRef.current = null;
+      jobKindRef.current = null;
     }
   }, [busy]);
+
+  /** Cancel: abort client-side polling immediately, then best-effort DELETE the server-side job
+   * (M4b) — without it the service keeps reconstructing/fitting for nobody. A failed DELETE
+   * (unreachable / already gone) must never surface in the error slot. */
+  const cancel = useCallback(async (): Promise<void> => {
+    const jobId = jobIdRef.current;
+    const kind = jobKindRef.current;
+    jobIdRef.current = null;
+    jobKindRef.current = null;
+    abortRef.current?.abort();
+    if (!jobId || !kind) return;
+    try {
+      if (kind === "reconstruct") {
+        const baseURL = useAiStore.getState().settings?.reconstructBaseURL;
+        await cancelReconstruct(jobId, baseURL ? { baseURL } : {});
+      } else {
+        const baseURL = useAiStore.getState().settings?.nurbsBaseURL;
+        await cancelFit(jobId, baseURL ? { baseURL } : {});
+      }
+    } catch {
+      // Best-effort cleanup — swallow network errors (cancel already succeeded client-side).
+    }
+  }, []);
 
   return (
     <div data-testid="mesh-convert" className="space-y-2 text-xs text-[#9ab]">
@@ -430,7 +491,7 @@ function MeshConvertSection(): React.JSX.Element {
           <button
             type="button"
             data-testid="mesh-convert-cancel"
-            onClick={() => abortRef.current?.abort()}
+            onClick={() => void cancel()}
             className="rounded border border-[#7a3a3a] bg-[#2a1414] px-2 py-1 text-[#fbb] hover:bg-[#341a1a]"
           >
             Cancel
@@ -828,6 +889,8 @@ function PhotoSolveSection(): React.JSX.Element {
   // NeRF hand-off pairs images[i]↔frames[i] positionally). `data` is the base64 payload.
   const [images, setImages] = useState<NamedImage[]>([]);
   const [dense, setDense] = useState(true);
+  /** Sparse SfM longest-side cap (T39/M9); dense MVS still uses full native frames. */
+  const [sparseMaxDim, setSparseMaxDim] = useState(DEFAULT_SPARSE_MAX_DIM);
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -873,9 +936,19 @@ function PhotoSolveSection(): React.JSX.Element {
       return;
     }
     setStatus("solving (SfM + MVS — minutes)…");
+    // Clamp to the service field range (256..4096); empty/invalid falls back to the app default.
+    const dim =
+      Number.isFinite(sparseMaxDim) && sparseMaxDim >= 256 && sparseMaxDim <= 4096
+        ? Math.round(sparseMaxDim)
+        : DEFAULT_SPARSE_MAX_DIM;
     try {
       const res = await solvePhotogrammetry(
-        { images: images.map((i) => i.data), names: images.map((i) => i.name), dense },
+        {
+          images: images.map((i) => i.data),
+          names: images.map((i) => i.name),
+          dense,
+          sparseMaxDim: dim,
+        },
         {
           ...(baseURL ? { baseURL } : {}),
           signal: controller.signal,
@@ -897,7 +970,7 @@ function PhotoSolveSection(): React.JSX.Element {
       abortRef.current = null;
       jobIdRef.current = null;
     }
-  }, [images, dense, busy]);
+  }, [images, dense, sparseMaxDim, busy]);
 
   /** Cancel: abort the client-side polling immediately, then best-effort DELETE the server-side job.
    * A failing DELETE (unreachable, already gone) must never surface — the cancel already succeeded the
@@ -1027,6 +1100,23 @@ function PhotoSolveSection(): React.JSX.Element {
           />
           dense
         </label>
+        <label
+          className="flex items-center gap-1"
+          title="Longest-side cap for sparse SfM only (256–4096). Dense MVS still uses full-res frames. Default 1600."
+        >
+          sparse max
+          <input
+            data-testid="photo-sparse-max-dim"
+            type="number"
+            min={256}
+            max={4096}
+            step={1}
+            value={sparseMaxDim}
+            disabled={busy}
+            onChange={(e) => setSparseMaxDim(Number(e.target.value))}
+            className="w-16 rounded border border-[#2a3444] bg-[#10141c] px-1 py-0.5 text-[#cfe]"
+          />
+        </label>
         {!result && (
           <button
             data-testid="photo-solve-btn"
@@ -1106,12 +1196,17 @@ function CaptureScanSection(): React.JSX.Element {
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  /** Sticky after a demo-weights complete so the user never confuses it with a trained model (M2). */
+  const [demoBanner, setDemoBanner] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
+  /** Server job id from onJob — Cancel DELETEs this so the spawn worker is force-stopped (M4). */
+  const jobIdRef = useRef<string | null>(null);
 
   const onFile = useCallback(
     async (f?: File): Promise<void> => {
       if (!f || busy) return;
       setError(null);
+      setDemoBanner(null);
       try {
         const parsed = parsePointCloud(f.name, await fileToText(f));
         setCloud(parsed);
@@ -1149,8 +1244,10 @@ function CaptureScanSection(): React.JSX.Element {
 
     const controller = new AbortController();
     abortRef.current = controller;
+    jobIdRef.current = null;
     setBusy(true);
     setError(null);
+    setDemoBanner(null);
     setStatus("checking service…");
     const baseURL = useAiStore.getState().settings?.captureBaseURL;
     // Pre-flight GET /health (short timeout) BEFORE the minutes-long fit, so a down service
@@ -1166,26 +1263,65 @@ function CaptureScanSection(): React.JSX.Element {
     setStatus("submitting…");
     try {
       const deps = { persist: (doc: MeshDoc) => useProjectsStore.getState().createMeshProject(doc) };
-      const opts = { ...(baseURL ? { baseURL } : {}), signal: controller.signal, onState: (s: string) => setStatus(s) };
-      const { meshDocId } =
-        mode === "capture"
-          ? await meshFromPointCloud({ points: cloud.points, normals: cloud.normals! }, deps, opts, "Scanned mesh")
-          : await meshFromPartialScan({ points: cloud.points }, deps, opts, "Completed scan");
-      // Open the new mesh project so the panel switches to MeshConvertSection ("Convert to CAD").
-      await useProjectsStore.getState().open(meshDocId);
-      setCloud(null);
-      setFileName(null);
-      setStatus(null);
+      const opts = {
+        ...(baseURL ? { baseURL } : {}),
+        signal: controller.signal,
+        onState: (s: string) => setStatus(s),
+        onJob: (id: string) => {
+          jobIdRef.current = id;
+        },
+      };
+      if (mode === "capture") {
+        const { meshDocId } = await meshFromPointCloud(
+          { points: cloud.points, normals: cloud.normals! },
+          deps,
+          opts,
+          "Scanned mesh",
+        );
+        await useProjectsStore.getState().open(meshDocId);
+        setCloud(null);
+        setFileName(null);
+        setStatus(null);
+      } else {
+        const { meshDocId, report } = await meshFromPartialScan(
+          { points: cloud.points },
+          deps,
+          opts,
+          "Completed scan",
+        );
+        // M2: never present demo-weight completion as a silent trained success.
+        if (report.demoWeights) {
+          setDemoBanner(
+            "Demo completion weights — this mesh is a synthetic sphere-family completer, not a trained real-world model. Set CAPTURE_COMPLETION_CHECKPOINT for production weights.",
+          );
+          setStatus("completed (demo weights)");
+        } else {
+          setStatus(null);
+        }
+        await useProjectsStore.getState().open(meshDocId);
+        setCloud(null);
+        setFileName(null);
+      }
     } catch (e) {
       if (e instanceof DOMException && e.name === "AbortError") setStatus("cancelled");
       else setError(e instanceof Error ? e.message : String(e));
     } finally {
       setBusy(false);
       abortRef.current = null;
+      jobIdRef.current = null;
     }
   }, [cloud, mode, busy]);
 
-  const cancel = useCallback(() => abortRef.current?.abort(), []);
+  const cancel = useCallback(() => {
+    const jobId = jobIdRef.current;
+    abortRef.current?.abort();
+    if (jobId) {
+      const baseURL = useAiStore.getState().settings?.captureBaseURL;
+      void cancelCaptureJob(jobId, baseURL ? { baseURL } : {}).catch(() => {
+        /* 404 / network: poll abort still stops the UI */
+      });
+    }
+  }, []);
 
   return (
     <div data-testid="capture-scan" className="flex flex-col gap-1 rounded border border-[#1b2230] bg-black/20 p-2">
@@ -1250,6 +1386,14 @@ function CaptureScanSection(): React.JSX.Element {
       {status && (
         <div data-testid="capture-status" className="text-[10px] text-[#789]">
           {status}
+        </div>
+      )}
+      {demoBanner && (
+        <div
+          data-testid="capture-demo-weights"
+          className="rounded border border-[#7a5a2a] bg-[#221a10] px-2 py-1 text-[10px] text-[#fc9]"
+        >
+          ⚠ {demoBanner}
         </div>
       )}
       {error && (

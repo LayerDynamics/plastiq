@@ -25,23 +25,26 @@ reconstruction that volume-validates, and always falls back so nothing is droppe
 
 1. **single analytic primitive** — the whole mesh is one **cylinder / sphere / cone** →
    one watertight analytic solid (`detect.py` + `curved_faces.py`, box-safe shape gates).
-2. **surface of revolution** — a turned part (stepped shaft, chamfered / capped cylinder)
+2. **cut sphere** — a sphere trimmed by a plane (hemisphere / spherical cap): `GeomAPI_IntSS`
+   confirms sphere∩plane, half-space cuts, volume-validated (`topology.py`, R6.9 / T37).
+3. **surface of revolution** — a turned part (stepped shaft, chamfered / capped cylinder)
    → a section profile revolved with `BRepPrimAPI_MakeRevol` into one analytic solid,
    volume-validated (`revolution.py`).
-3. **CSG booleans** — a box (axis-aligned or rotated) with cylindrical features →
+4. **CSG booleans** — a box (axis-aligned or rotated) with cylindrical features →
    `BRepAlgoAPI_Fuse` (bosses) then `BRepAlgoAPI_Cut` (through-holes), OCCT computing the
    shared edges (InverseCSG paradigm), volume-validated (`csg.py`).
-4. **cut cylinder** — a cylinder trimmed by non-perpendicular / axis-parallel planes (an
+5. **cut cylinder** — a cylinder trimmed by non-perpendicular / axis-parallel planes (an
    obliquely-capped cylinder): `GeomAPI_IntSS` confirms each fitted plane crosses the
    cylinder, then boolean half-space cuts build the exact shared edges, volume-validated
    (`topology.py`, SPEC-7 R6.9).
-5. **`fitted`** — group coplanar+adjacent triangles into **facets**, collapse each planar
+6. **`fitted`** — group coplanar+adjacent triangles into **facets**, collapse each planar
    facet into a **single trimmed OCCT planar face**, AND collapse each single-loop non-planar
    region into one **freeform face** (R6.5; accuracy- and volume-guarded), with a per-triangle
-   faceted fallback for holed facets, closed regions, and leftovers. A clean, compact B-rep
-   for flat *and* smooth regions (a box → 6 faces; a domed box → flat sides + a freeform cap).
-   Selectable directly as `method="fitted"`.
-6. **`faceted`** — the per-triangle baseline; always produces a valid B-rep from any
+   faceted fallback for holed facets, closed regions, and leftovers. When
+   `RECONSTRUCT_NURBS_URL` is set, a whole closed genus-0 organic blob is delegated to the
+   nurbs service **closed** mode (6-patch cube-map solid, T38) before faceting. Selectable
+   directly as `method="fitted"`.
+7. **`faceted`** — the per-triangle baseline; always produces a valid B-rep from any
    triangle soup. Selectable as `method="faceted"` (fallback / comparison). If the fitted
    route itself raises, the pipeline emits this baseline instead of failing the job (NFR-1);
    any raising analytic route likewise degrades to the next route, recorded in the report's
@@ -57,11 +60,12 @@ single boundary loop is collapsed into ONE freeform face (sharing the mesh-polyl
 of its planar/faceted neighbours), guarded by a per-region accuracy gate and a post-assembly
 volume check (rebuilds faceted-only if freeform breaks closure/volume). A domed box becomes a
 freeform-capped solid instead of hundreds of triangles. Honest limits: a CLOSED region (no
-boundary loop — e.g. a whole organic blob) can't be one filled patch → stays faceted; and the
-analytic-rim sagitta case (a smooth fitted arc vs a faceted polyline neighbour — see the
-caveat) still needs the surface-intersection tail. Cleanup (weld coincident vertices, drop
-degenerate/duplicate faces, fix winding/normals, fill small holes — `cleanup.py`) runs first;
-STEP is written via `STEPControl_Writer`.
+boundary loop — e.g. a whole organic blob) can't be one `MakeFilling` patch; with
+`RECONSTRUCT_NURBS_URL` set it delegates to nurbs closed mode (T38), otherwise stays faceted.
+The general per-region analytic-rim sagitta case (smooth fitted arc vs faceted polyline
+neighbour) still needs further FR-6 graph work beyond cylinder/sphere∩plane. Cleanup (weld
+coincident vertices, drop degenerate/duplicate faces, fix winding/normals, fill small holes —
+`cleanup.py`) runs first; STEP is written via `STEPControl_Writer`.
 
 Coordinates are passed through unscaled (SI metres), matching `@plastiq/cad`'s STEP I/O
 (`packages/cad/src/io/index.ts`), so the output imports back with consistent units.
@@ -83,7 +87,7 @@ primitive, attempted }` —
 `fitted` the facets collapsed into single trimmed faces, for the analytic routes the built shape's
 `Geom_Plane` faces (a cylinder's 2 caps, a CSG box's sides), 0 for `faceted`, `method` = the route
 taken — never `"auto"`
-(`cylinder`/`sphere`/`cone`/`revolution`/`csg`/`cut_cylinder`/`fitted`/`faceted`), `primitive` = the
+(`cylinder`/`sphere`/`cone`/`revolution`/`csg`/`cut_cylinder`/`cut_sphere`/`fitted`/`faceted`), `primitive` = the
 analytic kind when an analytic route matched (else `null`), `attempted` = the auto chain's per-route
 trail in run order (`{ route, outcome: "matched"|"no_match"|"error", error? }` — an errored analytic
 route degrades to the next route; a `fitted` attempt can record `"error"` while `method` is still
@@ -231,3 +235,12 @@ automatic reconstruction, not an implementation gap.
   faceted — nothing is dropped). See SPEC-7 §8.
 
 [pythonOCC]: https://github.com/tpaviot/pythonocc-core
+
+## Freeform → NURBS delegation (U10)
+
+When `RECONSTRUCT_NURBS_URL` is set (e.g. `http://127.0.0.1:8003`), freeform single-loop
+regions are offloaded to `services/nurbs` for a B-spline fit. `just services` /
+`scripts/dev-services.sh` exports this automatically for the reconstruct process so
+organic freeform quality uses NURBS by default when both services are running.
+
+Unset the env var to force local `MakeFilling` only.

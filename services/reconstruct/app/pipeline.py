@@ -3,9 +3,11 @@
 Default method is "auto": clean the mesh, then try the analytic routes in order and emit the
 first watertight, volume-validated solid —
   1. single analytic primitive    sphere / cylinder / cone (R6.4, `detect.try_single_primitive`)
-  2. solid of revolution          stepped/capped shaft (R6.4b, `revolution.reconstruct_revolution`)
-  3. CSG                          box ± cylinders: holes/bosses (R6.4b, `csg.reconstruct_csg`)
-  4. cut cylinder                 cylinder trimmed by oblique/axis-parallel planes
+  2. cut sphere                   sphere trimmed by a plane (hemisphere / spherical cap)
+                                  (R6.9, `topology.reconstruct_cut_sphere` — FR-6 GeomAPI_IntSS)
+  3. solid of revolution          stepped/capped shaft (R6.4b, `revolution.reconstruct_revolution`)
+  4. CSG                          box ± cylinders: holes/bosses (R6.4b, `csg.reconstruct_csg`)
+  5. cut cylinder                 cylinder trimmed by oblique/axis-parallel planes
                                   (R6.9, `topology.reconstruct_cut_cylinder` — FR-6 GeomAPI_IntSS)
 — otherwise fall back to "fitted" (R6.3/R6.4/R6.5 — planar facets → trimmed faces + freeform,
 faceted fallback per region). "faceted" (R6.1) is the per-triangle baseline. Every analytic route
@@ -44,7 +46,7 @@ from .occ_pool import run_isolated
 from .occ_step import shape_to_step
 from .recognition import recognize
 from .revolution import reconstruct_revolution
-from .topology import reconstruct_cut_cylinder
+from .topology import reconstruct_cut_cylinder, reconstruct_cut_sphere
 
 # Wall-clock bound for the isolated OCCT build (crash-isolation, not a quality cap) — a very large
 # organic mesh that would OOM/hang is terminated and reported instead of taking the service down.
@@ -64,7 +66,7 @@ class RouteAttempt:
     otherwise-emitted fitted result (region-level FR-8 fallback), so an "error" fitted attempt
     can coexist with report.method == "fitted"."""
 
-    route: str  # "single_primitive" | "revolution" | "csg" | "cut_cylinder" | "fitted" | "faceted"
+    route: str  # "single_primitive" | "revolution" | "csg" | "cut_cylinder" | "cut_sphere" | "fitted" | "faceted"
     outcome: str  # "matched" | "no_match" | "error"
     error: Optional[str] = None  # the caught exception message(s) when outcome == "error"
 
@@ -89,9 +91,9 @@ class ReconstructionReport:
     # M2c: number of tangent-connected regions recognised in the INPUT mesh (a box → 6, a cylinder
     # → 3, an organic blob → many) — a structural fingerprint for honest UX (docs/adr/0002).
     tangent_regions: int = 0
-    # 7-L2: per-route attempt trail of the chain (single_primitive → revolution → csg →
-    # cut_cylinder → fitted → faceted) — an OCCT crash inside a route ("error") is no longer
-    # indistinguishable from a clean non-match ("no_match"). Optional/additive so the JSON
+    # 7-L2: per-route attempt trail of the chain (single_primitive → cut_sphere → revolution →
+    # csg → cut_cylinder → fitted → faceted) — an OCCT crash inside a route ("error") is no
+    # longer indistinguishable from a clean non-match ("no_match"). Optional/additive so the JSON
     # report stays backward-compatible; always populated by `reconstruct`.
     attempted: Optional[list[RouteAttempt]] = None
 
@@ -193,7 +195,30 @@ def reconstruct(
                 surface_deviation=prim_dev,
             )
             return finish(prim.shape, report)
-        # 2) a multi-segment solid of revolution (stepped shaft, chamfered/capped cylinder)
+        # 2) a sphere trimmed by a plane (hemisphere / spherical cap) — FR-6 sphere∩plane (T37).
+        #    Before revolution: a hemisphere is also a solid of revolution, but cut_sphere keeps
+        #    a true spherical face + planar cap (the FR-6 shared circle) instead of a revolved
+        #    polyline. Full spheres still hit single_primitive first; non-spherical turned parts
+        #    decline here (no planar cap / volume gate) and fall through to revolution.
+        cutsph = run_route("cut_sphere", lambda _errors: reconstruct_cut_sphere(vertices, faces))
+        cutsph_dev = deviation(cutsph.shape) if cutsph is not None else None
+        if cutsph is not None:
+            planar, curved, freeform = classify_faces(cutsph.shape)
+            report = ReconstructionReport(
+                triangles_in=raw_triangles,
+                triangles_used=used,
+                faces_built=cutsph.n_faces,
+                planar_faces=planar,
+                is_solid=cutsph.is_solid,
+                is_valid=cutsph.is_valid,
+                method="cut_sphere",
+                primitive="cut_sphere",
+                curved_faces=curved,
+                freeform_faces=freeform,
+                surface_deviation=cutsph_dev,
+            )
+            return finish(cutsph.shape, report)
+        # 3) a multi-segment solid of revolution (stepped shaft, chamfered/capped cylinder)
         rev = run_route("revolution", lambda _errors: reconstruct_revolution(vertices, faces))
         rev_dev = deviation(rev.shape) if rev is not None else None
         if rev is not None:
@@ -212,7 +237,7 @@ def reconstruct(
                 surface_deviation=rev_dev,
             )
             return finish(rev.shape, report)
-        # 3) a box with cylindrical through-holes (CSG: box − cylinders)
+        # 4) a box with cylindrical through-holes (CSG: box − cylinders)
         csg = run_route("csg", lambda errors: reconstruct_csg(vertices, faces, errors=errors))
         csg_dev = deviation(csg.shape) if csg is not None else None
         if csg is not None:
@@ -231,7 +256,7 @@ def reconstruct(
                 surface_deviation=csg_dev,
             )
             return finish(csg.shape, report)
-        # 4) a cylinder trimmed by a non-perpendicular / axis-parallel plane (oblique cap, etc.)
+        # 5) a cylinder trimmed by a non-perpendicular / axis-parallel plane (oblique cap, etc.)
         #    — FR-6 surface-intersection edge recovery (R6.9). Runs LAST among the analytic
         #    routes (after CSG, which is more mature) so it only claims meshes nothing else fit;
         #    self-validated by volume, faceted fallback otherwise. An oblique-cut cylinder has
@@ -254,7 +279,7 @@ def reconstruct(
                 surface_deviation=cutcyl_dev,
             )
             return finish(cutcyl.shape, report)
-        method = "fitted"  # not a primitive / revolution / CSG / cut-cylinder → fall through
+        method = "fitted"  # not a primitive / cut-sphere / revolution / CSG / cut-cylinder → fall through
 
     def faceted_result() -> ReconstructionResult:
         """The per-triangle baseline (R6.1) — the route that can always build something."""

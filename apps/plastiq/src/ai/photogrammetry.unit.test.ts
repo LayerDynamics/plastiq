@@ -9,6 +9,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { cancelJob, solvePhotos } from "@plastiq/photogrammetry";
 import {
   cancelPhotogrammetry,
+  DEFAULT_SPARSE_MAX_DIM,
   denseCloudToMeshDoc,
   denseCloudToPointCloudDoc,
   parseDenseCloud,
@@ -108,7 +109,25 @@ describe("solvePhotogrammetry — settings resolution (photogrammetryBaseURL/Api
     expect(opts.baseURL).toBe("https://explicit");
     expect(opts.apiKey).toBe("explicit-key");
     expect(opts.onJob).toBe(onJob);
-    expect(solvePhotosMock.mock.calls[0]![0]).toBe(SOLVE_INPUT);
+    // Input is a new object with sparseMaxDim default applied (not the same reference).
+    expect(solvePhotosMock.mock.calls[0]![0]).toEqual({
+      ...SOLVE_INPUT,
+      sparseMaxDim: DEFAULT_SPARSE_MAX_DIM,
+    });
+  });
+
+  it("defaults sparseMaxDim to 1600 (M9) so multi-megapixel photos dual-res sparse/dense", async () => {
+    await solvePhotogrammetry(SOLVE_INPUT);
+    expect(solvePhotosMock.mock.calls[0]![0]).toEqual({
+      images: ["a", "b", "c"],
+      sparseMaxDim: 1600,
+    });
+    expect(DEFAULT_SPARSE_MAX_DIM).toBe(1600);
+  });
+
+  it("a caller-supplied sparseMaxDim wins over the app default", async () => {
+    await solvePhotogrammetry({ ...SOLVE_INPUT, sparseMaxDim: 640 });
+    expect(solvePhotosMock.mock.calls[0]![0]!.sparseMaxDim).toBe(640);
   });
 });
 

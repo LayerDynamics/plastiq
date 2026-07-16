@@ -106,4 +106,12 @@ export interface NurbsOptions {
   delay?: (ms: number) => Promise<void>;
   /** Job-state callback for UI progress (`"queued" | "running" | …`). */
   onState?: (state: string) => void;
+  /** Job-id callback, fired once (right after the submit returns, before the first poll) — the
+   * handle a caller needs to cancel the in-flight job server-side via {@link cancelJob} while
+   * this same call keeps polling. */
+  onJob?: (id: string) => void;
 }
+
+/** Knobs for {@link cancelJob}: the connection subset of {@link NurbsOptions}. Cancel is a single
+ * `DELETE` — the polling knobs don't apply. */
+export type NurbsCancelOptions = Pick<NurbsOptions, "baseURL" | "apiKey" | "fetchImpl">;

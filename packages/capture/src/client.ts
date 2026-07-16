@@ -5,7 +5,7 @@
 // reconstruct services exactly — POST a job, GET /jobs/{id}/status until "completed", then GET
 // /jobs/{id}/result — so the browser reuses the same polling machinery. The GLB is then imported
 // as a MeshDoc (app-side) and reconstructed into an editable B-rep. Self-hosted, reached by base
-// URL; the service exposes no auth (main.py), so no key/header plumbing exists here.
+// URL. Optional CAPTURE_API_KEY → Authorization: Bearer on mutating requests (T36).
 
 import type { CaptureInput, CaptureOptions, CaptureResult, CompleteInput } from "./types.js";
 
@@ -18,6 +18,8 @@ interface CaptureResultWire {
   glb_base64: string;
   vertices: number;
   faces: number;
+  /** Set on /complete when synthetic demo weights are in use (server main.py). */
+  demo_weights?: boolean;
 }
 
 async function httpError(res: Response, label: string, what: string): Promise<string> {
@@ -26,6 +28,25 @@ async function httpError(res: Response, label: string, what: string): Promise<st
     .then((b: { detail?: string }) => b.detail ?? "")
     .catch(() => "");
   return `${label} ${what}: HTTP ${res.status}${detail ? ` — ${detail}` : ""}`;
+}
+
+/** Cancel a job server-side (`DELETE /jobs/{id}`). Capture force-stops the spawn worker
+ * (services/capture JobStore.cancel). Idempotent on 404. */
+export async function cancelJob(
+  jobId: string,
+  opts: Pick<CaptureOptions, "baseURL" | "fetchImpl" | "signal" | "apiKey"> = {},
+): Promise<void> {
+  const base = (opts.baseURL ?? DEFAULT_BASE_URL).replace(/\/+$/, "");
+  const f = opts.fetchImpl ?? globalThis.fetch;
+  if (!f) throw new Error("capture cancelJob: no fetch implementation available");
+  const auth: Record<string, string> = opts.apiKey ? { Authorization: `Bearer ${opts.apiKey}` } : {};
+  const res = await f(`${base}/jobs/${jobId}`, {
+    method: "DELETE",
+    headers: { ...auth },
+    ...(opts.signal ? { signal: opts.signal } : {}),
+  });
+  if (res.status === 204 || res.status === 404) return;
+  throw new Error(await httpError(res, "cancelJob", "cancel"));
 }
 
 /** Shared submit→poll runner for both endpoints. Throws on submit/status/result HTTP errors
@@ -44,11 +65,15 @@ async function runJob(
   const delay = opts.delay ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
   const interval = opts.pollIntervalMs ?? 1000;
   const maxPolls = opts.maxPolls ?? 600;
-  const getInit: RequestInit = opts.signal ? { signal: opts.signal } : {};
+  const auth: Record<string, string> = opts.apiKey ? { Authorization: `Bearer ${opts.apiKey}` } : {};
+  const getInit: RequestInit = {
+    ...(opts.apiKey ? { headers: auth } : {}),
+    ...(opts.signal ? { signal: opts.signal } : {}),
+  };
 
   const submitRes = await f(`${base}${path}`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...auth },
     body: JSON.stringify(body),
     ...(opts.signal ? { signal: opts.signal } : {}),
   });
@@ -56,6 +81,7 @@ async function runJob(
   const submitted = (await submitRes.json()) as { id?: string };
   if (!submitted.id) throw new Error(`${label}: submit returned no job id`);
   const id = submitted.id;
+  opts.onJob?.(id);
 
   for (let i = 0; i < maxPolls; i++) {
     if (opts.signal?.aborted) throw new DOMException("aborted", "AbortError");
@@ -67,7 +93,14 @@ async function runJob(
       const resultRes = await f(`${base}/jobs/${id}/result`, getInit);
       if (!resultRes.ok) throw new Error(await httpError(resultRes, label, "result"));
       const wire = (await resultRes.json()) as CaptureResultWire;
-      return { glb: wire.glb_base64, report: { vertices: wire.vertices, faces: wire.faces } };
+      return {
+        glb: wire.glb_base64,
+        report: {
+          vertices: wire.vertices,
+          faces: wire.faces,
+          ...(wire.demo_weights !== undefined ? { demoWeights: wire.demo_weights } : {}),
+        },
+      };
     }
     if (status.state === "failed") {
       throw new Error(`${label} failed: ${status.error ?? "unknown error"}`);

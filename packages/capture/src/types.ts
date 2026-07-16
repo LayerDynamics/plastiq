@@ -4,9 +4,8 @@
 // GLB + a report, and the *app* (apps/plastiq) maps that into its own MeshDoc. The dependency
 // direction is app → @plastiq/capture, never the reverse, so the package stays embeddable anywhere.
 //
-// NOTE: the capture service (services/capture/app/main.py) has NO authentication — every endpoint
-// is open, so unlike @plastiq/nerf there is deliberately no `apiKey` option here. Add one only if
-// the server ever grows an auth check.
+// Optional bearer auth: when CAPTURE_API_KEY is set on the server, pass `apiKey` so
+// Authorization: Bearer is sent on mutating requests (T36; open when unset).
 
 /** The server's minimum point count — `POST /capture` and `POST /complete` both 400 below this
  * (services/capture/app/main.py: "need at least 16 points"). Exported so callers can pre-check
@@ -44,6 +43,11 @@ export interface CaptureReport {
   /** Marching-cubes mesh size. */
   vertices: number;
   faces: number;
+  /**
+   * Present on `/complete` results when the server used the synthetic demo completer
+   * (`CAPTURE_COMPLETION_CHECKPOINT` unset). Callers should surface this in the UI (T24/M2).
+   */
+  demoWeights?: boolean;
 }
 
 /** A completed job: the reconstructed/completed surface as a base64 GLB + its report. The GLB
@@ -61,6 +65,8 @@ export interface CaptureOptions {
   /** Base URL of the capture service. Default `http://localhost:8001` (the documented dev port:
    * reconstruct=8000, capture=8001, nerf=8002). */
   baseURL?: string;
+  /** Bearer token when the service is deployed with CAPTURE_API_KEY (T36). */
+  apiKey?: string;
   /** Injectable fetch (tests pass a fake; defaults to the global `fetch`). */
   fetchImpl?: typeof fetch;
   signal?: AbortSignal;
@@ -73,4 +79,6 @@ export interface CaptureOptions {
   delay?: (ms: number) => Promise<void>;
   /** Job-state callback for UI progress (`"queued" | "running" | "completed" | "failed"`). */
   onState?: (state: string) => void;
+  /** Job-id callback, fired once after submit returns — handle for {@link cancelJob} (M4). */
+  onJob?: (id: string) => void;
 }

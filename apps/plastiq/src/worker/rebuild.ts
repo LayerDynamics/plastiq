@@ -18,6 +18,7 @@ import {
   extrudeToFace,
   fillet,
   resolveEdgeDirection,
+  resolveEdgeAxis,
   importStep,
   intersect,
   linearPattern,
@@ -105,6 +106,33 @@ function profileSketch(profile: Profile, plane: DatumPlane = planeXY()): Sketch 
   return sk;
 }
 
+/** Cut circular holes from a pad/pocket solid (T11/C5 — profile.holes). */
+function cutProfileHoles(
+  oc: Occt,
+  body: Solid,
+  profile: Profile,
+  plane: DatumPlane,
+  height: number,
+  opts: { back?: number; direction?: Vec3 },
+  featureId: string,
+): Solid {
+  if (profile.kind !== "loop" || !profile.holes?.length) return body;
+  let acc = body;
+  for (const h of profile.holes) {
+    const holeSk = Sketch.circle(plane, h.center[0], h.center[1], h.radius);
+    const tool = extrude(oc, holeSk, height, { back: opts.back ?? 0, direction: opts.direction });
+    try {
+      const r = subtract(oc, acc, tool);
+      if (acc !== body) acc.delete();
+      if (!r.ok) throw new Error(`feature '${featureId}' (profile hole): ${r.error}`);
+      acc = r.solid;
+    } finally {
+      tool.delete();
+    }
+  }
+  return acc;
+}
+
 /**
  * Fuse pattern copies into one independent solid (the caller still owns + deletes
  * the input `copies`). Always returns a fresh solid, even for a single copy.
@@ -143,12 +171,32 @@ function dressFaces(oc: Occt, base: Solid, f: EditorFeature): FaceRef[] {
  * geometry). Throws on the first unrecoverable feature error; the caller
  * (worker/tree) attributes it to the offending feature.
  */
+type ActiveSketch = { profile: Profile; plane: DatumPlane };
+
+/** Resolve the sketch profile for extrude/cut/revolve (C3): prefer
+ * `data.sketchId`, then the first `deps` entry that names a known sketch, then
+ * the most recent sketch (legacy last-wins). */
+function sketchForFeature(
+  f: { id: string; deps?: readonly string[]; data?: Record<string, unknown> },
+  sketches: Map<string, ActiveSketch>,
+  lastSketch: ActiveSketch | null,
+): ActiveSketch | null {
+  const sketchId =
+    typeof f.data?.["sketchId"] === "string" ? (f.data["sketchId"] as string) : undefined;
+  if (sketchId && sketches.has(sketchId)) return sketches.get(sketchId)!;
+  if (f.deps) {
+    for (const id of f.deps) {
+      if (sketches.has(id)) return sketches.get(id)!;
+    }
+  }
+  return lastSketch;
+}
+
 export function rebuildDocument(oc: Occt, doc: CadDocument): Solid | null {
   let solid: Solid | null = null;
-  // The active sketch profile + its resolved 3D plane, set by the most recent
-  // `sketch` feature and consumed by extrude/revolve/cut (so a profile builds on
-  // its own datum/offset, not always world-XY).
-  let activeSketch: { profile: Profile; plane: DatumPlane } | null = null;
+  // Sketch registry by feature id (C3) + last-wins fallback for documents without deps.
+  const sketches = new Map<string, ActiveSketch>();
+  let lastSketch: ActiveSketch | null = null;
 
   const replace = (next: Solid): void => {
     solid?.delete();
@@ -193,10 +241,13 @@ export function rebuildDocument(oc: Occt, doc: CadDocument): Solid | null {
         } else {
           sketchPlane = resolveSketchPlane(planeSpec);
         }
-        activeSketch = { profile: prof, plane: sketchPlane };
+        const entry: ActiveSketch = { profile: prof, plane: sketchPlane };
+        sketches.set(f.id, entry);
+        lastSketch = entry;
         break;
       }
       case "extrude": {
+        const activeSketch = sketchForFeature(f, sketches, lastSketch);
         if (!activeSketch)
           throw new Error(`feature '${f.id}' (extrude): no sketch profile upstream`);
         const sk = profileSketch(activeSketch.profile, activeSketch.plane);
@@ -227,11 +278,25 @@ export function rebuildDocument(oc: Occt, doc: CadDocument): Solid | null {
             pad.delete();
           }
         } else {
-          // Default "new" replaces the current body (historical single-body model).
-          // data.op === "join" fuses the pad with the existing solid so a second
-          // boss adds material instead of destroying the prior body (G7).
-          const pad = extrude(oc, sk, num(f, "height"), { back: opt(f, "back", 0), direction });
-          const join = f.data?.["op"] === "join";
+          // Join-by-default when a body already exists (C1 / Grok): a second pad
+          // adds material instead of destroying the prior solid. Explicit
+          // data.op === "new" keeps replace (historical single-body / "new body").
+          // data.op === "join" always joins when a solid is present.
+          const height = num(f, "height");
+          const back = opt(f, "back", 0);
+          let pad = extrude(oc, sk, height, { back, direction });
+          pad = cutProfileHoles(
+            oc,
+            pad,
+            activeSketch.profile,
+            activeSketch.plane,
+            height,
+            { back, direction },
+            f.id,
+          );
+          const op = f.data?.["op"];
+          const join =
+            solid != null && (op === "join" || op !== "new");
           if (join && solid) {
             try {
               const r = union(oc, solid, pad);
@@ -247,16 +312,64 @@ export function rebuildDocument(oc: Occt, doc: CadDocument): Solid | null {
         break;
       }
       case "revolve": {
+        const activeSketch = sketchForFeature(f, sketches, lastSketch);
         if (!activeSketch)
           throw new Error(`feature '${f.id}' (revolve): no sketch profile upstream`);
         // Revolve the active profile about an axis through (ox,oy,oz) along
         // (ax,ay,az) by `angle` radians (FR-29). Defaults: world Y through origin.
+        // data.axisEdge (C2): re-resolve axis origin+direction from a picked edge.
         const angle = num(f, "angle");
-        const origin: Vec3 = [opt(f, "ox", 0), opt(f, "oy", 0), opt(f, "oz", 0)];
-        const axis: Vec3 = [opt(f, "ax", 0), opt(f, "ay", 1), opt(f, "az", 0)];
-        replace(
-          revolve(oc, profileSketch(activeSketch.profile, activeSketch.plane), origin, axis, angle),
+        let origin: Vec3 = [opt(f, "ox", 0), opt(f, "oy", 0), opt(f, "oz", 0)];
+        let axis: Vec3 = [opt(f, "ax", 0), opt(f, "ay", 1), opt(f, "az", 0)];
+        const axisEdge = f.data?.["axisEdge"] as EdgeRef | undefined;
+        if (axisEdge) {
+          if (!solid)
+            throw new Error(`feature '${f.id}' (revolve): no body for the axis edge`);
+          try {
+            const ea = resolveEdgeAxis(oc, solid, axisEdge);
+            origin = [ea.origin[0], ea.origin[1], ea.origin[2]];
+            axis = [ea.direction[0], ea.direction[1], ea.direction[2]];
+          } catch {
+            throw new Error(`feature '${f.id}' (revolve): axis edge unresolved`);
+          }
+        }
+        let body = revolve(
+          oc,
+          profileSketch(activeSketch.profile, activeSketch.plane),
+          origin,
+          axis,
+          angle,
         );
+        // C9: profile.holes → revolve each hole circle and subtract (ring solid of revolution).
+        const prof = activeSketch.profile;
+        if (prof.kind === "loop" && prof.holes?.length) {
+          for (const h of prof.holes) {
+            const holeSk = Sketch.circle(activeSketch.plane, h.center[0], h.center[1], h.radius);
+            const tool = revolve(oc, holeSk, origin, axis, angle);
+            try {
+              const r = subtract(oc, body, tool);
+              body.delete();
+              if (!r.ok) throw new Error(`feature '${f.id}' (revolve hole): ${r.error}`);
+              body = r.solid;
+            } finally {
+              tool.delete();
+            }
+          }
+        }
+        // Join-by-default when a solid exists (parity with extrude C1/C2); op:"new" replaces.
+        const op = f.data?.["op"];
+        const join = solid != null && (op === "join" || op !== "new");
+        if (join && solid) {
+          try {
+            const r = union(oc, solid, body);
+            if (!r.ok) throw new Error(`feature '${f.id}' (revolve join): ${r.error}`);
+            replace(r.solid);
+          } finally {
+            body.delete();
+          }
+        } else {
+          replace(body);
+        }
         break;
       }
       case "loft": {
@@ -294,7 +407,23 @@ export function rebuildDocument(oc: Occt, doc: CadDocument): Solid | null {
           }
           return profileSketch(s.profile, plane);
         });
-        replace(loft(oc, sketches, { ruled: Boolean(f.data?.["ruled"]) }));
+        {
+          // Join-by-default when a body exists (C4 / Grok): same op contract as extrude.
+          const body = loft(oc, sketches, { ruled: Boolean(f.data?.["ruled"]) });
+          const op = f.data?.["op"];
+          const join = solid != null && (op === "join" || op !== "new");
+          if (join && solid) {
+            try {
+              const r = union(oc, solid, body);
+              if (!r.ok) throw new Error(`feature '${f.id}' (loft join): ${r.error}`);
+              replace(r.solid);
+            } finally {
+              body.delete();
+            }
+          } else {
+            replace(body);
+          }
+        }
         break;
       }
       case "sweep": {
@@ -321,25 +450,23 @@ export function rebuildDocument(oc: Occt, doc: CadDocument): Solid | null {
           }
         } else if (planeSpec) {
           sweepPlane = resolveSketchPlane(planeSpec);
-        } else if (activeSketch) {
-          sweepPlane = activeSketch.plane;
         } else {
-          sweepPlane = planeXY();
+          const bound = sketchForFeature(f, sketches, lastSketch);
+          sweepPlane = bound?.plane ?? planeXY();
         }
         const modeRaw = f.data?.["mode"];
         const transitionRaw = f.data?.["transition"];
+        // "fixed" was removed as a lie (T17/C8) — map legacy docs to correctedFrenet.
+        const modeNorm = modeRaw === "fixed" ? "correctedFrenet" : modeRaw;
         const sweepOpts: SweepOptions | undefined =
-          modeRaw === "frenet" ||
-          modeRaw === "correctedFrenet" ||
-          modeRaw === "fixed" ||
+          modeNorm === "frenet" ||
+          modeNorm === "correctedFrenet" ||
           transitionRaw === "right" ||
           transitionRaw === "round" ||
           transitionRaw === "transformed"
             ? {
-                ...(modeRaw === "frenet" ||
-                modeRaw === "correctedFrenet" ||
-                modeRaw === "fixed"
-                  ? { mode: modeRaw as SweepOptions["mode"] }
+                ...(modeNorm === "frenet" || modeNorm === "correctedFrenet"
+                  ? { mode: modeNorm as SweepOptions["mode"] }
                   : {}),
                 ...(transitionRaw === "right" ||
                 transitionRaw === "round" ||
@@ -348,12 +475,29 @@ export function rebuildDocument(oc: Occt, doc: CadDocument): Solid | null {
                   : {}),
               }
             : undefined;
-        replace(sweep(oc, profileSketch(prof, sweepPlane), path, sweepOpts));
+        {
+          // Join-by-default when a body exists (C4 / Grok): same op contract as extrude.
+          const body = sweep(oc, profileSketch(prof, sweepPlane), path, sweepOpts);
+          const op = f.data?.["op"];
+          const join = solid != null && (op === "join" || op !== "new");
+          if (join && solid) {
+            try {
+              const r = union(oc, solid, body);
+              if (!r.ok) throw new Error(`feature '${f.id}' (sweep join): ${r.error}`);
+              replace(r.solid);
+            } finally {
+              body.delete();
+            }
+          } else {
+            replace(body);
+          }
+        }
         break;
       }
       case "cut": {
         const base = solid;
         if (!base) throw new Error(`feature '${f.id}' (cut): no solid to cut into`);
+        const activeSketch = sketchForFeature(f, sketches, lastSketch);
         if (!activeSketch) throw new Error(`feature '${f.id}' (cut): no sketch profile upstream`);
         // Subtract the active profile, extruded `depth` (optionally two-sided via
         // `back`, optionally along a baked/edge direction — parity with extrude, G5),
@@ -367,10 +511,23 @@ export function rebuildDocument(oc: Occt, doc: CadDocument): Solid | null {
           if (!d) throw new Error(`feature '${f.id}' (cut): direction edge unresolved`);
           direction = d;
         }
-        const tool = extrude(oc, profileSketch(activeSketch.profile, activeSketch.plane), num(f, "depth"), {
-          back: opt(f, "back", 0),
+        const depth = num(f, "depth");
+        const back = opt(f, "back", 0);
+        // Outer cut tool; profile.holes on cut leave islands via cutProfileHoles on the tool
+        // so the tool is a ring (outer minus holes) before subtracting from the body.
+        let tool = extrude(oc, profileSketch(activeSketch.profile, activeSketch.plane), depth, {
+          back,
           direction,
         });
+        tool = cutProfileHoles(
+          oc,
+          tool,
+          activeSketch.profile,
+          activeSketch.plane,
+          depth,
+          { back, direction },
+          f.id,
+        );
         try {
           replace(cut(oc, base, tool));
         } finally {
@@ -384,7 +541,11 @@ export function rebuildDocument(oc: Occt, doc: CadDocument): Solid | null {
         // Explicit EdgeRefs (re-resolved each rebuild, FR-16/R2) or a selector predicate (R3.2).
         const edges = dressEdges(oc, base, f);
         if (edges.length === 0) throw new Error(`feature '${f.id}' (fillet): no edges selected`);
-        replace(fillet(oc, base, edges, num(f, "radius")));
+        // Optional radius2 → variable-radius fillet along each edge (T20).
+        const endR = opt(f, "radius2", NaN);
+        replace(
+          fillet(oc, base, edges, num(f, "radius"), Number.isFinite(endR) ? { endRadius: endR } : undefined),
+        );
         break;
       }
       case "chamfer": {
@@ -392,7 +553,20 @@ export function rebuildDocument(oc: Occt, doc: CadDocument): Solid | null {
         if (!base) throw new Error(`feature '${f.id}' (chamfer): no solid to chamfer`);
         const edges = dressEdges(oc, base, f);
         if (edges.length === 0) throw new Error(`feature '${f.id}' (chamfer): no edges selected`);
-        replace(chamfer(oc, base, edges, num(f, "distance")));
+        // Optional distance2 + data.face → two-distance chamfer (T20).
+        const d2 = opt(f, "distance2", NaN);
+        const chFace = f.data?.["face"] as FaceRef | undefined;
+        replace(
+          chamfer(
+            oc,
+            base,
+            edges,
+            num(f, "distance"),
+            Number.isFinite(d2) && chFace
+              ? { distance2: d2, face: chFace }
+              : undefined,
+          ),
+        );
         break;
       }
       case "shell": {
@@ -452,20 +626,36 @@ export function rebuildDocument(oc: Occt, doc: CadDocument): Solid | null {
         break;
       }
       case "transform": {
-        // Baked rigid move of the current solid (FR-31; distinct from the M1.3
-        // scene-level "placement"). Rotate (if any) about an axis, then translate.
+        // Baked rigid move of the current solid (FR-31; distinct from placement gizmo).
+        // Order: rotate about pivot (COM by default, or explicit px/py/pz), then translate (C7).
         const base = solid;
         if (!base) throw new Error(`feature '${f.id}' (transform): no solid`);
         const angle = opt(f, "angle", 0);
-        const moved = translate(oc, base, [opt(f, "tx", 0), opt(f, "ty", 0), opt(f, "tz", 0)]);
+        const tx = opt(f, "tx", 0);
+        const ty = opt(f, "ty", 0);
+        const tz = opt(f, "tz", 0);
+        let current = base;
+        let owned: Solid | null = null;
         if (angle !== 0) {
           const axis: Vec3 = [opt(f, "ax", 0), opt(f, "ay", 0), opt(f, "az", 1)];
-          const rot = rotate(oc, moved, [0, 0, 0], axis, angle);
-          moved.delete();
-          replace(rot);
-        } else {
-          replace(moved);
+          // Explicit pivot params override COM (optional px/py/pz); default = body centre of mass.
+          const com = base.centreOfMass();
+          const pivot: Vec3 = [
+            typeof f.params?.["px"] === "number" ? (f.params["px"] as number) : com[0],
+            typeof f.params?.["py"] === "number" ? (f.params["py"] as number) : com[1],
+            typeof f.params?.["pz"] === "number" ? (f.params["pz"] as number) : com[2],
+          ];
+          owned = rotate(oc, current, pivot, axis, angle);
+          current = owned;
         }
+        if (tx !== 0 || ty !== 0 || tz !== 0) {
+          const moved = translate(oc, current, [tx, ty, tz]);
+          if (owned) owned.delete();
+          owned = moved;
+          current = moved;
+        }
+        if (owned) replace(owned);
+        // No-op transform (all zeros): leave solid unchanged.
         break;
       }
       case "mirror": {
@@ -490,11 +680,38 @@ export function rebuildDocument(oc: Occt, doc: CadDocument): Solid | null {
         const base = solid;
         if (!base) throw new Error(`feature '${f.id}' (linearPattern): no solid`);
         const dir: Vec3 = [opt(f, "dx", 1), opt(f, "dy", 0), opt(f, "dz", 0)];
-        const copies = linearPattern(oc, base, dir, num(f, "spacing"), Math.round(num(f, "count")));
-        try {
-          replace(unionAll(oc, copies, f.id));
-        } finally {
-          for (const c of copies) c.delete();
+        const count = Math.round(num(f, "count"));
+        const spacing = num(f, "spacing");
+        // T21: optional toolFeatures subtree = pattern that body and union onto base
+        // (feature-scope pattern), not the whole current solid.
+        const tools = f.data?.["toolFeatures"] as EditorFeature[] | undefined;
+        if (Array.isArray(tools) && tools.length > 0) {
+          const seed = rebuildDocument(oc, { features: tools, params: doc.params ?? {} });
+          if (!seed) throw new Error(`feature '${f.id}' (linearPattern): tool body is empty`);
+          const copies = linearPattern(oc, seed, dir, spacing, count);
+          seed.delete();
+          try {
+            let acc: Solid = base;
+            let owned: Solid | null = null;
+            for (const c of copies) {
+              const r = union(oc, acc, c);
+              if (owned) owned.delete();
+              if (!r.ok) throw new Error(`feature '${f.id}' (linearPattern tool union): ${r.error}`);
+              owned = r.solid;
+              acc = r.solid;
+            }
+            replace(acc);
+            owned = null;
+          } finally {
+            for (const c of copies) c.delete();
+          }
+        } else {
+          const copies = linearPattern(oc, base, dir, spacing, count);
+          try {
+            replace(unionAll(oc, copies, f.id));
+          } finally {
+            for (const c of copies) c.delete();
+          }
         }
         break;
       }

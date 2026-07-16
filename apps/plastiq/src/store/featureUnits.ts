@@ -34,12 +34,14 @@ export const LENGTH_PARAMS: Record<string, readonly string[]> = {
   box: ["dx", "dy", "dz"],
   extrude: ["height", "back"],
   cut: ["depth", "back"],
-  fillet: ["radius"],
-  chamfer: ["distance"],
+  fillet: ["radius", "radius2"],
+  chamfer: ["distance", "distance2"],
+  // Transform pivot (C7) is length so Properties/AI mm conversion is correct.
+  // (tx/ty/tz already listed under transform below.)
   shell: ["thickness"],
   // Revolve axis origin (ox,oy,oz) is a length so AI authoring in mm converts correctly.
   revolve: ["ox", "oy", "oz"],
-  transform: ["tx", "ty", "tz"],
+  transform: ["tx", "ty", "tz", "px", "py", "pz"],
   mirror: ["ox", "oy", "oz"],
   linearPattern: ["spacing"],
   circularPattern: ["ox", "oy", "oz"],

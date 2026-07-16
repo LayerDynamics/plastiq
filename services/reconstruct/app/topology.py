@@ -5,20 +5,24 @@ The deterministic paths shipped so far obtain shared edges *implicitly* (CSG boo
 FR-6 mechanism the spec calls "THE crux": compute the exact shared edge between two adjacent
 analytic surfaces by **surface–surface intersection** (`GeomAPI_IntSS`).
 
-It is exercised end-to-end by `reconstruct_cut_cylinder`, which handles a class of mixed
-analytic parts the existing `auto` chain does NOT — a cylinder trimmed by one or more
-*non-perpendicular* or *axis-parallel* planes (an obliquely-capped cylinder, a D-profile
-shaft). These break the axial symmetry `reconstruct_revolution` requires and are not the
-box±cylinder shape `reconstruct_csg` handles. The cylinder + each cutting plane are fitted
-deterministically; `GeomAPI_IntSS` confirms each plane actually crosses the cylinder (so a
-spurious plane is rejected); the solid is built by cutting a long fitted cylinder with each
-plane's half-space (the boolean engine computes the exact shared edges — the elliptical /
-straight junctions `GeomAPI_IntSS` predicts). Self-validated by volume vs. the watertight
-mesh; the caller falls back to faceted on any mismatch, so nothing is dropped (FR-8/NFR-1).
+It is exercised end-to-end by `reconstruct_cut_cylinder` and `reconstruct_cut_sphere`:
 
-Honest scope: this is the FR-6 mechanism applied to the cylinder-vs-plane family. The fully
+* **cut_cylinder** — a cylinder trimmed by one or more *non-perpendicular* or *axis-parallel*
+  planes (obliquely-capped cylinder, D-profile shaft). These break the axial symmetry
+  `reconstruct_revolution` requires and are not the box±cylinder shape `reconstruct_csg` handles.
+* **cut_sphere** — a sphere trimmed by a plane (hemisphere / spherical cap). A partial sphere
+  fails the single-primitive volume gate (full sphere would over-volume) and is not CSG/revolution.
+
+For both routes the curved surface + each cutting plane are fitted deterministically;
+`GeomAPI_IntSS` confirms each plane actually crosses the surface (so a spurious plane is
+rejected); the solid is built by half-space cuts (the boolean engine computes the exact shared
+edges — the elliptical / circular / straight junctions `GeomAPI_IntSS` predicts). Self-validated
+by volume vs. the watertight mesh; the caller falls back to faceted on any mismatch (FR-8/NFR-1).
+
+Honest scope: FR-6 applied to the cylinder-vs-plane and sphere-vs-plane families. The fully
 general per-region analytic reconstruction (arbitrary fitted curved faces with ideal trimmed
-rims) remains future work; the `GeomAPI_IntSS` primitive here is the reusable foundation for it.
+rims / analytic-rim sagitta) remains future work; the `GeomAPI_IntSS` primitive is the reusable
+foundation for it.
 """
 
 from __future__ import annotations
@@ -30,8 +34,8 @@ import networkx as nx
 import numpy as np
 import trimesh
 from OCC.Core.BRepAlgoAPI import BRepAlgoAPI_Cut
-from OCC.Core.BRepPrimAPI import BRepPrimAPI_MakeBox, BRepPrimAPI_MakeCylinder
-from OCC.Core.Geom import Geom_CylindricalSurface, Geom_Plane, Geom_Surface
+from OCC.Core.BRepPrimAPI import BRepPrimAPI_MakeBox, BRepPrimAPI_MakeCylinder, BRepPrimAPI_MakeSphere
+from OCC.Core.Geom import Geom_CylindricalSurface, Geom_Plane, Geom_SphericalSurface, Geom_Surface
 from OCC.Core.GeomAbs import GeomAbs_Circle, GeomAbs_Ellipse, GeomAbs_Line
 from OCC.Core.GeomAdaptor import GeomAdaptor_Curve
 from OCC.Core.GeomAPI import GeomAPI_IntSS
@@ -42,7 +46,7 @@ from OCC.Core.TopExp import TopExp_Explorer
 from .closure import verify_closure
 from .curved_faces import SolidResult, classify_faces
 from .detect import dominant_axis
-from .primitives import CylinderFit, fit_cylinder
+from .primitives import CylinderFit, fit_cylinder, fit_sphere
 
 _CURVE_KIND = {GeomAbs_Circle: "circle", GeomAbs_Ellipse: "ellipse", GeomAbs_Line: "line"}
 
@@ -204,3 +208,110 @@ def reconstruct_cut_cylinder(
     planar, curved, _freeform = classify_faces(solid)
     n_faces = planar + curved + _freeform
     return SolidResult(solid, True, True, rep.free_edges, rep.volume, n_faces, primitive="cut_cylinder")
+
+
+def reconstruct_cut_sphere(
+    vertices: np.ndarray, faces: np.ndarray, vol_tol: float = 0.04
+) -> Optional[SolidResult]:
+    """Sphere (or spherical region) trimmed by a plane → analytic solid (T37 / FR-6 family).
+
+    Uses `GeomAPI_IntSS` (sphere ∩ plane = circle) to confirm a real shared edge, then
+    boolean half-space cuts. Returns None when the mesh is not a clean sphere+plane cut
+    or the volume gate fails (→ faceted/fitted fallback).
+
+    Sphere parameters are fit only on the *curved* faces: planar-cap interior vertices do not
+    lie on the sphere and would bias a whole-mesh fit (a hemisphere's disc is full of in-plane
+    points). Half-space orientation is chosen by volume match so either cap-normal sign works.
+    """
+    v = np.asarray(vertices, dtype=float)
+    f = np.asarray(faces, dtype=np.int64)
+    mesh = trimesh.Trimesh(vertices=v, faces=f, process=False)
+    if not mesh.is_volume:
+        return None
+    mesh_volume = float(mesh.volume)
+    if mesh_volume <= 0:
+        return None
+
+    # Find planar cap region(s) first (same coplanar-component logic as cut_cylinder).
+    fn = np.asarray(mesh.face_normals, dtype=float)
+    centroids = np.asarray(mesh.triangles_center, dtype=float)
+    graph = nx.Graph()
+    graph.add_nodes_from(range(len(f)))
+    for a, b in mesh.face_adjacency:
+        if float(fn[a] @ fn[b]) > 0.999:
+            graph.add_edge(int(a), int(b))
+    planar_mask = np.zeros(len(f), dtype=bool)
+    planes: list[tuple[np.ndarray, np.ndarray]] = []
+    for comp in nx.connected_components(graph):
+        idx = np.fromiter(comp, dtype=np.int64)
+        if idx.size < 3:
+            continue
+        ns = fn[idx]
+        mean = ns.mean(axis=0)
+        norm = float(np.linalg.norm(mean))
+        if norm < 1e-9:
+            continue
+        mean = mean / norm
+        if float((ns @ mean).min()) < 0.9999:
+            continue
+        planar_mask[idx] = True
+        planes.append((mean, centroids[idx].mean(axis=0)))
+    if not planes or len(planes) > 4:
+        return None
+
+    # Algebraic sphere fit on curved-face vertices only (planar cap interiors are off-sphere).
+    side = ~planar_mask
+    if side.sum() < 8:
+        return None
+    side_vertices = mesh.vertices[np.unique(mesh.faces[side])]
+    try:
+        fit = fit_sphere(side_vertices)
+    except ValueError:
+        return None
+    diag = float(np.linalg.norm(mesh.bounds[1] - mesh.bounds[0]))
+    if fit.radius <= 0 or fit.rms > 0.02 * max(fit.radius, 1e-9):
+        return None
+    # Partial spheres must under-volume a full sphere; reject full spheres (single_primitive owns them).
+    full_vol = (4.0 / 3.0) * np.pi * fit.radius**3
+    if mesh_volume > 0.92 * full_vol:
+        return None
+
+    center = np.asarray(fit.center, dtype=float)
+    radius = float(fit.radius)
+    sph_surf = Geom_SphericalSurface(gp_Ax3(gp_Pnt(*center), gp_Dir(0, 0, 1)), radius)
+
+    # Try both half-space signs per plane; keep the orientation that volume-matches the mesh.
+    # (Face-normal direction of a tessellated cap is not a reliable "material side" signal.)
+    solid = BRepPrimAPI_MakeSphere(gp_Pnt(*center), radius).Solid()
+    used = 0
+    for normal, point in planes:
+        if not shared_edge_by_intersection(sph_surf, _plane_surface(point, normal)):
+            continue
+        best_shape = None
+        best_err = float("inf")
+        for sign in (1.0, -1.0):
+            tool = _halfspace_box(point, sign * normal, 4.0 * diag + 1e-3)
+            cut = BRepAlgoAPI_Cut(solid, tool)
+            cut.Build()
+            if not cut.IsDone() or not _is_solid(cut.Shape()):
+                continue
+            trial, rep = verify_closure(cut.Shape())
+            if not rep.is_solid or rep.volume <= 0:
+                continue
+            err = abs(rep.volume - mesh_volume) / mesh_volume
+            if err < best_err:
+                best_err = err
+                best_shape = trial
+        if best_shape is None:
+            return None
+        solid = best_shape
+        used += 1
+
+    if used == 0 or not _is_solid(solid):
+        return None
+    solid, rep = verify_closure(solid)
+    if not rep.is_solid or abs(rep.volume - mesh_volume) / mesh_volume > vol_tol:
+        return None
+    planar, curved, _freeform = classify_faces(solid)
+    n_faces = planar + curved + _freeform
+    return SolidResult(solid, True, True, rep.free_edges, rep.volume, n_faces, primitive="cut_sphere")

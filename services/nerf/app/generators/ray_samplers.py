@@ -28,6 +28,29 @@ class UniformSampler:
         return positions, t
 
 
+class ProposalSampler:
+    """Two-stage sampling schedule (T28 / ComparativeDeepDive §4.2 #3).
+
+    Coarse uniform samples act as a density *proposal*; a fine PDF pass
+    (`PDFSampler`) concentrates samples near the surface. This mirrors
+    nerfstudio's ProposalNetworkSampler shape without a separate density MLP —
+    the coarse field evaluation supplies the proposal weights (see
+    `BaseSurfaceModel._render`).
+    """
+
+    def __init__(self, n_coarse: int, n_fine: int, near: float, far: float, jitter: bool = True):
+        self.coarse = UniformSampler(n_coarse, near, far, jitter=jitter)
+        self.fine = PDFSampler(n_fine)
+        self.n_coarse = n_coarse
+        self.n_fine = n_fine
+
+    def sample_coarse(self, origins: mx.array, directions: mx.array, key: mx.array | None = None):
+        return self.coarse(origins, directions, key=key)
+
+    def sample_fine(self, t: mx.array, weights: mx.array, key: mx.array) -> mx.array:
+        return self.fine(t, weights, key)
+
+
 class PDFSampler:
     def __init__(self, n_samples: int):
         self.n_samples = n_samples

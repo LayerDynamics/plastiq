@@ -11,6 +11,9 @@
   },
   "scripts": {
     "dev": "pnpm --filter @plastiq/app run dev",
+    "dev:desktop": "pnpm --filter @plastiq/app run dev",
+    "dev:web": "pnpm --filter @plastiq/app run dev:web",
+    "dev:mobile": "pnpm --filter @plastiq/app run dev:mobile",
     "build": "pnpm --filter @plastiq/app run build",
     "typecheck": "pnpm -r --if-present run typecheck",
     "test": "vitest run",

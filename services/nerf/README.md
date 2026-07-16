@@ -31,6 +31,24 @@ app/utils              config, deterministic MLX seeding, math
   Laplace SDF→density transform + the eikonal loss; its watertight zero-level-set mesh is the cleanest
   input for reconstruct→B-rep. The **default** `/train` model.
 
+## Production defaults (`method=neus`, T26–T28)
+
+| Knob | Default | Notes |
+|------|---------|--------|
+| `learnable_beta` | on | Anneals Laplace surface sharpness |
+| `grad_clip` | 1.0 | Stabilizes early training |
+| `warmup_frac` / `lr_final_frac` | 0.05 / 0.1 | Linear warmup + cosine decay |
+| `background` | white `(1,1,1)` | Empty rays match common white backdrops |
+| `importance_samples` | **32** | Hierarchical **PDF fine pass** after uniform coarse samples (omit / null uses this; `0` = coarse-only) |
+| Weight-norm on SDF trunk | **off** | `SDFField(use_weight_norm=True)` opt-in — short-train tests regress under WN; **not** a production default |
+
+**Honest quality claims (M3):** the production neus path uses **hierarchical PDF sampling**, not a
+separate nerfstudio-style **proposal density MLP** (`ProposalNetworkSampler`). Code named
+`ProposalSampler` is a helper around uniform+PDF, not full sdfstudio proposal nets. Weight-norm
+defaults **off**. Do not claim research-stack parity.
+
+**Hardware:** Apple Silicon (MLX). Real photos do **not** need silhouette masks; masks help only when present (synthetic with alpha). Expect minutes–hours depending on `iters` and view count (cap 300 images).
+
 ## API (submit → poll, mirrors capture/reconstruct)
 
 The frozen wire contract is [SPEC-11 §5](../../docs/specs/SPEC-11-nerf-service.md); the `@plastiq/nerf`

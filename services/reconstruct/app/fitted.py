@@ -13,8 +13,10 @@ Freeform faces are APPROXIMATIONS (unlike the exact planar collapse), so they ar
 twice: a per-region accuracy gate (the fitted surface must stay within a fraction of the
 mesh size of the region's vertices) and, after assembly, a volume check against the mesh —
 if the freeform-enhanced solid drifts, the whole part is rebuilt faceted-only. Closed
-regions with no boundary loop (e.g. a whole organic blob) can't be one filled patch and stay
-faceted — a fundamental limit of single-patch filling, not a fallback bug.
+regions with no boundary loop (e.g. a whole organic blob) can't be one filled patch via
+``MakeFilling``; when ``RECONSTRUCT_NURBS_URL`` is set, ``fitted_shape`` first tries the
+nurbs service **closed** mode (6-patch cube-map solid, T38) and only then falls through to
+the faceted baseline.
 """
 
 from __future__ import annotations
@@ -37,6 +39,7 @@ from OCC.Core.TopAbs import TopAbs_SHELL, TopAbs_SOLID
 from OCC.Core.TopExp import TopExp_Explorer
 from OCC.Core.TopoDS import TopoDS_Face, TopoDS_Shape, topods
 
+from . import nurbs_delegate
 from .closure import verify_closure
 from .freeform import face_max_point_error, freeform_region_face
 from .segment import planar_segments
@@ -196,6 +199,22 @@ def fitted_shape(
     # Accuracy gate scales with the part: 1% of the mesh bounding-box diagonal.
     diag = float(np.linalg.norm(mesh.bounds[1] - mesh.bounds[0])) if mesh.bounds is not None else 0.0
     accuracy_tol = max(diag * 0.01, 1e-6)
+
+    # T38: whole closed genus-0 organic mesh → nurbs closed mode (when RECONSTRUCT_NURBS_URL set).
+    # Skip when the mesh is mostly planar facets (mechanical parts belong to the local fitted path).
+    if freeform and nurbs_delegate._nurbs_url() and len(facets) == 0 and len(leftover) == len(mesh.faces):
+        closed = nurbs_delegate.delegate_closed_solid(mesh)
+        if closed is not None:
+            return FittedResult(
+                closed.shape,
+                len(mesh.faces),
+                planar_faces=0,
+                triangle_faces=0,
+                is_solid=closed.is_solid,
+                is_valid=closed.is_valid,
+                freeform_faces=closed.n_faces,
+                free_edges=closed.free_edges,
+            )
 
     result = _assemble(mesh, facets, leftover, sew_tol, freeform, accuracy_tol, errors)
     if not freeform or result.freeform_faces == 0:

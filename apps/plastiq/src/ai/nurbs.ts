@@ -9,7 +9,13 @@
 // stay the reconstruct service's job. The dependency direction is app → @plastiq/nurbs, never the
 // reverse.
 
-import { fitNurbs, type NurbsOptions, type NurbsReport } from "@plastiq/nurbs";
+import {
+  cancelJob,
+  fitNurbs,
+  type NurbsCancelOptions,
+  type NurbsOptions,
+  type NurbsReport,
+} from "@plastiq/nurbs";
 
 import { useAiStore } from "./aiStore.js";
 import { stepToImportDocument } from "./reconstruct.js";
@@ -30,6 +36,18 @@ export interface FitMeshToCadDeps {
   load: (doc: CadDocument) => void;
 }
 
+/** Resolve connection knobs from settings unless the caller overrides them. */
+function withNurbsSettings<T extends NurbsCancelOptions>(opts: T): T {
+  const settings = useAiStore.getState().settings;
+  const baseURL = opts.baseURL ?? settings?.nurbsBaseURL;
+  const apiKey = opts.apiKey ?? settings?.nurbsApiKey;
+  return {
+    ...opts,
+    ...(baseURL ? { baseURL } : {}),
+    ...(apiKey ? { apiKey } : {}),
+  };
+}
+
 /** Fit smooth NURBS surfaces to a mesh (base64 GLB) and load the resulting STEP as an editable
  * B-rep document. Returns the loaded CadDocument and the FR-9 fitting report so the caller can
  * label the result honestly (shell vs solid, faceted fallbacks — NFR-5).
@@ -37,23 +55,27 @@ export interface FitMeshToCadDeps {
  * Resolution (SPEC-12 §6.1, the nerf.ts precedent): a caller-supplied `opts.baseURL`/`opts.apiKey`
  * wins; otherwise the persisted `nurbsBaseURL`/`nurbsApiKey` settings are threaded into `fitNurbs`
  * (the key is sent as `Authorization: Bearer <key>` on every request); neither ⇒ the client
- * default base URL and no auth header (the open dev service). */
+ * default base URL and no auth header (the open dev service).
+ *
+ * `opts.onJob` yields the job id so the panel can cancel it mid-poll via {@link cancelFit}. */
 export async function fitMeshToCad(
   glbBase64: string,
   deps: FitMeshToCadDeps,
   opts: NurbsOptions = {},
   name = "Fitted mesh",
 ): Promise<{ doc: CadDocument; report: NurbsReport }> {
-  const settings = useAiStore.getState().settings;
-  const baseURL = opts.baseURL ?? settings?.nurbsBaseURL;
-  const apiKey = opts.apiKey ?? settings?.nurbsApiKey;
-  const result = await fitNurbs(
-    { glbBase64 },
-    { ...opts, ...(baseURL ? { baseURL } : {}), ...(apiKey ? { apiKey } : {}) },
-  );
+  const result = await fitNurbs({ glbBase64 }, withNurbsSettings(opts));
   const doc = stepToImportDocument(result.step, name);
   deps.load(doc);
   return { doc, report: result.report };
+}
+
+/** Cancel a NURBS fit job server-side (`DELETE /jobs/{id}`, M4b) — the counterpart to
+ * {@link fitMeshToCad} for the panel's Cancel: aborting the client-side polling alone would leave
+ * the server fitting for nobody. The job id comes from `opts.onJob`. Resolves on 204 and on 404
+ * (already gone). Auth/base URL are threaded exactly like the fit path. */
+export async function cancelFit(jobId: string, opts: NurbsCancelOptions = {}): Promise<void> {
+  await cancelJob(jobId, withNurbsSettings(opts));
 }
 
 /** The honest FR-9/NFR-5 one-liner for the panel status (the reconstruct "converted to CAD — …"

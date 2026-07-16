@@ -20,9 +20,10 @@ import base64
 import functools
 import logging
 import os
+import secrets
 
 import numpy as np
-from fastapi import FastAPI, HTTPException, Response
+from fastapi import Depends, FastAPI, Header, HTTPException, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
@@ -30,7 +31,7 @@ from .completion_mlx import CompletionNet, fit_completion
 from .geometry import PinholeCamera, depth_to_normals, unproject_depth
 from .jobs import JobState, JobStore
 from .logging_setup import setup_logging
-from .pipeline import complete_partial, reconstruct_surface
+from .pipeline import complete_partial_job, reconstruct_surface_job
 
 setup_logging()
 logger = logging.getLogger(__name__)
@@ -55,12 +56,31 @@ app.add_middleware(CORSMiddleware, allow_origins=_origins, allow_methods=["*"], 
 
 store = JobStore()
 
+
+def _api_key() -> str | None:
+    """Optional bearer key (CAPTURE_API_KEY). Read per-request so tests can monkeypatch."""
+    return os.environ.get("CAPTURE_API_KEY")
+
+
+def require_auth(authorization: str | None = Header(default=None)) -> None:
+    """If CAPTURE_API_KEY is set, require Authorization: Bearer <key> on mutating routes (T36)."""
+    key = _api_key()
+    if not key:
+        return
+    expected = f"Bearer {key}"
+    if authorization is None or not secrets.compare_digest(
+        authorization.encode("utf-8"), expected.encode("utf-8")
+    ):
+        raise HTTPException(status_code=401, detail="missing or invalid API key")
+
+
 # Startup config summary (env-derived, no secrets) — one line an operator can grep for.
 logger.info(
-    "plastiq-capture configured: cors_origins=%s (CAPTURE_CORS_ORIGINS), max_points=%d "
-    "(CAPTURE_MAX_POINTS), max_concurrent_jobs=%d (CAPTURE_MAX_CONCURRENT_JOBS), "
+    "plastiq-capture configured: cors_origins=%s (CAPTURE_CORS_ORIGINS), auth=%s (CAPTURE_API_KEY), "
+    "max_points=%d (CAPTURE_MAX_POINTS), max_concurrent_jobs=%d (CAPTURE_MAX_CONCURRENT_JOBS), "
     "completion_checkpoint=%s (CAPTURE_COMPLETION_CHECKPOINT)",
     _origins,
+    "bearer" if _api_key() else "open (dev)",
     MAX_POINTS,
     _MAX_CONCURRENT,
     "set" if os.environ.get("CAPTURE_COMPLETION_CHECKPOINT") else "unset (synthetic demo completer)",
@@ -84,7 +104,12 @@ class JobView(BaseModel):
 
 @app.get("/health")
 def health() -> dict:
-    return {"status": "ok", "service": "plastiq-capture"}
+    return {
+        "status": "ok",
+        "service": "plastiq-capture",
+        # True when /complete uses synthetic demo weights (T24/M2 honesty).
+        "completion_demo_weights": _completion_using_demo_weights(),
+    }
 
 
 class DepthBody(BaseModel):
@@ -147,7 +172,7 @@ def points_from_depth(body: DepthBody) -> dict:
     return {"points": pts.tolist(), "normals": nrm.tolist()}
 
 
-@app.post("/capture", response_model=JobView)
+@app.post("/capture", response_model=JobView, dependencies=[Depends(require_auth)])
 async def submit_capture(body: CaptureBody) -> JobView:
     if len(body.points) > MAX_POINTS:
         logger.warning("rejected /capture submit: %d points exceeds the %d cap", len(body.points), MAX_POINTS)
@@ -169,18 +194,12 @@ async def submit_capture(body: CaptureBody) -> JobView:
         logger.warning("rejected /capture submit: only %d points (need at least 16)", len(pts))
         raise HTTPException(status_code=400, detail="need at least 16 points")
 
-    async def work() -> dict:
-        # MLX fit + marching cubes is CPU/GPU-bound → run off the event loop.
-        res = await asyncio.to_thread(
-            reconstruct_surface, pts, nrm, iters=body.iters, grid_res=body.grid_res
-        )
-        return {
-            "glb_base64": base64.b64encode(res.to_glb()).decode("ascii"),
-            "vertices": res.vertices,
-            "faces": res.faces,
-        }
-
-    job = await store.submit(work)
+    # Process-isolated so DELETE cancel force-kills the MLX worker (P0.2), not only drops the record.
+    job = await store.submit_process(
+        reconstruct_surface_job,
+        args=(pts.tolist(), nrm.tolist()),
+        kwargs={"iters": body.iters, "grid_res": body.grid_res},
+    )
     return JobView(id=job.id, state=job.state.value)
 
 
@@ -189,6 +208,11 @@ class CompleteBody(BaseModel):
 
     points: list[list[float]]
     grid_res: int = 48
+
+
+def _completion_using_demo_weights() -> bool:
+    """True when `/complete` uses the synthetic sphere-family demo (no checkpoint env)."""
+    return not bool(os.environ.get("CAPTURE_COMPLETION_CHECKPOINT"))
 
 
 @functools.lru_cache(maxsize=1)
@@ -207,7 +231,7 @@ def _completion_model() -> CompletionNet:
     return fit_completion(iters=int(os.environ.get("CAPTURE_COMPLETION_ITERS", "500")), seed=0)
 
 
-@app.post("/complete", response_model=JobView)
+@app.post("/complete", response_model=JobView, dependencies=[Depends(require_auth)])
 async def submit_complete(body: CompleteBody) -> JobView:
     if len(body.points) > MAX_POINTS:
         logger.warning(
@@ -230,16 +254,12 @@ async def submit_complete(body: CompleteBody) -> JobView:
         logger.warning("rejected /complete submit: only %d points (need at least 16)", len(pts))
         raise HTTPException(status_code=400, detail="need at least 16 points")
 
-    async def work() -> dict:
-        net = await asyncio.to_thread(_completion_model)
-        res = await asyncio.to_thread(complete_partial, net, pts, grid_res=body.grid_res)
-        return {
-            "glb_base64": base64.b64encode(res.to_glb()).decode("ascii"),
-            "vertices": res.vertices,
-            "faces": res.faces,
-        }
-
-    job = await store.submit(work)
+    # Process-isolated so DELETE cancel force-kills the completion worker (P0.2).
+    job = await store.submit_process(
+        complete_partial_job,
+        args=(pts.tolist(),),
+        kwargs={"grid_res": body.grid_res},
+    )
     return JobView(id=job.id, state=job.state.value)
 
 
@@ -263,10 +283,18 @@ def job_result(job_id: str) -> dict:
     return job.result
 
 
-@app.delete("/jobs/{job_id}", status_code=204)
+@app.delete("/jobs/{job_id}", status_code=204, dependencies=[Depends(require_auth)])
 def cancel_job(job_id: str) -> Response:
-    """Drop a job record (client cancel/cleanup). An in-flight worker thread cannot be force-killed,
-    so its eventual result is simply discarded; status/result for this id return 404 afterwards."""
-    if store.remove(job_id) is None:
+    """Cancel a job: force-stop the worker process (if running) and mark the job cancelled (P0.2).
+
+    In-flight MLX work runs in a spawn child process and is terminated; status returns
+    ``failed`` with ``error=cancelled``. A second DELETE removes the terminal record (404 after).
+    """
+    job = store.get(job_id)
+    if job is None:
         raise HTTPException(status_code=404, detail="no such job")
+    if job.state in (JobState.completed, JobState.failed):
+        store.remove(job_id)
+        return Response(status_code=204)
+    store.cancel(job_id)
     return Response(status_code=204)

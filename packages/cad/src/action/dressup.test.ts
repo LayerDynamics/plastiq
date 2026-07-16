@@ -47,6 +47,17 @@ describe("fillet", () => {
     box.delete();
     filleted.delete();
   });
+
+  it("variable-radius fillet (endRadius) produces a valid solid (T20)", () => {
+    const { edge } = refs(mm(60), mm(40), mm(30));
+    const box = makeBox(oc, mm(60), mm(40), mm(30));
+    const filleted = fillet(oc, box, [edge], mm(2), { endRadius: mm(5) });
+    expect(filleted.isValid()).toBe(true);
+    expect(filleted.volume()).toBeLessThan(box.volume());
+    expect(filleted.volume()).toBeGreaterThan(0);
+    box.delete();
+    filleted.delete();
+  });
 });
 
 describe("chamfer", () => {
@@ -60,6 +71,27 @@ describe("chamfer", () => {
     expect(faceCount(chamfered)).toBeGreaterThan(before);
     expect(chamfered.volume()).toBeLessThan(box.volume());
     expect(chamfered.volume()).toBeGreaterThan(box.volume() * 0.95);
+    box.delete();
+    chamfered.delete();
+  });
+
+  it("two-distance chamfer with face produces a valid solid (T20)", () => {
+    // Edge shared by top (+Z) and a side — use top as the Dis1 face.
+    const { top } = refs(mm(60), mm(40), mm(30));
+    const box = makeBox(oc, mm(60), mm(40), mm(30));
+    const mesh = tessellateTagged(oc, box);
+    // Pick an edge that has +Z among its faceNormals.
+    const edge = mesh.edges.find(
+      (e) =>
+        Math.abs(e.faceNormals[0][2]) > 0.9 || Math.abs(e.faceNormals[1][2]) > 0.9,
+    );
+    expect(edge).toBeDefined();
+    const chamfered = chamfer(oc, box, [{ faceNormals: edge!.faceNormals }], mm(2), {
+      distance2: mm(4),
+      face: top,
+    });
+    expect(chamfered.isValid()).toBe(true);
+    expect(chamfered.volume()).toBeLessThan(box.volume());
     box.delete();
     chamfered.delete();
   });

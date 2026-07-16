@@ -10,7 +10,7 @@
 /** Package version, surfaced for tooling/diagnostics. */
 export const CAPTURE_VERSION = "0.1.0" as const;
 
-export { capturePointCloud, completePartialScan } from "./client.js";
+export { capturePointCloud, completePartialScan, cancelJob } from "./client.js";
 export { parsePointCloud, parsePlyAscii, parseXyz, parsePointCloudJson, type ParsedPointCloud } from "./pointcloud.js";
 export { MIN_POINTS } from "./types.js";
 export type {

@@ -417,3 +417,114 @@ describe("MeshConvertSection — Fit smooth CAD (NURBS) alongside Convert to CAD
     expect((screen.getByTestId("mesh-nurbs-run") as HTMLButtonElement).disabled).toBe(false);
   });
 });
+
+describe("MeshConvertSection — Cancel aborts polling AND DELETEs the server job (M4b)", () => {
+  const meshDoc: MeshDoc = {
+    kind: "mesh",
+    name: "gen",
+    glb: "R0xC",
+    source: { mode: "img3d", providerId: "fal:tripo" },
+  };
+
+  /** Script health + submit, then hang on status until AbortSignal fires; record DELETEs.
+   * `submitted` flips once the job id is returned (onJob handle is live for Cancel). */
+  function installHangingJob(opts: { submitPath: string; jobId: string }): {
+    deletes: { url: string; method: string; auth?: string }[];
+    submitted: () => boolean;
+  } {
+    const deletes: { url: string; method: string; auth?: string }[] = [];
+    let submitted = false;
+    globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
+      const u = String(url);
+      const method = init?.method ?? "GET";
+      if (method === "DELETE") {
+        deletes.push({
+          url: u,
+          method,
+          auth: (init?.headers as Record<string, string> | undefined)?.["Authorization"],
+        });
+        return { ok: true, status: 204, json: async () => ({}) };
+      }
+      if (u.endsWith("/health")) return { ok: true, status: 200, json: async () => ({ status: "ok" }) };
+      if (u.endsWith(opts.submitPath)) {
+        submitted = true;
+        return { ok: true, status: 200, json: async () => ({ id: opts.jobId, state: "queued" }) };
+      }
+      if (u.endsWith("/status")) {
+        // Hang until the panel aborts — keeps Cancel visible and jobId live for DELETE.
+        return new Promise((_resolve, reject) => {
+          const signal = init?.signal;
+          const abort = (): void => reject(new DOMException("aborted", "AbortError"));
+          if (signal?.aborted) abort();
+          else signal?.addEventListener("abort", abort);
+        });
+      }
+      throw new Error(`unexpected url ${u} method ${method}`);
+    }) as unknown as typeof fetch;
+    return { deletes, submitted: () => submitted };
+  }
+
+  it("Convert to CAD: Cancel DELETEs reconstruct /jobs/{id} with the persisted key", async () => {
+    useAiStore.setState({
+      settings: {
+        providerKey: "ollama",
+        providerId: "openai-compatible",
+        model: "qwen2.5",
+        apiKeys: {},
+        reconstructApiKey: "recon-secret",
+      },
+      loaded: true,
+    });
+    const { deletes, submitted } = installHangingJob({ submitPath: "/reconstruct", jobId: "job-recon-42" });
+    useProjectsStore.setState({ activeMeshDoc: meshDoc, status: "" });
+    render(<GenerationPanel />);
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("mesh-convert-run"));
+    });
+    // Wait until submit returned (onJob has the cancel handle) before clicking Cancel.
+    await waitFor(() => expect(submitted()).toBe(true));
+    await waitFor(() => expect(screen.getByTestId("mesh-convert-cancel")).toBeTruthy());
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("mesh-convert-cancel"));
+    });
+
+    await waitFor(() => expect(deletes.some((d) => d.method === "DELETE")).toBe(true));
+    expect(deletes[0]?.url).toBe("http://localhost:8000/jobs/job-recon-42");
+    expect(deletes[0]?.auth).toBe("Bearer recon-secret");
+    // Abort is a clean cancel — error slot stays empty.
+    expect(screen.queryByTestId("mesh-convert-error")).toBeNull();
+  });
+
+  it("Fit smooth CAD: Cancel DELETEs nurbs /jobs/{id} with the persisted key", async () => {
+    useAiStore.setState({
+      settings: {
+        providerKey: "ollama",
+        providerId: "openai-compatible",
+        model: "qwen2.5",
+        apiKeys: {},
+        nurbsApiKey: "nurbs-secret",
+      },
+      loaded: true,
+    });
+    const { deletes, submitted } = installHangingJob({ submitPath: "/fit", jobId: "job-nurbs-7" });
+    useProjectsStore.setState({ activeMeshDoc: meshDoc, status: "" });
+    render(<GenerationPanel />);
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("mesh-nurbs-run"));
+    });
+    await waitFor(() => expect(submitted()).toBe(true));
+    await waitFor(() => expect(screen.getByTestId("mesh-convert-cancel")).toBeTruthy());
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("mesh-convert-cancel"));
+    });
+
+    await waitFor(() => expect(deletes.some((d) => d.method === "DELETE")).toBe(true));
+    expect(deletes[0]?.url).toBe("http://localhost:8003/jobs/job-nurbs-7");
+    expect(deletes[0]?.auth).toBe("Bearer nurbs-secret");
+    expect(screen.queryByTestId("mesh-convert-error")).toBeNull();
+  });
+});

@@ -1,6 +1,7 @@
 """Plastiq photogrammetry service (FastAPI) — unposed photos → poses + point clouds, via submit→poll.
 
-POST /solve { images, names?, matching?, dense?, undistort?, max_features?, seed? } → { id, state }
+POST /solve { images, names?, matching?, dense?, undistort?, max_features?, seed?,
+              sparse_max_dim? } → { id, state }
 GET  /jobs/{id}/status → { id, state, error? }
 GET  /jobs/{id}/result → { transforms_json, images_undistorted, sparse_ply_base64,
                            dense_ply_base64, report }  (200 completed; 409 not yet; 500 failed; 404)
@@ -91,6 +92,11 @@ class SolveBody(BaseModel):
     undistort: bool = True
     max_features: int = Field(4096, ge=512, le=16384)
     seed: int = Field(0, ge=0)
+    # T39: downscale for sparse SfM while dense MVS keeps full-res (ComparativeDeepDive: sparse
+    # thresholds are pixel-absolute and tuned ~640px; full-res sparse can collapse registration).
+    # None ⇒ no downscale (both stages run at native resolution). Dense always uses the original
+    # uploads when sparse_max_dim is set (pipeline dense_images=full).
+    sparse_max_dim: int | None = Field(None, ge=256, le=4096)
 
     @model_validator(mode="after")
     def _check(self) -> "SolveBody":
@@ -143,8 +149,30 @@ def _load_pipeline_solve(payload: dict) -> dict:
         exif_sources.append(raw)
         images.append(np.asarray(Image.open(io.BytesIO(raw)).convert("RGB")))
 
+    # T39: sparse_max_dim → register at reduced res, densify at full native resolution.
+    sparse_max_dim = payload.get("sparse_max_dim")
+    sparse_images = images
+    dense_images = None
+    if sparse_max_dim is not None:
+        sparse_images = []
+        for im in images:
+            h, w = im.shape[:2]
+            longest = max(h, w)
+            if longest > sparse_max_dim:
+                scale = sparse_max_dim / float(longest)
+                new_w = max(1, int(round(w * scale)))
+                new_h = max(1, int(round(h * scale)))
+                pil = Image.fromarray(im).resize((new_w, new_h), Image.Resampling.BILINEAR)
+                sparse_images.append(np.asarray(pil))
+            else:
+                sparse_images.append(im)
+        # Only pass dense_images when we actually downscaled at least one frame (otherwise densify
+        # at the same resolution as sparse — same as the historical path).
+        if any(s.shape[:2] != f.shape[:2] for s, f in zip(sparse_images, images)):
+            dense_images = images
+
     result = pipeline.solve(
-        images,
+        sparse_images,
         exif_images=exif_sources,
         dense=payload.get("dense", True),
         matching=payload.get("matching", "exhaustive"),
@@ -152,6 +180,7 @@ def _load_pipeline_solve(payload: dict) -> dict:
         seed=payload.get("seed", 0),
         image_names=payload.get("names"),
         undistort=payload.get("undistort", True),
+        dense_images=dense_images,
     )
 
     def _b64(text: str) -> str:

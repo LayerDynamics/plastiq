@@ -74,18 +74,27 @@ async function uploadScan(name: string, content: string): Promise<void> {
 }
 
 /** A fetch scripting the full service conversation. `submitPath` is the expected job endpoint;
- * `neverFinish` keeps status at "running" forever (for abort tests). */
-function installScriptedFetch(opts: { submitPath: string; neverFinish?: boolean }): {
+ * `neverFinish` keeps status at "running" forever (for abort tests).
+ * `demoWeights` sets result.demo_weights (M2 complete honesty). */
+function installScriptedFetch(opts: {
+  submitPath: string;
+  neverFinish?: boolean;
+  demoWeights?: boolean;
+}): {
   spy: ReturnType<typeof vi.fn>;
   submitBody: () => Record<string, unknown> | undefined;
 } {
   let body: Record<string, unknown> | undefined;
   const spy = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
     const u = String(url);
+    const method = (init?.method ?? "GET").toUpperCase();
     if (u.endsWith("/health")) return { ok: true, status: 200, json: async () => ({ status: "ok" }) };
-    if (u.endsWith(opts.submitPath)) {
+    if (u.endsWith(opts.submitPath) && method === "POST") {
       body = init?.body ? (JSON.parse(init.body as string) as Record<string, unknown>) : undefined;
       return { ok: true, status: 200, json: async () => ({ id: "job-9", state: "queued" }) };
+    }
+    if (method === "DELETE" && u.includes("/jobs/")) {
+      return { ok: true, status: 204, json: async () => ({}) };
     }
     if (u.endsWith("/status")) {
       return {
@@ -95,7 +104,16 @@ function installScriptedFetch(opts: { submitPath: string; neverFinish?: boolean 
       };
     }
     if (u.endsWith("/result")) {
-      return { ok: true, status: 200, json: async () => ({ glb_base64: "R0xCdGVzdA==", vertices: 8, faces: 12 }) };
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          glb_base64: "R0xCdGVzdA==",
+          vertices: 8,
+          faces: 12,
+          ...(opts.demoWeights ? { demo_weights: true } : {}),
+        }),
+      };
     }
     throw new Error(`unexpected url ${u}`);
   });
@@ -306,9 +324,9 @@ describe("CaptureScanSection — configured captureBaseURL (settings override)",
   });
 });
 
-describe("CaptureScanSection — abort", () => {
-  it("Cancel mid-poll lands on 'cancelled' (no error), and the section is idle again", async () => {
-    installScriptedFetch({ submitPath: "/capture", neverFinish: true });
+describe("CaptureScanSection — abort + server cancel (M4)", () => {
+  it("Cancel mid-poll DELETEs the job and lands on 'cancelled' (no error)", async () => {
+    const { spy } = installScriptedFetch({ submitPath: "/capture", neverFinish: true });
     const store = stubProjectsStore();
     render(<GenerationPanel />);
     await uploadScan("scan.ply", PLY_16);
@@ -322,6 +340,14 @@ describe("CaptureScanSection — abort", () => {
       fireEvent.click(screen.getByTestId("capture-cancel-btn"));
     });
 
+    // Server-side cancel: DELETE /jobs/job-9 (force-stops the spawn worker).
+    await waitFor(() => {
+      const del = spy.mock.calls.find(
+        (c) => String(c[0]).includes("/jobs/job-9") && (c[1]?.method ?? "").toUpperCase() === "DELETE",
+      );
+      expect(del).toBeTruthy();
+    });
+
     // The client notices the abort on its next poll wake-up (1s interval) and throws AbortError,
     // which the section renders as a "cancelled" status — not an error.
     await waitFor(() => expect(screen.getByTestId("capture-status").textContent).toBe("cancelled"), {
@@ -330,5 +356,26 @@ describe("CaptureScanSection — abort", () => {
     expect(screen.queryByTestId("capture-error")).toBeNull();
     expect(store.opened()).toBeNull();
     expect((screen.getByTestId("capture-run-btn") as HTMLButtonElement).disabled).toBe(false);
+  });
+});
+
+describe("CaptureScanSection — demo weights honesty (M2)", () => {
+  it("surfaces a demo-weights banner when /complete returns demo_weights: true", async () => {
+    installScriptedFetch({ submitPath: "/complete", demoWeights: true });
+    const store = stubProjectsStore();
+    render(<GenerationPanel />);
+    await uploadScan("partial.xyz", XYZ_16);
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("capture-run-btn"));
+    });
+
+    await waitFor(() => expect(store.opened()).toBe("mesh-99"));
+    await waitFor(() => {
+      const banner = screen.getByTestId("capture-demo-weights").textContent ?? "";
+      expect(banner).toMatch(/Demo completion weights/i);
+      expect(banner).toMatch(/CAPTURE_COMPLETION_CHECKPOINT/i);
+    });
+    expect(screen.getByTestId("capture-status").textContent).toMatch(/demo weights/i);
   });
 });

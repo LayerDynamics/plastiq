@@ -1,282 +1,470 @@
-# Grok.md — Deep Code Investigation: CAD Actions (extrude, sweep, and the full feature pipeline)
+# Grok.md — Deep Code Analysis: Plastiq CAD + ML (working tree)
 
-**Date:** 2026-07-09  
-**Branch:** `code-review-fixes`  
-**Method:** `/deep-code-investigation` — exhaustive multi-layer trace of every CAD feature action from UI entry → store document → geometry worker rebuild → `@plastiq/cad` kernel → OCCT embind, with `file:line` evidence.  
-**Product thesis:** Plastiq is a fully client-side parametric CAD editor: sketch a 2D profile, build an ordered B-rep feature history on a real OCCT-via-WASM kernel, select faces/edges, assemble with mates/joints, and export/simulate. The marquee path is **sketch → feature action → rebuild → tagged mesh in the viewport**.
-
----
-
-## Phase 1 — Investigation scope (framing)
-
-| # | Question | Answer |
-|---|----------|--------|
-| 1 | **Entry points** | (a) Ribbon/context-menu `ActionDef.run` (`apps/plastiq/src/actions/registry.ts`, `three/contextmenu/config.ts`); (b) AI `build_part` → `toCadDocument` (`ai/tools/schema.ts`); (c) direct store `addFeature` / load; (d) kernel unit tests calling `extrude`/`sweep`/… |
-| 2 | **Terminal effect** | A single owned OCCT `Solid` (or null), tessellated to a `TaggedMesh` in the geometry worker, published to the viewport; optional STEP/IGES/glTF export. |
-| 3 | **Boundaries crossed** | UI (React/Zustand) → worker postMessage (`protocol.ts`) → `rebuildDocument` → `@plastiq/cad` pure TS wrappers → OCCT WASM embind heap. |
-| 4 | **Looking for** | Gaps between advertised CAD capability and actual implementation of extrude, sweep, revolve, loft, cut, dress-ups, patterns, booleans — wiring, data contracts, cleanup, and missing options. |
+**Date:** 2026-07-16  
+**Branch:** `code-review-fixes` (working tree at analysis time)  
+**Method:** Full read of production modules under `apps/plastiq`, `packages/{cad,sim,capture,nerf,nurbs,photogrammetry,recon,recm,ml}`, and all five `services/*`, plus bring-up (`scripts/dev-services.sh`). Claims are verified at `path` / symbol; prior audit checklists are re-checked against **this** tree, not treated as truth.  
+**Product rule applied:** **local services never use API keys.** Optional Bearer keys if an env var is set are a deployment option, not a completeness gap and not a user setup step for local studio.
 
 ---
 
-## 1. Executive summary
+## 1. Product thesis
 
-Plastiq’s CAD kernel (`packages/cad/src/action/*`) implements a real, tested set of B-rep feature ops (extrude, extrude-to-face, revolve, loft, sweep, cut-via-boolean, fillet/chamfer/shell/draft, transform/mirror, linear/circular pattern, union/subtract/intersect) against OpenCascade WASM. The editor rebuild loop (`apps/plastiq/src/worker/rebuild.ts`) is the single feature-tree evaluator that maps document features onto those ops.
+**Plastiq** is two product surfaces sharing one canvas:
 
-**Most important findings:** (1) several rebuild bindings are narrower than the kernel API (revolve origin fixed at world origin; sweep profile forced onto world-XY; loft sections only stack on XY+z); (2) `extrude()` lacks the try/finally failure-path cleanup every peer op has, so a `Standard_Failure` from `MakePrism` can leak WASM handles in the long-lived worker; (3) spine paths are polyline-only despite rebuild/UI comments advertising “polyline/arc”; (4) cut lacks direction/two-sided options that extrude already has; (5) loft/sweep ribbon actions inject hard-coded demo geometry rather than a real selection-driven authoring path.
+1. **Parametric solid modeling** — The user authors a feature tree (sketch profiles → extrude/cut/revolve/loft/sweep/dress-ups/booleans/patterns). A web worker rebuilds the tree with **Open CASCADE WASM** (`@plastiq/cad`) into a solid that is tessellated and shown in a Three.js viewport. Assembly mates lower into `@plastiq/sim`. This is the marquee “CAD studio” path.
 
----
+2. **Scan / generative → editable CAD** — Unposed photos, oriented point clouds, or triangle meshes enter via the AI/canvas panel and local **HTTP services** on ports 8000–8004. The output is a mesh and/or STEP that imports into the same document model. Services are separate processes (Python + MLX/OCCT), not in-process libraries.
 
-## 2. Entry points
-
-| # | Entry | File:line | What it does |
-|---|-------|-----------|--------------|
-| E1 | Context menu Extrude/Cut/Revolve/Fillet/… | `apps/plastiq/src/three/contextmenu/config.ts:148–239` | `addFeature` with default params + dress-up refs from picks |
-| E2 | Ribbon Loft/Sweep/Mirror/Pattern/Boolean | `apps/plastiq/src/actions/registry.ts:206–300` | Demo-profile features (hard-coded rects/paths) |
-| E3 | Dress-up feature builders | `apps/plastiq/src/viewport/dressup.ts:30–137` | Build feature `data` (EdgeRef/FaceRef/sections/path) from selection |
-| E4 | AI authoring | `apps/plastiq/src/ai/tools/schema.ts:70–121` | Zod schema + mm/deg → SI conversion → same CadDocument |
-| E5 | Geometry worker | `apps/plastiq/src/worker/geometry.worker.core.ts` → `rebuild.ts:144` | `rebuildDocument(oc, doc)` |
-| E6 | Kernel direct API | `packages/cad/src/index.ts:50–72` | Re-exports every action for tests and the worker |
+**What the product is *not*:** a single monorepo of equal maturity. The **kernel** is largely complete. The **authoring UI** and **long-job UX** still mix real selection flows with **demo injectors** and **abort-only cancel**. Prior “T01–T40 complete” claims overstated product readiness where only rebuild APIs or unit tests existed.
 
 ---
 
-## 3. Execution trace (primary path: sketch → extrude)
+## 2. How the marquee paths work
+
+### 2.1 Parametric path (sketch → solid → viewport)
 
 ```
-[UI] CONTEXT_ACTIONS "extrude".run
-  apps/plastiq/src/three/contextmenu/config.ts:148-155
-  → cad().addFeature({ type: "extrude", params: { height: EXTRUDE_H } })
-      apps/plastiq/src/store/store.ts (addFeature)
-  → document change triggers worker rebuild
-
-[Worker] rebuildDocument(oc, doc)
-  apps/plastiq/src/worker/rebuild.ts:144-230
-  case "sketch":
-    extract profile + resolve plane → activeSketch { profile, plane }
-  case "extrude":
-    sk = profileSketch(activeSketch.profile, activeSketch.plane)   // :200
-    if toFace: extrudeToFace → union with base                         // :216-226
-    else:      extrude(oc, sk, height, { back, direction })            // :228
-
-[Kernel] extrude(oc, sketch, height, opts?)
-  packages/cad/src/action/extrude.ts:40-76
-  → sketch.toFace(oc) → optional shifted back-face
-  → BRepPrimAPI_MakePrism_1(baseFace, vec, false, true)
-  → new Solid(oc, shape)
-
-[Terminal] rebuildTaggedWithProps
-  rebuild.ts:478-490
-  → tessellateTagged → mesh + volume + COM → postMessage to UI
+User action (ribbon / context menu / AI tools)
+  → apps/plastiq store (features[], placement, sketches)
+  → geometry worker: rebuildDocument(oc, document)
+  → packages/cad actions (extrude, revolve, loft, sweep, fillet, boolean, …)
+  → OCCT solid → tessellateTagged → Part mesh in Three.js viewport
 ```
 
-### Parallel traces (other actions)
+| Layer | Role | Where |
+|-------|------|--------|
+| Document model | `CadDocument` features + params; default seed is a box | `apps/plastiq/src/store/types.ts`, `seed.ts` |
+| Sketcher | Draw → planegcs solve → `extractProfile` → feature with `model`/`profile`/`plane` | `sketch/*`, `editFeature.ts` |
+| Rebuild | Single solid accumulator; feature switch evaluates OCCT ops | `apps/plastiq/src/worker/rebuild.ts` |
+| Kernel | OCCT WASM wrappers, STEP I/O, tagged mesh | `packages/cad` |
+| Selection dress-ups | Edge/Face picks → persistent refs → rebuild re-resolves | `viewport/dressup.ts`, `three/contextmenu/config.ts` |
+| Desktop shell | Tauri host of the same web app | `apps/desktop` |
 
-| Feature | Rebuild case | Kernel call | OCCT primitive |
-|---------|--------------|-------------|----------------|
-| revolve | `:232-242` | `revolve` | `BRepPrimAPI_MakeRevol_1` |
-| loft | `:244-252` | `loft` | `BRepOffsetAPI_ThruSections` |
-| sweep | `:254-261` | `sweep` | `BRepOffsetAPI_MakePipeShell` |
-| cut | `:263-275` | `extrude` + `cut` | prism + `BRepAlgoAPI_Cut` |
-| fillet/chamfer | `:277-292` | `fillet`/`chamfer` | `BRepFilletAPI_MakeFillet` / `MakeChamfer` |
-| shell | `:294-300` | `shell` | `BRepOffsetAPI_MakeThickSolid` |
-| draft | `:302-322` | `draft` | `BRepOffsetAPI_DraftAngle` |
-| transform | `:324-339` | `translate`/`rotate` | `BRepBuilderAPI_Transform` |
-| mirror | `:341-357` | `mirror` + optional `union` | `gp_Trsf.SetMirror` |
-| linearPattern | `:359-369` | `linearPattern` + `unionAll` | repeated translate |
-| circularPattern | `:371-389` | `circularPattern` + `unionAll` | repeated rotate |
-| boolean | `:391-428` | `union`/`subtract`/`intersect` | Fuse/Cut/Common |
-| importStep | `:430-452` | `importStep` | STEP reader |
+**Join policy (extrude / revolve):** When a solid already exists and `data.op !== "new"`, rebuild **unions** the new pad/revolve onto the body (`rebuild.ts` extrude ~281–310, revolve ~343–356). Explicit `op: "new"` replaces. Context/ribbon extrude typically sets `op: "join"`.
 
----
+**Loft / sweep:** Always `replace(...)` — prior solid is destroyed (`rebuild.ts` loft ~394, sweep ~446). No join option.
 
-## 4. Data flow
+**Transform feature:** Comment claims “rotate then translate”; code **translates first**, then rotates about **world origin** `[0,0,0]` (`rebuild.ts` ~580–595). Ribbon “Move body” opens the **placement gizmo** (scene pose), not a transform feature (`registry.ts` transform id).
+
+**Holes:** Loop sketches can carry `profile.holes` (non-construction circles). Rebuild cuts them only on **extrude** and **cut** via `cutProfileHoles` — not revolve/loft/sweep. Containment is not tested (`profile.ts` interior circles).
+
+### 2.2 Capture / ML path (photos / cloud / mesh → CAD)
 
 ```
-[UI Action / AI]
-  AuthoringFeature { type, params (mm/deg), data }
-        ↓ toCadDocument (schema.ts) — lengths mm→m, angles deg→rad
-[CadDocument]
-  EditorFeature { id, type, params (SI), data, deps?, suppressed? }
-        ↓ rebuildDocument switch
-[Kernel inputs]
-  Sketch (plane + ops) | Solid | EdgeRef[] | FaceRef[] | SpinePath | sections
-        ↓ action/*
-[Solid] owned TopoDS_Shape
-        ↓ tessellateTagged
-[TaggedMesh] vertices, faceGroups (FaceRef), edges (EdgeRef) → viewport picks
+Photos ──:8004 photogrammetry──► transforms.json + sparse/dense PLY
+                                  │                    │
+                                  ▼                    ▼
+                               :8002 nerf          :8001 capture
+                            (posed images→mesh)   (oriented cloud→mesh)
+                                  │                    │
+                                  └────────┬───────────┘
+                                           ▼
+                                    MeshDoc in app
+                                           │
+                    ┌──────────────────────┼──────────────────────┐
+                    ▼                      ▼                      ▼
+              :8000 reconstruct      :8003 nurbs fit         (optional)
+              mesh→STEP B-rep        freeform patches
+                    │                      │
+                    └──────────┬───────────┘
+                               ▼
+                     importStep → CadDocument
 ```
 
-**Lossy / asymmetric transforms:**
+| Port | Service | Job |
+|------|---------|-----|
+| 8000 | reconstruct | Mesh GLB → STEP B-rep (`auto` analytic chain + fitted/faceted) |
+| 8001 | capture | Oriented cloud → mesh; partial scan `/complete` |
+| 8002 | nerf | Posed photos → NeuS/NeRF surface mesh |
+| 8003 | nurbs | Mesh regions → B-spline STEP (open + closed cube-map) |
+| 8004 | photogrammetry | Unposed photos → poses + PLYs |
 
-- Blind `extrude` **replaces** the current solid (`replace(...)`); only `extrudeToFace` **unions** with the base (`rebuild.ts:221-223`). A second boss on an existing body is not a join unless the user uses boolean or extrude-to-face.
-- `activeSketch` is a **single** slot (`rebuild.ts:149`). Loft/sweep do **not** consume the feature-tree sketch history; they require profiles baked into `data.sections` / `data.profile`.
-- Sweep path unit conversion scales polyline points (`schema.ts:195-199`) but there is no arc path shape to convert.
-- Revolve axis origin is **not** in params — always `[0,0,0]` at rebuild (`rebuild.ts:239-240`).
+Bring-up: `scripts/dev-services.sh` starts all five; for reconstruct it exports  
+`RECONSTRUCT_NURBS_URL=http://127.0.0.1:8003` so freeform/closed organic can delegate to NURBS.
+
+Browser clients: `@plastiq/{capture,nerf,nurbs,photogrammetry,recon}` under `packages/*`. App wrappers in `apps/plastiq/src/ai/{capture,nerf,nurbs,photogrammetry,reconstruct}.ts`. Panel: `GenerationPanel.tsx`. Agent tools: `ai/tools/*` including `cloud_to_mesh` / `complete_scan`.
+
+**Local auth:** Services may implement optional `*_API_KEY`. Product rule: **local studio does not require or productize keys.** Open-by-default when env unset is correct.
+
+### 2.3 Reconstruct `auto` chain (how mesh becomes B-rep)
+
+Order in `services/reconstruct/app/pipeline.py`:
+
+1. **single_primitive** — whole mesh is cylinder / sphere / cone  
+2. **cut_sphere** — sphere ∩ plane (hemisphere / spherical cap) — `topology.reconstruct_cut_sphere`  
+3. **revolution** — solid of revolution  
+4. **csg** — box ± cylinders  
+5. **cut_cylinder** — cylinder ∩ planes (oblique caps)  
+6. **fitted** — planar facets + freeform; if `RECONSTRUCT_NURBS_URL` and whole mesh is closed genus-0 non-planar, try `delegate_closed_solid` first (`fitted.py`)  
+7. **faceted** — per-triangle baseline (never drops the job)
 
 ---
 
-## 5. Boundary analysis
+## 3. Package / service inventory (honest)
 
-| # | From | To | Mechanism | Auth | Error handling | Timeout | Data contract |
-|---|------|----|-----------|------|----------------|---------|---------------|
-| 1 | UI store | Geometry worker | postMessage `build` | none (same origin) | worker returns error string; feature marked errored | none explicit | `CadDocument` JSON-cloneable |
-| 2 | rebuild | `@plastiq/cad` | direct TS import | n/a | throws typed `Error` per feature | n/a | SI metres/radians |
-| 3 | action/* | OCCT WASM | embind constructors | n/a | `IsNull`/`IsDone`/`HasErrors`; fail-loud | n/a | owned handles + `.delete()` |
-| 4 | AI schema | CadDocument | `toCadDocument` | n/a | zod structural validate | n/a | mm/deg → SI; must mirror rebuild |
-| 5 | Dress-up picks | Feature data | FaceRef/EdgeRef signatures | n/a | unresolved edges → kernel throw | n/a | FR-16 persistent refs |
+| Path | State |
+|------|--------|
+| `packages/cad` | Production kernel (actions, sketch, mesh, I/O, assembly lower) |
+| `packages/sim` | Production physics backends (Rapier/Cannon/Ammo/MuJoCo) |
+| `packages/capture`, `nerf`, `nurbs`, `photogrammetry`, `recon` | Real submit→poll clients |
+| `packages/recm` | Radial context-menu UI package (used by app) |
+| `packages/ml` | **Empty** — README only; no `submitPollJob` implementation |
+| `packages/data`, `segment`, `rl`, `embed` | Scaffold / empty — not product surface |
+| `services/*` (five) | Real FastAPI services with pytest |
+| `apps/plastiq` | Product editor + AI panel |
+| `apps/desktop` | Tauri shell |
 
-**Contract mismatches found:**
-
-- Rebuild comment “polyline/**arc** path” (`rebuild.ts:255`) vs `SpinePath.kind: "polyline"` only (`spine.ts:19-22`).
-- AI revolve schema omits origin params (`schema.ts:85`); kernel accepts `origin: Vec3` (`revolve.ts:12-17`).
-- Sweep rebuild ignores profile plane (`rebuild.ts:260` → `profileSketch(prof)` defaults to `planeXY()`).
+`@plastiq/recon` is real (`packages/recon/src/client.ts`); app re-exports it from `apps/plastiq/src/ai/reconstruct.ts`.
 
 ---
 
-## 6. Dependency graph
+## 4. CAD evaluation — intended vs actual
+
+For each gap: **how it fails for the user**, **how the code behaves now**, **how it should work**.
+
+### C1 — Extrude join-by-default
+
+| | |
+|--|--|
+| **Fails** | Second pad used to destroy the body (historical). Partially fixed. |
+| **Now** | Rebuild joins unless `op === "new"`. Properties can set join/new. UI often sets `op: "join"`. |
+| **Should** | First solid on empty doc = new body; subsequent pads join unless user chooses new body. Seed box + join still confuses sketch-to-solid E2E (face counts). |
+
+### C2 — Revolve join + axis-from-edge
+
+| | |
+|--|--|
+| **Fails** | World-Y revolve by default can miss intent; axis edge was missing. |
+| **Now** | Join parity with extrude; `data.axisEdge` → `resolveEdgeAxis`. Context “revolve about edge” exists. Default ribbon revolve still world-Y if no edge. |
+| **Should** | Selection-required axis or clear default; Properties rebind of axis edge. |
+
+### C3 — Sketch binding via deps
+
+| | |
+|--|--|
+| **Fails** | Last sketch wins; user cannot re-point a feature. |
+| **Now** | `sketchForFeature` uses `deps` / `sketchId` / last sketch. Create paths set `lastSketchDeps()`. Properties has **no** deps rebind UI. |
+| **Should** | Properties sketch picker; re-pick after multi-sketch workflows. |
+
+### C4 — Loft / sweep authoring
+
+| | |
+|--|--|
+| **Fails** | User clicks Loft/Sweep expecting their sketches/path; gets **demo frustum/pipe** or silent last-two-sketches / hardcoded path; **prior body vanishes** (replace). |
+| **Now** | Kernel loft/sweep real. Ribbon: last ≥2 sketches or demo loft; last sketch + **hardcoded polyline** or demo sweep (`registry.ts` loft/sweep). Rebuild always `replace`. |
+| **Should** | Multi-section pick + path pick; join-by-default; **remove demo injectors** from product ribbon. |
+
+### C5 — Boolean authoring
+
+| | |
+|--|--|
+| **Fails** | “Subtract” punches a fixed rectangle/box, not the second body the user meant. |
+| **Now** | Rebuild supports `toolFeatures` recursive rebuild. Ribbon `booleanBody` uses `DEFAULT_RECT` tool; “Demo boolean (box)” is explicit demo. |
+| **Should** | Select tool body/feature; remove demo as primary. |
+
+### C6 — Mirror / pattern
+
+| | |
+|--|--|
+| **Fails** | Instant wrong plane/axis; patterns whole part; no feature-scope UI. |
+| **Now** | Hardcoded ribbon params. Rebuild linear pattern can use `toolFeatures`; circular has no toolFeatures branch. |
+| **Should** | Face plane, edge direction, count/spacing UI; circular feature-scope parity. |
+
+### C7 — Transform
+
+| | |
+|--|--|
+| **Fails** | Move does not bake intended R-then-T about body COM; feature transform is wrong; gizmo only changes placement. |
+| **Now** | Feature: translate then rotate about origin. Placement gizmo separate. `demo-transform` injects `tx: 0.02`. |
+| **Should** | One clear model (placement vs feature); feature = rotate about COM/pivot then translate; delete demo. |
+
+### C8 — Variable fillet / two-distance chamfer
+
+| | |
+|--|--|
+| **Fails** | User cannot author variable fillet or asymmetric chamfer from UI. |
+| **Now** | Kernel + rebuild read `radius2` / `distance2`+face. UI only constant radius/distance. AI schema single value. |
+| **Should** | Properties + create UI + schema + units. |
+
+### C9 — Profile holes quality
+
+| | |
+|--|--|
+| **Fails** | Exterior circles become “holes”; revolve ignores holes. |
+| **Now** | Any non-construction circle on a loop sketch is a hole; cut only on extrude/cut. |
+| **Should** | Point-in-outer-loop; support or clear error on revolve. |
+
+### C10 — Properties / gizmo secondaries
+
+| | |
+|--|--|
+| **Fails** | Most feature `data` is uneditable; secondary gizmo params dead. |
+| **Now** | Properties: numerics + op/shell/sweep mode-transition. Ref counts read-only. `FEATURE_SECONDARY_PARAMS` defined, not fully wired into gizmo UI. |
+| **Should** | Full data surface + gizmo secondaries. |
+
+### C11 — AI prompt contradicts join
+
+| | |
+|--|--|
+| **Fails** | Agent teaches replace-body extrude and unnecessary booleans for bosses. |
+| **Now** | `apps/plastiq/src/ai/prompt.ts` still says extrude/revolve **REPLACE** and bosses need boolean union (~40–44). Rebuild joins. |
+| **Should** | Prompt = join-by-default; toFace encouraged when known; align with schema. |
+
+### What CAD already does well
+
+- Selection dress-ups (fillet, chamfer, shell, draft, to-face, along-edge) are real pick→ref→rebuild.  
+- Sketch → extrude/cut/revolve consumer Finish is a real authoring loop.  
+- Join-by-default for extrude/revolve is real and tested in `rebuild.test.ts`.  
+- Kernel coverage under `packages/cad/src/action/*` is dense and production-grade.
+
+---
+
+## 5. ML evaluation — intended vs actual
+
+### M1 — `RECONSTRUCT_NURBS_URL` in dev-services
+
+| | |
+|--|--|
+| **Fails** | Without URL, freeform/organic stays MakeFilling/faceted. |
+| **Now** | `scripts/dev-services.sh` exports URL for reconstruct when fleet starts. Manual uvicorn without env still offline. |
+| **Should** | Document both paths; fleet default is correct. |
+
+### M2 — Complete-scan demo weights honesty
+
+| | |
+|--|--|
+| **Fails** | Main panel “Complete scan” can look like real completion with synthetic weights. |
+| **Now** | Server sets `demo_weights`; client maps `demoWeights`; agent + `cloudActions` surface it. **GenerationPanel CaptureScanSection** opens mesh and clears status without reading the flag. |
+| **Should** | Panel refuses or banners demo; separate “Demo complete” or require checkpoint. |
+
+### M3 — NeRF production quality defaults
+
+| | |
+|--|--|
+| **Fails** | Hard scenes still lag research stacks. |
+| **Now** | For `neus`: `learnable_beta=True`, grad clip, warmup, white bg, `importance_samples=32` hierarchical PDF (`engine/pipeline.py`). **WeightNorm** exists but **default off** and not pipeline-wired (`sdf_field.py`). **ProposalSampler** is a helper name for uniform+PDF; **not** a separate proposal MLP; training path uses hierarchical PDF, not the class in production model code. |
+| **Should** | Honest docs: hierarchical PDF ≠ ProposalNetwork; WN on only when tests stable; don’t claim “full sdfstudio parity.” |
+
+### M4 — Cancel across services
+
+| Service | Server | Client `cancelJob` | Client `onJob` | Panel Cancel |
+|---------|--------|--------------------|----------------|--------------|
+| capture | **Process kill** on cancel (`jobs.py` cancel + `submit_process`) | yes | **no** | **Abort only** |
+| nerf | Drop record (thread work may continue) | yes | yes | Abort + DELETE |
+| photogrammetry | Drop record | yes | yes | Abort + DELETE |
+| reconstruct | Drop record only | **no** | **no** | Abort only |
+| nurbs | Drop record | **no** | **no** | Abort only |
+
+| | |
+|--|--|
+| **Fails** | Capture Cancel looks like stop but never DELETEs — server **can** kill if DELETE is called, but panel never gets a job id. Recon/nurbs keep running after UI cancel. |
+| **Now** | Capture server is the strongest cancel (force-kill spawn child). Client/panel lag. |
+| **Should** | `onJob` on capture/recon/nurbs; panel DELETE like nerf; recon/nurbs process isolation if true resource free is required. |
+
+### M5 — Agent cloud tools
+
+| | |
+|--|--|
+| **Fails** | Agent cannot drive photo solve end-to-end as fully as cloud→mesh. |
+| **Now** | `cloud_to_mesh` / `complete_scan` wired + unit-tested. No full photogrammetry agent tool suite. |
+| **Should** | Photo + capture chain tools with real wiring tests. |
+
+### M6 — `@plastiq/recon`
+
+| | |
+|--|--|
+| **Fails** | N/A as “missing package” — it exists. |
+| **Now** | Real package; missing cancel/onJob parity. |
+| **Should** | Add cancel/onJob. |
+
+### M7 — Topology FR-6 general case
+
+| | |
+|--|--|
+| **Fails** | Arbitrary mixed curved regions still faceted; analytic-rim sagitta general case open. |
+| **Now** | `cut_cylinder` + `cut_sphere` families real and in auto chain. Not general per-region analytic graph. |
+| **Should** | Keep honest “family routes”; general FR-6 is long-horizon. |
+
+### M8 — Closed organic NURBS via reconstruct
+
+| | |
+|--|--|
+| **Fails** | Without live nurbs + URL, organic blob stays faceted. Concave shapes may chart-degrade to faceted solid. |
+| **Now** | `delegate_closed_solid` + `fitted_shape` hook; nurbs `pipeline_closed` cube-map real; live open-region tests exist; closed path heavily unit/fake-HTTP tested. |
+| **Should** | Live closed blob E2E when services up; surface `charting_degraded` in UI. |
+
+### M9 — Photogrammetry dual resolution
+
+| | |
+|--|--|
+| **Fails** | Full-res sparse can collapse registration (pixel-absolute thresholds). |
+| **Now** | Server `sparse_max_dim` + dense full frames; client `sparseMaxDim`. **App never passes it.** Default `None` = native both stages. |
+| **Should** | Panel default ~640–1600; always dual-res for large images. |
+
+### M10 — `packages/ml`
+
+| | |
+|--|--|
+| **Fails** | Five clients drift (exactly: onJob/cancel inconsistency). |
+| **Now** | Empty reserved README; still claims reconstruct “until extracted” — **stale** (recon is extracted). |
+| **Should** | Implement shared poll/cancel **or** delete the package claim. |
+
+### Local API keys
+
+| | |
+|--|--|
+| **Product rule** | Local services never use API keys. |
+| **Code** | Optional `*_API_KEY` on services; Settings has fields for some services. |
+| **Verdict** | Not a defect. Do not treat missing key UX as a gap for local studio. |
+
+---
+
+## 6. Stub / demo / deceptive inventory (still in code)
+
+These are **present in the working tree** and must not be marked product-complete:
+
+| Item | Location | Deception |
+|------|----------|-----------|
+| Demo loft fallback | `registry.ts` loft | Frustum without two real sketches |
+| Demo sweep path | hardcoded polyline + demo pipe | Not user path |
+| Demo boolean / DEFAULT_RECT subtract | `registry.ts` | Not second-body subtract |
+| Hardcoded mirror/pattern | fixed normals/spacing/count | Not selection-driven |
+| demo-transform | `tx: 0.02` feature | Not Move body |
+| AI prompt replace-body | `prompt.ts` | Contradicts rebuild join |
+| Transform order/pivot | `rebuild.ts` | Comment lies; origin pivot |
+| Capture panel cancel | Abort only | Server can kill; UI never DELETEs |
+| Complete panel silent demo | no `demoWeights` UI | Looks trained |
+| NeRF “proposal” naming | hierarchical PDF | Not proposal MLP |
+| WeightNorm default off | `sdf_field.py` | Not production-on |
+| packages/ml empty | README only | Promised infra missing |
+| packages/ml README reconstruct claim | “until extracted” | recon already extracted |
+
+---
+
+## 7. Architecture diagram (logical)
 
 ```
-apps/plastiq
-  actions/registry.ts ──► store, dressup, voxel, assembly
-  three/contextmenu/config.ts ──► dressup, store, sketch
-  worker/rebuild.ts ──► @plastiq/cad (all actions)
-  ai/tools/schema.ts ──► featureUnits (LENGTH/ANGLE params)
-
-packages/cad
-  action/{extrude,revolve,loft,dressup,boolean,pattern,transform}.ts
-    ├── sketch/{sketch,spine}.ts
-    ├── mesh/{resolve,normals,tagged}.ts
-    ├── solid/solid.ts
-    ├── env/plane.ts
-    └── oc/init.ts (Occt)
+┌──────────────────────── apps/plastiq ─────────────────────────┐
+│  Ribbon / Context / Properties / Sketcher / AI GenerationPanel │
+│  store (CadDocument | MeshDoc | PointCloudDoc | Voxel)         │
+│  worker/rebuild ──► @plastiq/cad (OCCT WASM) ──► viewport      │
+│  @plastiq/sim (assembly / playback)                            │
+└─────────────┬───────────────┬───────────────┬─────────────────┘
+              │ HTTP          │               │
+    ┌─────────▼────┐  ┌───────▼──────┐  ┌─────▼──────┐
+    │ reconstruct  │  │ capture      │  │ nerf       │
+    │ :8000 OCCT   │  │ :8001 MLX    │  │ :8002 MLX  │
+    └──────┬───────┘  └──────────────┘  └────────────┘
+           │ RECONSTRUCT_NURBS_URL
+    ┌──────▼───────┐  ┌──────────────┐
+    │ nurbs :8003  │  │ photo :8004  │
+    │ MLX + OCCT   │  │ SfM + MVS    │
+    └──────────────┘  └──────────────┘
 ```
 
-**Callers of kernel actions:** rebuild worker, kernel smoke/integration tests, sketch integration tests (extrude/sweep), mesh tessellate tests (revolve).
+---
+
+## 8. Severity-ranked remediation (product outcomes, not ticket theater)
+
+### Critical (user-facing wrong or deceptive)
+
+1. **AI prompt join/replace lie** — rewrite `prompt.ts` to match rebuild.  
+2. **Loft/sweep replace body** — join-by-default or explicit new; stop destroying prior solid silently.  
+3. **Demo loft/sweep/boolean as product ribbon paths** — selection wizards only; remove demos from primary UI.  
+4. **Transform feature order + pivot** — R then T about COM; fix comment; separate placement UX.  
+5. **Capture Complete silent demo weights** — banner or hard-fail without checkpoint.  
+6. **Capture cancel abort-only** — `onJob` + DELETE (server already force-kills).
+
+### High
+
+7. Boolean / mirror / pattern selection authoring.  
+8. Recon + nurbs `cancelJob`/`onJob` + panel DELETE.  
+9. Photo `sparseMaxDim` default in app.  
+10. Properties deps/refs/loft/pattern/boolean data editors.  
+11. Variable fillet / 2-dist chamfer UI + schema.
+
+### Medium
+
+12. Hole containment + revolve holes policy.  
+13. NeRF doc honesty (PDF vs proposal MLP; WN default).  
+14. Live closed-organic reconstruct↔nurbs gate when services up.  
+15. `packages/ml` implement or remove claim.  
+16. Seed/join E2E face-count honesty.
+
+### Long-horizon (honest open engineering)
+
+- General FR-6 per-region analytic sagitta graph.  
+- Full NeuS/sdfstudio parity (true proposal net, WN default-on quality).  
+- Multi-body part document model (beyond assembly instances).  
+- Trained capture completion weights as default (not synthetic demo).
 
 ---
 
-## 7. Risk areas & findings (actionable gaps)
+## 9. Status tables — corrected for this working tree
 
-### G1 · HIGH · `extrude()` missing try/finally cleanup on failure path  
-**Evidence:** `packages/cad/src/action/extrude.ts:40-76` — allocates `face`, optional `shifted` face, `gp_Vec`, `BRepPrimAPI_MakePrism` without a `try/finally`. Peers (`revolve.ts:34-55`, `loft.ts:25-44`, `sweep.ts:67-91`, `dressup` fillet/shell) free every temporary on `Standard_Failure`.  
-**Impact:** A prism failure in the long-lived geometry worker leaks WASM handles (same class of bug fixed elsewhere in `cleanup.unit.test.ts`).  
-**Also:** `shifted()` (`extrude.ts:23-33`) has the same non-finally structure.
+Do **not** treat a prior “T01–T40 ✅” checklist as product-complete. Snapshot:
 
-### G2 · HIGH · Revolve axis origin hard-coded to world origin in rebuild  
-**Evidence:** Kernel `revolve(oc, sketch, origin, axis, angle)` (`revolve.ts:12-17`); rebuild always passes `[0, 0, 0]` (`rebuild.ts:239-240`). Params only expose `ax/ay/az` (direction), not `ox/oy/oz`. `featureUnits.ts` LENGTH_PARAMS for revolve is empty; AI schema (`schema.ts:85`) has no origin fields.  
-**Impact:** Cannot revolve about an offset axis (common CAD: revolve about a sketch line not through the world origin). Kernel already supports it.
-
-### G3 · HIGH · Sweep profile always rebuilt on world-XY  
-**Evidence:** `rebuild.ts:260` — `profileSketch(prof)` with default plane `planeXY()` (`:84`). Extrude/revolve correctly pass `activeSketch.plane`. Sweep feature data has no `plane` field (`schema.ts:106`, `dressup.ts:112-114`).  
-**Impact:** A profile intended on XZ/YZ or an on-face plane is forced onto XY; swept solids are wrong for non-XY profiles.
-
-### G4 · MEDIUM · SpinePath is polyline-only; “arc path” is advertised but unbuilt  
-**Evidence:** `spine.ts:19-22` — only `{ kind: "polyline"; points }`. Rebuild comment `rebuild.ts:255` and dressup `dressup.ts:111` say “polyline/arc”. `buildSpineWire` only emits line edges (`spine.ts:38-54`). OCCT can build arc edges; no path kind for them.  
-**Impact:** Curved sweeps require many polyline samples (or fail to express a true circular arc spine).
-
-### G5 · MEDIUM · Cut lacks direction / two-sided options that extrude has  
-**Evidence:** Cut always `extrude(..., num(f, "depth"))` with no direction/back (`rebuild.ts:269`). Extrude supports `direction`, `directionEdge`, `back`, `toFace`. Cut params only `depth` (`featureUnits.ts:36`, `schema.ts:86`).  
-**Impact:** Cannot pocket reverse-side, two-sided, or along a picked edge without workarounds.
-
-### G6 · MEDIUM · Loft sections locked to offset world-XY planes  
-**Evidence:** `rebuild.ts:250` — `offsetPlane(planeXY(), s.z)` only. Kernel `loft` accepts any `Sketch[]` on any planes (`loft.ts:17`). Data contract `{ profile, z }` (`schema.ts:104`, `dressup.ts:103-108`).  
-**Impact:** Cannot loft between profiles on non-parallel or non-XY planes (e.g. face-sketched sections).
-
-### G7 · MEDIUM · Blind extrude replaces body; only extrude-to-face joins  
-**Evidence:** `rebuild.ts:228` `replace(extrude(...))` vs `:221-223` `union(base, pad)`. Single-body history model means a second pad **destroys** the prior solid rather than joining a boss.  
-**Impact:** Multi-feature “add material” modeling requires boolean-body workarounds; inconsistent with extrude-to-face join semantics.
-
-### G8 · MEDIUM · Sweep transition/frame options not exposed  
-**Evidence:** `sweep` hard-codes corrected Frenet + `RightCorner` (`loft.ts:68-71`). No `SweepOptions` (RoundCorner / Transformed / fixed frame).  
-**Impact:** Miters only; no rounded corners or fixed-orientation pipe sections for consumers that need them.
-
-### G9 · LOW–MEDIUM · Draft is single-face only at rebuild  
-**Evidence:** Kernel `draft` takes one `FaceRef` (`dressup.ts:177`); rebuild takes first face only (`rebuild.ts:305`). Multi-face mold draft requires N features.  
-**Impact:** Usability gap vs typical CAD draft multi-select.
-
-### G10 · LOW–MEDIUM · Ribbon loft/sweep are demo injectors, not authoring tools  
-**Evidence:** `registry.ts:216-243` hard-codes `rectProfile` + fixed z heights / polyline. No pick-sections / draw-path workflow.  
-**Impact:** Users get a fixed demo solid; real loft/sweep authoring is AI-data or hand-edited document only.
-
-### G11 · LOW · Linear pattern does not normalize direction  
-**Evidence:** `pattern.ts:21` — `scale(dir, spacing * i)` without unitizing `dir`. Rebuild defaults `dx=1` (`rebuild.ts:362`) so unit X works; a non-unit AI/user dir scales spacing incorrectly.  
-**Impact:** Wrong spacing when direction is not unit length.
-
-### G12 · LOW · Fillet/chamfer are constant-radius / symmetric-setback only  
-**Evidence:** `fillet` uses `Add_2(radius, edge)` (`dressup.ts:31`); `chamfer` uses `Add_2(distance, edge)` (`:78`). No variable-radius fillet, no two-distance chamfer (OCCT APIs exist on the makers).  
-**Impact:** Capability ceiling for dress-up; not a bug in current constant-radius path.
-
-### G13 · LOW · Shell always hollows inward (negative offset)  
-**Evidence:** `dressup.ts:139` — `-thickness` hard-coded. No outward thicken.  
-**Impact:** Cannot grow walls outward; only inward shell.
-
-### G14 · Documentation/test hygiene  
-- Sweep rebuild comment claims arc path support that does not exist (`rebuild.ts:255`).  
-- No unit cleanup test for `extrude` failure path (unlike loft/sweep/dressup in `cleanup.unit.test.ts`).  
-- No rebuild test for revolve with non-zero origin.  
-- No rebuild test for sweep with non-XY profile plane.
+| Area | Kernel / server | Authoring / UX | Honest status |
+|------|-----------------|----------------|---------------|
+| Extrude/revolve join | Real | Properties op; AI prompt wrong | **Partial** (prompt lag) |
+| Loft/sweep | Real | Demo / last-N / replace | **Not product-complete** |
+| Boolean | toolFeatures real | Demo/hardcoded tools | **Not product-complete** |
+| Mirror/pattern | Linear tools real | Hardcoded ribbon | **Not product-complete** |
+| Dress-ups selection | Real | Real context menu | **Working** |
+| Transform feature | Exists | Wrong order/pivot; gizmo=placement | **Broken product semantics** |
+| Capture process cancel | Real kill | Panel no DELETE | **Server ahead of UI** |
+| Complete demo honesty | Wire flag | Panel silent | **Partial** |
+| NeRF neus defaults | learnable β + PDF | WN off; “proposal” naming | **Improved, not research-parity** |
+| Reconstruct topology | cut_sphere + cut_cylinder | N/A | **Family routes working** |
+| Closed NURBS path | Real when URL set | Live E2E weak | **Partial** |
+| Photo dual-res | Server+client | App unused | **Plumbing only** |
+| `@plastiq/recon` | Real package | No cancel | **Partial client** |
+| `packages/ml` | Empty | N/A | **Scaffold** |
+| Local API keys | Optional | Not required | **By design open** |
 
 ---
 
-## 8. What works (verified intact)
+## 10. Bottom line
 
-| Capability | Evidence |
-|------------|----------|
-| Extrude rect/circle/arc/spline profiles | `rebuild.test.ts`, `features.test.ts`, e2e `sketch-to-solid.spec.ts` |
-| Two-sided extrude (`back`) | `rebuild.test.ts` FR-29, `features.test.ts` |
-| Direction override + directionEdge | `rebuild.ts:201-211`, tests |
-| True extrude-to-face (planar + curved trim) | `extrude.ts:210-433`, `extrudeToFace.test.ts` |
-| Sweep multi-edge polyline (MakePipeShell, not MakePipe) | `loft.ts:48-56`, rebuild test multi-edge spine |
-| Circular pattern full-turn vs partial-arc endpoint convention | `pattern.ts:30-38`, `loftsweep.test.ts` |
-| Dress-up fails if any EdgeRef/FaceRef unresolved | `dressup.ts:38-47`, tests |
-| Boolean tool as full feature subtree | `rebuild.ts:401-406` |
-| Mesh/voxel mode greys B-rep ops (FR-18) | `registry.ts:475-520` |
+| Layer | Verdict |
+|-------|---------|
+| **CAD kernel** | Feature-complete for the intended solid ops; well tested |
+| **Rebuild** | Join for pad/revolve is real; loft/sweep/transform policies still hurt multi-feature designs |
+| **CAD authoring** | Strong for sketch + pad/pocket/revolve + selection dress-ups; **weak/demo for loft, sweep, boolean, pattern, mirror** |
+| **ML services** | Five real pipelines; fleet wiring improved (`RECONSTRUCT_NURBS_URL`, cut_sphere, dual-res plumbing, capture force-cancel) |
+| **ML product UX** | Cancel and demo honesty **inconsistent** across panels; photo quality knobs not exposed |
+| **Docs / prior Grok checklists** | Often overclaimed “complete” where only unit wires or kernel APIs existed |
 
----
+**Making CAD feel finished** is primarily **authoring contract + join policy + killing demos**, against an already-capable kernel.  
+**Making ML feel finished** is primarily **cancel parity, complete honesty, photo dual-res defaults, and honest NeRF quality claims**, against already-running services.
 
-## 9. Open questions (not determined from code alone)
-
-1. Is single-body “replace on extrude” an intentional product decision (Fusion-style new body default), or an incomplete join mode? Spec FR-29 names extrude/cut/revolve but does not specify multi-pad join defaults.
-2. Should loft sections migrate to `{ profile, plane: SketchPlaneSpec }` (breaking data shape) or add optional `plane` alongside `z` for back-compat?
-3. Priority of interactive loft/sweep UI vs AI/document authoring only.
+**Local services never use API keys** — do not treat key UI as a product gap for this studio.
 
 ---
 
-## 10. Findings → remediation plan (ordered)
+## 11. Evidence anchors (quick index)
 
-| ID | Gap | Proposed fix |
-|----|-----|--------------|
-| G1 | Extrude cleanup | try/finally in `extrude` + `shifted`; unit test in cleanup suite |
-| G2 | Revolve origin | Wire `ox/oy/oz` through rebuild, featureUnits, AI schema + tests |
-| G3 | Sweep profile plane | Accept `data.plane` / default activeSketch plane; schema + tests |
-| G4 | Arc spine | Extend `SpinePath` with arc segments **or** correct comments; prefer real arc kind |
-| G5 | Cut options | `direction`/`back` parity with extrude |
-| G6 | Loft arbitrary planes | Optional plane per section |
-| G7 | Extrude join mode | Optional `data.op: "join" \| "new"` (default preserve current replace for back-compat) |
-| G8 | Sweep options | `SweepOptions` transition/mode |
-| G9 | Multi-face draft | Loop Add() for faces[] |
-| G10 | Ribbon loft/sweep | Selection-driven or status guidance (larger UX) |
-| G11 | Linear pattern normalize | Unitize `dir` before scale |
-| G12–G13 | Variable fillet / outward shell | Future capability expansions |
+| Claim | Source |
+|-------|--------|
+| Extrude join | `apps/plastiq/src/worker/rebuild.ts` ~281–310 |
+| Loft/sweep replace | same file ~394, ~446 |
+| Transform order/pivot | same file ~580–595 |
+| Demo loft/sweep/boolean | `apps/plastiq/src/actions/registry.ts` loft/sweep/boolean* |
+| AI replace prompt | `apps/plastiq/src/ai/prompt.ts` ~40–44 |
+| Seed box | `apps/plastiq/src/store/seed.ts` |
+| Capture process cancel | `services/capture/app/jobs.py` `cancel` / `submit_process` |
+| Capture panel abort-only | `GenerationPanel.tsx` CaptureScanSection cancel ~1188 |
+| Complete demo flag | `services/capture/app/pipeline.py` `complete_partial_job`; panel silence ~1170–1178 |
+| NeRF neus defaults | `services/nerf/app/engine/pipeline.py` ~107–118 |
+| WeightNorm default off | `services/nerf/app/fields/sdf_field.py` `use_weight_norm=False` |
+| ProposalSampler | `services/nerf/app/generators/ray_samplers.py` — helper; hierarchical PDF in model |
+| Reconstruct auto chain | `services/reconstruct/app/pipeline.py` header + routes |
+| Closed nurbs delegate | `services/reconstruct/app/nurbs_delegate.py` `delegate_closed_solid`; `fitted.py` |
+| RECONSTRUCT_NURBS_URL | `scripts/dev-services.sh` ~126–129 |
+| sparse_max_dim | `services/photogrammetry/app/main.py` SolveBody; app unused |
+| @plastiq/recon | `packages/recon/src/client.ts` |
+| packages/ml empty | `packages/ml/README.md` only |
 
 ---
 
-## Resolution log
-
-| ID | Status | Notes |
-|----|--------|-------|
-| G1 | ✅ Fixed | `extrude` + `shifted` use try/finally; cleanup unit tests for null Shape / MakePrism throw / zero-height pre-check |
-| G2 | ✅ Fixed | rebuild `ox/oy/oz`; featureUnits length params; AI schema; rebuild Pappus volume test |
-| G3 | ✅ Fixed | sweep `data.plane` / activeSketch plane / XY fallback; schema + mm convert; rebuild XZ test |
-| G4 | ✅ Fixed | `SpinePath` union: `polyline` \| `path` with line/arc segments; `buildSpineWire` + schema convert + unit tests |
-| G5 | ✅ Fixed | cut supports `back`, `direction`, `directionEdge`; featureUnits + schema; two-sided pocket rebuild test |
-| G6 | ✅ Fixed | loft sections accept optional `plane` (legacy `z` kept); schema + convert; rebuild test |
-| G7 | ✅ Fixed | extrude `data.op: "join" \| "new"`; join unions pad with base; rebuild volume test |
-| G8 | ✅ Fixed | `SweepOptions` mode/transition on kernel `sweep`; rebuild wires `data.mode` / `data.transition`; schema |
-| G9 | ✅ Fixed | draft multi-face via sequential Apply; `draftFeature` stores `faces[]`; schema |
-| G10 | ✅ Fixed | ribbon loft/sweep set status guidance for real authoring (demo data still for discoverability) |
-| G11 | ✅ Fixed | `linearPattern` unitizes `dir`; non-unit dir test |
-| G12 | ⏸ Deferred | Variable-radius fillet / two-distance chamfer remain future capability (documented; constant path solid) |
-| G13 | ✅ Fixed | `ShellOptions.direction` inward/outward; rebuild + schema |
-| G14 | ✅ Fixed | Misleading arc/spine comments corrected; missing rebuild tests added with G2/G3/G5/G6/G7 |
-
-**Verification (2026-07-09):** `vitest` on action/*, spine, rebuild, featureUnits, registry, schema — **all green** (170+ tests in the targeted suites).
+*This document is the analysis deliverable for the current working tree. It supersedes prior Grok resolution tables that marked productization items complete without user-path proof.*

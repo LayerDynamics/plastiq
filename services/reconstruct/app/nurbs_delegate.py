@@ -75,10 +75,13 @@ from OCC.Core.ShapeFix import ShapeFix_Face
 from OCC.Core.STEPControl import STEPControl_Reader
 from OCC.Core.TColgp import TColgp_Array1OfPnt2d
 from OCC.Core.TColStd import TColStd_Array1OfInteger, TColStd_Array1OfReal
-from OCC.Core.TopAbs import TopAbs_FACE
+from OCC.Core.TopAbs import TopAbs_FACE, TopAbs_SOLID
 from OCC.Core.TopExp import TopExp_Explorer
 from OCC.Core.TopLoc import TopLoc_Location
-from OCC.Core.TopoDS import TopoDS_Face, topods
+from OCC.Core.TopoDS import TopoDS_Face, TopoDS_Shape, topods
+
+from .closure import verify_closure
+from .curved_faces import SolidResult, classify_faces
 
 logger = logging.getLogger(__name__)
 
@@ -221,12 +224,23 @@ def _delegated_trimmed_face(surface, boundary: np.ndarray) -> Optional[TopoDS_Fa
 
 
 def _submit_and_poll(
-    client: Any, base: str, glb_b64: str, *, timeout: float, poll_interval: float
+    client: Any,
+    base: str,
+    glb_b64: str,
+    *,
+    timeout: float,
+    poll_interval: float,
+    mode: str = "open",
+    extra: Optional[dict] = None,
 ) -> Optional[dict]:
     """Run the §6.1 submit→poll and return the completed ``result`` JSON (or ``None`` on a failed
     job / no id). Raises on HTTP errors and timeout — the caller's broad handler maps those to
-    ``None`` (fall back to ``MakeFilling``)."""
-    submit = client.post(f"{base}/fit", json={"glb_base64": glb_b64, "mode": "open", "iters": 0})
+    ``None`` (fall back to ``MakeFilling`` / faceted). ``mode`` is ``"open"`` (single freeform
+    region) or ``"closed"`` (whole genus-0 organic mesh → 6-patch solid, T38)."""
+    body: dict = {"glb_base64": glb_b64, "mode": mode, "iters": 0}
+    if extra:
+        body.update(extra)
+    submit = client.post(f"{base}/fit", json=body)
     submit.raise_for_status()
     job_id = submit.json().get("id")
     if not job_id:
@@ -251,6 +265,124 @@ def _submit_and_poll(
         if time.monotonic() >= deadline:
             raise TimeoutError(f"nurbs fit did not complete within {timeout}s")
         time.sleep(poll_interval)
+
+
+def _shape_from_step(step_text: str) -> Optional[TopoDS_Shape]:
+    """Full ``TopoDS_Shape`` of a STEP document (closed-mode nurbs returns a multi-face solid)."""
+    fd, path = tempfile.mkstemp(suffix=".step")
+    os.close(fd)
+    try:
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.write(step_text)
+        reader = STEPControl_Reader()
+        if reader.ReadFile(path) != IFSelect_RetDone:
+            return None
+        if reader.TransferRoots() <= 0:
+            return None
+        return reader.OneShape()
+    finally:
+        os.remove(path)
+
+
+def _is_closed_genus0(mesh: trimesh.Trimesh) -> bool:
+    """True when the mesh is watertight genus-0 (euler ≈ 2) — the nurbs closed-mode contract."""
+    if not mesh.is_watertight:
+        return False
+    try:
+        # V - E + F = 2 for a closed genus-0 surface (allow tiny numeric slack on edge count).
+        return abs(int(mesh.euler_number) - 2) <= 0
+    except Exception:  # noqa: BLE001 — degenerate mesh accounting
+        return False
+
+
+def delegate_closed_solid(
+    mesh: trimesh.Trimesh,
+    *,
+    timeout: float = 120.0,
+    fetch: Any = None,
+    poll_interval: float = 0.1,
+    vol_tol: float = 0.08,
+) -> Optional[SolidResult]:
+    """Fit a closed genus-0 organic mesh via the nurbs service closed mode (T38 / SPEC-12 U7).
+
+    When ``RECONSTRUCT_NURBS_URL`` is set and ``mesh`` is watertight genus-0, POSTs the whole mesh
+    as GLB with ``mode:"closed"`` and returns the sewn multi-patch solid as a ``SolidResult``.
+    Any failure (env unset, non-genus-0, HTTP error, non-solid report, volume mismatch) returns
+    ``None`` so the fitted/faceted path continues unchanged (FR-8). Concave shapes that defeat
+    cube-map charting still return a watertight all-faceted solid from the nurbs service — that
+    counts as success when volume validates.
+    """
+    base = _nurbs_url()
+    if base is None:
+        return None
+    if not _is_closed_genus0(mesh):
+        return None
+    mesh_volume = float(mesh.volume) if mesh.is_volume else 0.0
+    if mesh_volume <= 0:
+        return None
+
+    base = base.rstrip("/")
+    client = fetch
+    owns_client = fetch is None
+    if owns_client:
+        import httpx  # noqa: PLC0415
+
+        client = httpx.Client(timeout=timeout)
+    try:
+        glb = mesh.export(file_type="glb")
+        if isinstance(glb, str):
+            glb = glb.encode("utf-8")
+        glb_b64 = base64.b64encode(glb).decode("ascii")
+        result = _submit_and_poll(
+            client, base, glb_b64, timeout=timeout, poll_interval=poll_interval, mode="closed"
+        )
+        if result is None:
+            return None
+        step_text = result.get("step")
+        report = result.get("report") or {}
+        if not step_text:
+            logger.warning("nurbs closed delegation: result missing step; falling back")
+            return None
+        if report.get("is_solid") is False:
+            logger.warning("nurbs closed delegation: report is_solid=false; falling back")
+            return None
+        shape = _shape_from_step(step_text)
+        if shape is None:
+            logger.warning("nurbs closed delegation: STEP unreadable; falling back")
+            return None
+        if not TopExp_Explorer(shape, TopAbs_SOLID).More():
+            logger.warning("nurbs closed delegation: STEP has no solid; falling back")
+            return None
+        solid, rep = verify_closure(shape, orient=True)
+        if not rep.is_solid or rep.volume <= 0:
+            return None
+        if abs(rep.volume - mesh_volume) / mesh_volume > vol_tol:
+            logger.warning(
+                "nurbs closed delegation: volume err %.3f > tol; falling back",
+                abs(rep.volume - mesh_volume) / mesh_volume,
+            )
+            return None
+        planar, curved, freeform = classify_faces(solid)
+        n_faces = planar + curved + freeform
+        # Prefer report fitted_patches as freeform count when present (honest 6-patch / degraded).
+        fitted_patches = report.get("fitted_patches")
+        if isinstance(fitted_patches, int) and fitted_patches >= 0:
+            freeform = fitted_patches
+            n_faces = max(n_faces, freeform)
+        return SolidResult(
+            solid, True, True, rep.free_edges, rep.volume, n_faces, primitive="nurbs_closed"
+        )
+    except Exception as e:  # noqa: BLE001 — best-effort; never sink reconstruction
+        logger.warning(
+            "nurbs closed delegation failed (%s: %s); falling back", type(e).__name__, e
+        )
+        return None
+    finally:
+        if owns_client:
+            try:
+                client.close()
+            except Exception:  # noqa: BLE001
+                pass
 
 
 def delegate_region_face(

@@ -87,16 +87,27 @@ const featureSchema: z.ZodTypeAny = z.lazy(() =>
     z.object({
       ...base,
       type: z.literal("extrude"),
-      params: z.object({ height: z.number(), back: z.number().optional() }),
+      // height optional when toFace is set (true up-to-face needs no blind distance).
+      params: z.object({ height: z.number().optional(), back: z.number().optional() }),
       data: z
         .object({
           direction: vec3.optional(),
           directionEdge: edgeRef.optional(),
           toFace: faceRef.optional(),
-          // "join" fuses the pad with the existing body; "new" (default) replaces it (G7).
+          // "join" fuses the pad with the existing body; "new" replaces it.
+          // Unset: rebuild joins when a solid already exists, else creates a new body (C1).
           op: z.enum(["join", "new"]).optional(),
         })
         .optional(),
+    }).superRefine((val, ctx) => {
+      const hasToFace = val.data?.toFace != null;
+      if (!hasToFace && (val.params.height == null || !Number.isFinite(val.params.height))) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "extrude: height is required unless data.toFace is set",
+          path: ["params", "height"],
+        });
+      }
     }),
     z.object({
       ...base,
@@ -111,7 +122,14 @@ const featureSchema: z.ZodTypeAny = z.lazy(() =>
         oy: z.number().optional(),
         oz: z.number().optional(),
       }),
-      data: z.unknown().optional(),
+      data: z
+        .object({
+          // Edge-driven axis (C2); rebuild re-resolves origin+direction each time.
+          axisEdge: edgeRef.optional(),
+          // Join/new parity with extrude (C2); unset joins when a solid exists.
+          op: z.enum(["join", "new"]).optional(),
+        })
+        .optional(),
     }),
     z.object({
       ...base,
@@ -122,8 +140,26 @@ const featureSchema: z.ZodTypeAny = z.lazy(() =>
         .object({ direction: vec3.optional(), directionEdge: edgeRef.optional() })
         .optional(),
     }),
-    z.object({ ...base, type: z.literal("fillet"), params: z.object({ radius: z.number() }), data: z.object({ edges: z.array(edgeRef).optional(), selector: z.unknown().optional() }).optional() }),
-    z.object({ ...base, type: z.literal("chamfer"), params: z.object({ distance: z.number() }), data: z.object({ edges: z.array(edgeRef).optional(), selector: z.unknown().optional() }).optional() }),
+    z.object({
+      ...base,
+      type: z.literal("fillet"),
+      // radius2 = variable end radius along the edge (C8 / rebuild radius2 → endRadius).
+      params: z.object({ radius: z.number(), radius2: z.number().optional() }),
+      data: z.object({ edges: z.array(edgeRef).optional(), selector: z.unknown().optional() }).optional(),
+    }),
+    z.object({
+      ...base,
+      type: z.literal("chamfer"),
+      // distance2 + data.face = two-distance chamfer (C8).
+      params: z.object({ distance: z.number(), distance2: z.number().optional() }),
+      data: z
+        .object({
+          edges: z.array(edgeRef).optional(),
+          selector: z.unknown().optional(),
+          face: faceRef.optional(),
+        })
+        .optional(),
+    }),
     z.object({
       ...base,
       type: z.literal("shell"),

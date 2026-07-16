@@ -4,7 +4,7 @@
 // The service has no auth, so (unlike @plastiq/nerf) there is no header plumbing to assert.
 
 import { describe, expect, it } from "vitest";
-import { capturePointCloud, completePartialScan } from "./index.js";
+import { cancelJob, capturePointCloud, completePartialScan } from "./index.js";
 
 const RESULT_WIRE = { glb_base64: "Z2xURg==", vertices: 512, faces: 1020 };
 
@@ -80,6 +80,17 @@ describe("capturePointCloud (POST /capture)", () => {
     expect(calls).toContain("http://localhost:8001/jobs/job-3/status");
     expect(calls).toContain("http://localhost:8001/jobs/job-3/result");
     expect((inits[0]?.headers as Record<string, string>)["Content-Type"]).toBe("application/json");
+  });
+
+  it("fires onJob with the submitted job id before polling (cancel handle)", async () => {
+    const { fetchImpl } = scriptedFetch();
+    const ids: string[] = [];
+    await capturePointCloud(CLOUD, {
+      fetchImpl,
+      delay: async () => {},
+      onJob: (id) => ids.push(id),
+    });
+    expect(ids).toEqual(["job-3"]);
   });
 
   it("sends the snake_case wire body: points + normals, grid_res/iters only when set", async () => {
@@ -162,13 +173,16 @@ describe("capturePointCloud (POST /capture)", () => {
 
 describe("completePartialScan (POST /complete)", () => {
   it("submits points (+grid_res) to /complete, polls, and returns the GLB result", async () => {
-    const { fetchImpl, calls, submitBody } = scriptedFetch({ submitPath: "/complete" });
+    const { fetchImpl, calls, submitBody } = scriptedFetch({
+      submitPath: "/complete",
+      result: { ...RESULT_WIRE, demo_weights: true },
+    });
     const res = await completePartialScan(
       { points: CLOUD.points, gridRes: 48 },
       { fetchImpl, delay: async () => {} },
     );
     expect(res.glb).toBe("Z2xURg==");
-    expect(res.report).toEqual({ vertices: 512, faces: 1020 });
+    expect(res.report).toEqual({ vertices: 512, faces: 1020, demoWeights: true });
     expect(calls[0]).toBe("http://localhost:8001/complete");
     expect(calls).toContain("http://localhost:8001/jobs/job-3/status");
     // No normals key at all on the completion body — the endpoint takes positions only.
@@ -208,5 +222,26 @@ describe("completePartialScan (POST /complete)", () => {
     await expect(
       completePartialScan({ points: CLOUD.points }, { fetchImpl, delay: async () => {}, maxPolls: 2 }),
     ).rejects.toThrow(/completion timed out after 2 polls/);
+  });
+});
+
+describe("cancelJob (DELETE /jobs/{id})", () => {
+  it("issues DELETE and accepts 204", async () => {
+    const calls: string[] = [];
+    const methods: string[] = [];
+    const fetchImpl = (async (url: string, init?: RequestInit) => {
+      calls.push(url);
+      methods.push(init?.method ?? "GET");
+      return { ok: true, status: 204, json: async () => ({}) } as unknown as Response;
+    }) as unknown as typeof fetch;
+    await cancelJob("job-9", { baseURL: "http://localhost:8001", fetchImpl });
+    expect(calls[0]).toBe("http://localhost:8001/jobs/job-9");
+    expect(methods[0]).toBe("DELETE");
+  });
+
+  it("treats 404 as success (idempotent cancel)", async () => {
+    const fetchImpl = (async () =>
+      ({ ok: false, status: 404, json: async () => ({ detail: "no such job" }) }) as unknown as Response) as unknown as typeof fetch;
+    await expect(cancelJob("gone", { fetchImpl })).resolves.toBeUndefined();
   });
 });

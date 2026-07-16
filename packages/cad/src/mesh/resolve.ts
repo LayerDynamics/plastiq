@@ -117,15 +117,39 @@ export function resolveEdgeDirection(
   solid: Solid,
   ref: EdgeRef,
 ): [number, number, number] {
+  const d = resolveEdgeAxis(oc, solid, ref).direction;
+  return [d[0], d[1], d[2]];
+}
+
+/**
+ * Origin (edge midpoint) + unit tangent of the edge matching `ref`.
+ * Used for revolve-about-edge and any axis-from-edge feature (C2).
+ */
+export function resolveEdgeAxis(
+  oc: Occt,
+  solid: Solid,
+  ref: EdgeRef,
+): { origin: Vec3; direction: Vec3 } {
   const edge = resolveEdgeRef(oc, solid, ref);
-  if (!edge) throw new Error("resolveEdgeDirection: no edge matched the EdgeRef signature");
-  const curve = new oc.BRepAdaptor_Curve_2(edge);
-  const p0 = curve.Value(curve.FirstParameter());
-  const p1 = curve.Value(curve.LastParameter());
-  const dir = normalize(sub([p1.X(), p1.Y(), p1.Z()], [p0.X(), p0.Y(), p0.Z()]));
-  p0.delete();
-  p1.delete();
-  curve.delete();
-  edge.delete();
-  return [dir[0], dir[1], dir[2]];
+  if (!edge) throw new Error("resolveEdgeAxis: no edge matched the EdgeRef signature");
+  try {
+    const curve = new oc.BRepAdaptor_Curve_2(edge);
+    try {
+      const p0 = curve.Value(curve.FirstParameter());
+      const p1 = curve.Value(curve.LastParameter());
+      const a: Vec3 = [p0.X(), p0.Y(), p0.Z()];
+      const b: Vec3 = [p1.X(), p1.Y(), p1.Z()];
+      p0.delete();
+      p1.delete();
+      const direction = normalize(sub(b, a));
+      // Prefer the geometric midpoint; fall back to ref.midpoint only if needed
+      // (both endpoints coincide would already fail normalize above).
+      const origin: Vec3 = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2, (a[2] + b[2]) / 2];
+      return { origin, direction };
+    } finally {
+      curve.delete();
+    }
+  } finally {
+    edge.delete();
+  }
 }

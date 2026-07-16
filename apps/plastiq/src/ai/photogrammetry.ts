@@ -29,6 +29,14 @@ import { meshFromPointCloud, type CaptureScanDeps } from "./capture.js";
 import { parsedToPointCloudDoc } from "./pointcloudFile.js";
 import type { MeshDoc, PointCloudDoc } from "../store/types.js";
 
+/**
+ * Default longest-side cap for **sparse** SfM only (T39 / M9). Downscales multi-megapixel uploads
+ * for registration while dense MVS still runs at full native resolution. Server accepts 256..4096;
+ * omit at the package/server layer ⇒ native both stages — the app always sends this so large
+ * photos do not collapse RANSAC thresholds. Callers may override per-solve.
+ */
+export const DEFAULT_SPARSE_MAX_DIM = 1600;
+
 /** Merge the persisted photogrammetry service settings under any caller-supplied overrides. */
 function withServiceSettings<T extends { apiKey?: string; baseURL?: string }>(opts: T): T {
   const settings = useAiStore.getState().settings;
@@ -43,12 +51,18 @@ function withServiceSettings<T extends { apiKey?: string; baseURL?: string }>(op
 
 /** Solve unposed photos → poses + clouds, threading the persisted service settings. The result's
  * `transformsJson`/`imagesUndistorted` feed the NeRF leg and `densePly` feeds the capture leg (see
- * {@link denseCloudToMeshDoc}). `opts.onJob` yields the job id so the panel can cancel it mid-poll. */
+ * {@link denseCloudToMeshDoc}). `opts.onJob` yields the job id so the panel can cancel it mid-poll.
+ * Defaults {@link PhotogrammetrySolveInput.sparseMaxDim} to {@link DEFAULT_SPARSE_MAX_DIM} when the
+ * caller omits it (panel, canvas drop, and any other app path). */
 export async function solvePhotogrammetry(
   input: PhotogrammetrySolveInput,
   opts: PhotogrammetryOptions = {},
 ): Promise<PhotogrammetryResult> {
-  return solvePhotos(input, withServiceSettings(opts));
+  const resolved: PhotogrammetrySolveInput = {
+    ...input,
+    sparseMaxDim: input.sparseMaxDim ?? DEFAULT_SPARSE_MAX_DIM,
+  };
+  return solvePhotos(resolved, withServiceSettings(opts));
 }
 
 /** Cancel an in-flight solve server-side (`DELETE /jobs/{id}`) — the counterpart to

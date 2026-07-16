@@ -9,12 +9,21 @@ import type { Vec3 } from "../math/index.js";
 import { Solid } from "../solid/solid.js";
 import type { gp_Trsf } from "opencascade.js";
 
-/** Apply a transform to a shape, returning an independent copy. */
+/** Apply a transform to a shape, returning an independent copy.
+ * Frees the maker on every exit, including Standard_Failure (T19). */
 function applied(oc: Occt, shape: TopoDS_Shape, trsf: gp_Trsf): TopoDS_Shape {
   const t = new oc.BRepBuilderAPI_Transform_2(shape, trsf, true);
-  const out = t.Shape();
-  t.delete();
-  return out;
+  try {
+    const out = t.Shape();
+    // Real OCCT shapes expose IsNull(); unit-test mocks may not.
+    if (typeof (out as { IsNull?: () => boolean }).IsNull === "function" && out.IsNull()) {
+      out.delete();
+      throw new Error("transform: produced an empty shape");
+    }
+    return out;
+  } finally {
+    t.delete();
+  }
 }
 
 /** Translate a solid by `delta` (SI metres). */

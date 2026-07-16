@@ -28,6 +28,7 @@ vi.mock("./photogrammetry.js", () => ({
   solvePhotogrammetry: vi.fn(),
   cancelPhotogrammetry: vi.fn(async () => {}),
   denseCloudToMeshDoc: vi.fn(),
+  DEFAULT_SPARSE_MAX_DIM: 1600,
 }));
 vi.mock("./nerf.js", () => ({
   captureFromPhotos: vi.fn(),
@@ -138,14 +139,30 @@ describe("PhotoSolveSection — solve + hand-offs (SPEC-13 P11.2)", () => {
       fireEvent.click(screen.getByTestId("photo-solve-btn"));
     });
     await waitFor(() => expect(screen.getByTestId("photo-to-mesh-btn")).toBeTruthy());
-    // The solve was called with the picked images + their names + dense on.
+    // The solve was called with the picked images + their names + dense on + sparseMaxDim 1600 (M9).
     expect(solveMock).toHaveBeenCalledTimes(1);
     const [input] = solveMock.mock.calls[0]!;
     expect((input as { images: string[] }).images).toHaveLength(3);
     expect((input as { names: string[] }).names).toEqual(["a.jpg", "b.jpg", "c.jpg"]);
     expect((input as { dense: boolean }).dense).toBe(true);
+    expect((input as { sparseMaxDim: number }).sparseMaxDim).toBe(1600);
+    expect((screen.getByTestId("photo-sparse-max-dim") as HTMLInputElement).value).toBe("1600");
     expect(screen.getByTestId("photo-status").textContent).toMatch(/3\/3 registered/);
     expect(screen.getByTestId("photo-to-nerf-btn")).toBeTruthy();
+  });
+
+  it("PhotoSolveSection sparse-max input overrides the 1600 default on solve", async () => {
+    solveMock.mockResolvedValue(solveResult());
+    render(<GenerationPanel />);
+    await pickPhotos(3);
+    await act(async () => {
+      fireEvent.change(screen.getByTestId("photo-sparse-max-dim"), { target: { value: "640" } });
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("photo-solve-btn"));
+    });
+    await waitFor(() => expect(solveMock).toHaveBeenCalledTimes(1));
+    expect((solveMock.mock.calls[0]![0] as { sparseMaxDim: number }).sparseMaxDim).toBe(640);
   });
 
   it("hand-off (b): dense cloud → mesh reconstructs via capture and opens the new project", async () => {

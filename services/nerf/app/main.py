@@ -105,7 +105,8 @@ class TrainBody(BaseModel):
     detail faster). The `neus` SDF trunk consumes RAW coordinates by design (its IGR geometric init
     requires them), so there is no position encoding to swap — `hashgrid` with `neus` is rejected
     rather than silently ignored. `importance_samples` adds a fine PDF (hierarchical) sampling pass
-    concentrated on the surface, supported by both methods; 0 = coarse-only (default)."""
+    concentrated on the surface (T28). Omit / null → method default (neus: 32, nerf: 0);
+    0 = coarse-only."""
 
     transforms_json: str | dict
     images: list[str] = Field(..., max_length=MAX_IMAGES)
@@ -113,7 +114,7 @@ class TrainBody(BaseModel):
     method: str = "neus"
     grid_res: int = Field(64, ge=16, le=MAX_GRID_RES)
     encoding: Literal["frequency", "hashgrid"] = "frequency"
-    importance_samples: int = Field(0, ge=0, le=MAX_IMPORTANCE_SAMPLES)
+    importance_samples: int | None = Field(None, ge=0, le=MAX_IMPORTANCE_SAMPLES)
 
     @model_validator(mode="after")
     def _hashgrid_requires_nerf(self) -> "TrainBody":

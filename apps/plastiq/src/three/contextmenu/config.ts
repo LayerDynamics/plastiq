@@ -13,10 +13,13 @@ import { extractProfile } from "../../sketch/profile.js";
 import {
   chamferFeature,
   draftFeature,
+  cutAlongEdgeFeature,
+  cutTwoSidedFeature,
   extrudeAlongEdgeFeature,
   extrudeToFaceFeature,
   extrudeTwoSidedFeature,
   filletFeature,
+  revolveAboutEdgeFeature,
   shellFeature,
 } from "../../viewport/dressup.js";
 import { FEATURE_EDIT_SPECS } from "../../viewport/featureGizmo.js";
@@ -79,6 +82,16 @@ function openEdit(id: string, type: string, start: number): void {
   if (spec) cad().setActiveFeatureEdit({ id, param: spec.param, start });
 }
 
+/** Most recent unsuppressed sketch feature id (C3: extrude/cut/revolve bind via deps). */
+function lastSketchDeps(): string[] | undefined {
+  const feats = cad().features;
+  for (let i = feats.length - 1; i >= 0; i--) {
+    const f = feats[i]!;
+    if (f.type === "sketch" && !f.suppressed) return [f.id];
+  }
+  return undefined;
+}
+
 /** Add the built feature (opening its interactive edit), or surface why the
  * selection couldn't (mirrors Toolbar's `apply`). The edit only opens when a feature
  * was actually created — dress-up builders return null without a valid selection. */
@@ -87,8 +100,17 @@ function addOrStatus(f: NewFeature | null, what: string, start?: number): void {
     cad().setStatus(`${what}: select the edges/faces it needs first`);
     return;
   }
-  const id = cad().addFeature(f);
-  if (start != null) openEdit(id, f.type, start);
+  // Bind profile consumers to the latest sketch when the builder omitted deps (C3).
+  let feature = f;
+  if (
+    (f.type === "extrude" || f.type === "cut" || f.type === "revolve") &&
+    (f.deps == null || f.deps.length === 0)
+  ) {
+    const deps = lastSketchDeps();
+    if (deps) feature = { ...f, deps };
+  }
+  const id = cad().addFeature(feature);
+  if (start != null) openEdit(id, feature.type, start);
 }
 
 const faceCount = (ctx: ContextTarget): number => ctx.picks.filter((p) => p.kind === "face").length;
@@ -155,8 +177,15 @@ const CREATE: ContextAction[] = [
     visible: (ctx) => editing(ctx) && (ctx.kind === "empty" || ctx.kind === "body"),
     enabled: () => true,
     run: (ctx) => {
+      // op:"join" so a pad on an existing body adds material (C1); rebuild also
+      // joins by default when op is unset and a solid exists.
       if (ctx.hasProfile) {
-        const id = cad().addFeature({ type: "extrude", params: { height: EXTRUDE_H } });
+        const id = cad().addFeature({
+          type: "extrude",
+          params: { height: EXTRUDE_H },
+          data: { op: "join" },
+          deps: lastSketchDeps(),
+        });
         openEdit(id, "extrude", EXTRUDE_H);
         return;
       }
@@ -165,6 +194,7 @@ const CREATE: ContextAction[] = [
         .enterSketch("XY", 0, undefined, undefined, {
           type: "extrude",
           params: { height: EXTRUDE_H },
+          data: { op: "join" },
         });
     },
   },
@@ -176,7 +206,11 @@ const CREATE: ContextAction[] = [
     enabled: () => true,
     run: (ctx) => {
       if (ctx.hasProfile) {
-        const id = cad().addFeature({ type: "cut", params: { depth: CUT_D } });
+        const id = cad().addFeature({
+          type: "cut",
+          params: { depth: CUT_D },
+          deps: lastSketchDeps(),
+        });
         openEdit(id, "cut", CUT_D);
         return;
       }
@@ -193,14 +227,21 @@ const CREATE: ContextAction[] = [
     visible: (ctx) => editing(ctx) && (ctx.kind === "empty" || ctx.kind === "body"),
     enabled: () => true,
     run: (ctx) => {
+      // Join-by-default when a body exists (C2); world-Y fallback when no edge axis.
       if (ctx.hasProfile) {
-        const id = cad().addFeature({ type: "revolve", params: { angle: Math.PI * 2, ay: 1 } });
+        const id = cad().addFeature({
+          type: "revolve",
+          params: { angle: Math.PI * 2, ay: 1 },
+          data: { op: "join" },
+          deps: lastSketchDeps(),
+        });
         openEdit(id, "revolve", Math.PI * 2);
         return;
       }
       useSketchStore.getState().enterSketch("XY", 0, undefined, undefined, {
         type: "revolve",
         params: { angle: Math.PI * 2, ay: 1 },
+        data: { op: "join" },
       });
     },
   },
@@ -222,7 +263,21 @@ const MODIFY: ContextAction[] = [
     label: () => "Chamfer edges",
     visible: (ctx) => editing(ctx) && ctx.kind === "edge",
     enabled: (ctx) => edgeCount(ctx) > 0,
-    run: (ctx) => addOrStatus(chamferFeature(ctx.picks, ctx.refs, CHAMFER_D), "Chamfer", CHAMFER_D),
+    run: (ctx) => {
+      // C8: when a face is also selected, author two-distance chamfer (distance2 + face).
+      const faceRefs = ctx.picks
+        .filter((p) => p.kind === "face")
+        .map((p) => ctx.refs.faces[p.id])
+        .filter(Boolean) as FaceRef[];
+      const face = faceRefs[0];
+      const f = chamferFeature(
+        ctx.picks,
+        ctx.refs,
+        CHAMFER_D,
+        face ? { distance2: CHAMFER_D, face } : undefined,
+      );
+      addOrStatus(f, face ? "Chamfer (two-distance)" : "Chamfer", CHAMFER_D);
+    },
   },
   {
     id: "extrude-along-edge",
@@ -234,12 +289,50 @@ const MODIFY: ContextAction[] = [
       addOrStatus(extrudeAlongEdgeFeature(ctx.picks, ctx.refs, ALONG_EDGE_H), "Extrude along edge"),
   },
   {
+    id: "revolve-about-edge",
+    group: "modify",
+    label: () => "Revolve about edge",
+    visible: (ctx) => editing(ctx) && ctx.kind === "edge",
+    enabled: (ctx) => edgeCount(ctx) > 0 && ctx.hasProfile,
+    run: (ctx) =>
+      addOrStatus(
+        revolveAboutEdgeFeature(ctx.picks, ctx.refs, Math.PI * 2),
+        "Revolve about edge",
+      ),
+  },
+  {
+    id: "cut-along-edge",
+    group: "modify",
+    label: () => "Cut along edge",
+    visible: (ctx) => editing(ctx) && ctx.kind === "edge",
+    enabled: (ctx) => edgeCount(ctx) > 0 && ctx.hasProfile,
+    run: (ctx) =>
+      addOrStatus(cutAlongEdgeFeature(ctx.picks, ctx.refs, CUT_D), "Cut along edge", CUT_D),
+  },
+  {
+    id: "cut-two-sided",
+    group: "modify",
+    label: () => "Cut (two-sided)",
+    visible: (ctx) => editing(ctx) && ctx.hasProfile && (ctx.kind === "empty" || ctx.kind === "body"),
+    enabled: (ctx) => ctx.hasProfile,
+    run: () => addOrStatus(cutTwoSidedFeature(CUT_D / 2, CUT_D / 2), "Cut two-sided", CUT_D / 2),
+  },
+  {
     id: "shell",
     group: "modify",
     label: () => "Shell faces",
     visible: (ctx) => editing(ctx) && ctx.kind === "face",
     enabled: (ctx) => faceCount(ctx) > 0,
     run: (ctx) => addOrStatus(shellFeature(ctx.picks, ctx.refs, SHELL_T), "Shell", SHELL_T),
+  },
+  {
+    id: "shell-outward",
+    group: "modify",
+    label: () => "Shell outward",
+    visible: (ctx) => editing(ctx) && ctx.kind === "face",
+    enabled: (ctx) => faceCount(ctx) > 0,
+    run: (ctx) =>
+      addOrStatus(shellFeature(ctx.picks, ctx.refs, SHELL_T, "outward"), "Shell outward", SHELL_T),
   },
   {
     id: "draft",

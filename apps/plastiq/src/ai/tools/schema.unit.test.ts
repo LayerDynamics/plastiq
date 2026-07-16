@@ -213,6 +213,46 @@ describe("R0 unit conversion — mm/deg → SI", () => {
     expect(si.features[0]!.data!.direction).toEqual([0, 0, -1]);
   });
 
+  it("converts fillet radius2 and chamfer distance2 mm→SI via LENGTH_PARAMS (C8)", () => {
+    // Honest conversion: 2 mm → 0.002 m. Fails if radius2/distance2 are omitted from LENGTH_PARAMS
+    // (they would stay 2 = 2 metres).
+    const fil: AuthoringDocument = {
+      features: [
+        {
+          id: "fil1",
+          type: "fillet",
+          params: { radius: 1, radius2: 2 },
+          data: { edges: [{ midpoint: [0, 0, 0], faceNormals: [[0, 0, 1], [1, 0, 0]] }] },
+        },
+      ],
+      params: {},
+    };
+    expect(authoringDocumentSchema.safeParse(fil).success).toBe(true);
+    const siFil = toCadDocument(fil);
+    expect(siFil.features[0]!.params!.radius).toBeCloseTo(mm(1), 12);
+    expect(siFil.features[0]!.params!.radius2).toBeCloseTo(mm(2), 12);
+
+    const ch: AuthoringDocument = {
+      features: [
+        {
+          id: "ch1",
+          type: "chamfer",
+          params: { distance: 1, distance2: 3 },
+          data: {
+            edges: [{ midpoint: [0, 0, 0], faceNormals: [[0, 0, 1], [1, 0, 0]] }],
+            face: { normal: [0, 0, 1], centroid: [0, 0, 0.01] },
+          },
+        },
+      ],
+      params: {},
+    };
+    expect(authoringDocumentSchema.safeParse(ch).success).toBe(true);
+    const siCh = toCadDocument(ch);
+    expect(siCh.features[0]!.params!.distance).toBeCloseTo(mm(1), 12);
+    expect(siCh.features[0]!.params!.distance2).toBeCloseTo(mm(3), 12);
+    expect(siCh.features[0]!.data!.face).toBeTruthy();
+  });
+
   it("converts mixed line/arc sweep spine path + plane offset (G3/G4)", () => {
     const doc: AuthoringDocument = {
       features: [
@@ -307,6 +347,23 @@ describe("R0 unit conversion — mm/deg → SI", () => {
     expect(si.features[0]!.data!.op).toBe("join");
     expect(si.features[1]!.data!.direction).toBe("outward");
     expect(si.features[1]!.params!.thickness).toBeCloseTo(mm(2), 12);
+  });
+
+  it("accepts extrude toFace without height (T06)", () => {
+    const doc: AuthoringDocument = {
+      features: [
+        {
+          id: "e1",
+          type: "extrude",
+          params: {},
+          data: { toFace: { normal: [0, 0, 1] } },
+        },
+      ],
+      params: {},
+    };
+    expect(authoringDocumentSchema.safeParse(doc).success).toBe(true);
+    const si = toCadDocument(doc);
+    expect(si.features[0]!.data!.toFace).toEqual({ normal: [0, 0, 1] });
   });
 
   it("converts draft angle + neutralOrigin (length) but not normals", () => {

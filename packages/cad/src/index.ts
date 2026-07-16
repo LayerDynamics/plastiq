@@ -39,7 +39,12 @@ export {
   type TessellateOptions,
 } from "./mesh/tagged.js";
 export { tessellateTagged } from "./mesh/tessellate.js";
-export { resolveFaceRef, resolveEdgeRef, resolveEdgeDirection } from "./mesh/resolve.js";
+export {
+  resolveFaceRef,
+  resolveEdgeRef,
+  resolveEdgeDirection,
+  resolveEdgeAxis,
+} from "./mesh/resolve.js";
 export { resolveSelector, isSelector, type Selector, type SelectorResult } from "./select/predicates.js";
 export { faceDatumPlane } from "./mesh/faceFrame.js";
 export { exportStep, importStep, exportIges, exportGltf } from "./io/index.js";
@@ -60,6 +65,8 @@ export {
   revolve,
   type DraftOptions,
   type ShellOptions,
+  type FilletOptions,
+  type ChamferOptions,
   fillet,
   chamfer,
   shell,

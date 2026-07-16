@@ -55,13 +55,16 @@ def train_and_export(
     grid_res: int = 64,
     rays_per_batch: int = 1024,
     encoding: str = "frequency",
-    importance_samples: int = 0,
+    # None → method default (neus: hierarchical PDF on; nerf: off) — T28.
+    importance_samples: int | None = None,
     background: tuple[float, float, float] | None = None,
     masks: np.ndarray | None = None,
-    learnable_beta: bool = False,
+    # Production defaults for neus (T26/M3): learnable β + schedule/clip on; white bg
+    # when unset so empty rays match common synthetic/white-backdrop captures.
+    learnable_beta: bool | None = None,
     grad_clip: float | None = None,
-    warmup_frac: float = 0.0,
-    lr_final_frac: float = 1.0,
+    warmup_frac: float | None = None,
+    lr_final_frac: float | None = None,
     seed: int = 0,
 ) -> dict:
     """Train a field on posed views and export its surface. `transforms` is a transforms.json dict;
@@ -78,7 +81,8 @@ def train_and_export(
             "encoding 'hashgrid' requires method 'nerf' — the 'neus' SDF trunk consumes raw "
             "coordinates by design (geometric init), so it has no position encoding to swap"
         )
-    if importance_samples < 0:
+    # Method defaults for hierarchical sampling applied after this check (T28).
+    if importance_samples is not None and importance_samples < 0:
         raise ValueError("importance_samples must be >= 0")
     out = parse_transforms(transforms, images)
     if len(out.poses) != len(images):
@@ -98,6 +102,30 @@ def train_and_export(
     cam_dist = float(np.linalg.norm(out.poses[:, :3, 3], axis=1).mean())  # mean camera distance to origin
     near = max(0.05, cam_dist - _SCENE_RADIUS)
     far = cam_dist + _SCENE_RADIUS
+    # Neus production defaults (T26/T28); vanilla nerf keeps opt-in schedule (None → no-op).
+    if method == "neus":
+        if learnable_beta is None:
+            learnable_beta = True
+        if grad_clip is None:
+            grad_clip = 1.0
+        if warmup_frac is None:
+            warmup_frac = 0.05
+        if lr_final_frac is None:
+            lr_final_frac = 0.1
+        if background is None:
+            background = (1.0, 1.0, 1.0)
+        if importance_samples is None:
+            importance_samples = 32  # hierarchical PDF fine pass (proposal-style)
+    else:
+        if learnable_beta is None:
+            learnable_beta = False
+        if warmup_frac is None:
+            warmup_frac = 0.0
+        if lr_final_frac is None:
+            lr_final_frac = 1.0
+        if importance_samples is None:
+            importance_samples = 0
+
     cfg = NerfConfig(
         # use_hashgrid is only read by the NeRFField (method="nerf") — the hashgrid+neus combination
         # was rejected above, so the flag is never set where it would be silently ignored.
@@ -113,7 +141,7 @@ def train_and_export(
     hold_o, hold_d, hold_t = mx.take(origins, hold_idx, 0), mx.take(dirs, hold_idx, 0), mx.take(target, hold_idx, 0)
     origins, dirs, target = mx.take(origins, train_idx, 0), mx.take(dirs, train_idx, 0), mx.take(target, train_idx, 0)
 
-    model = (VolSDFModel(cfg, learnable_beta=learnable_beta, seed=seed) if method == "neus"
+    model = (VolSDFModel(cfg, learnable_beta=bool(learnable_beta), seed=seed) if method == "neus"
              else VanillaNeRF(cfg, seed=seed))
     # Tiny scenes (a handful of low-res views) have so few rays that subsampling them with replacement
     # only injects gradient noise — a short run then converges or collapses on the luck of the batch
@@ -122,7 +150,8 @@ def train_and_export(
     m_train = int(origins.shape[0])
     batch = m_train if m_train <= 2 * rays_per_batch else rays_per_batch
     Trainer(model, seed=seed).train(origins, dirs, target, iters=iters, rays_per_batch=batch,
-                                    grad_clip=grad_clip, warmup_frac=warmup_frac, lr_final_frac=lr_final_frac)
+                                    grad_clip=grad_clip, warmup_frac=float(warmup_frac),
+                                    lr_final_frac=float(lr_final_frac))
 
     # PSNR on the held-out rays (never trained on) — the genuine held-out quality signal for the report.
     pred = model.render_rays(hold_o, hold_d, key=make_key(seed + 1))

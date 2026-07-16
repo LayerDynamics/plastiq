@@ -120,11 +120,19 @@ describe("solvePhotos (SPEC-13 §6.1)", () => {
     expect(body!.max_features).toBe(8192);
     expect(body!.seed).toBe(7);
 
+    // T39: sparseMaxDim → sparse_max_dim on the wire
+    const withRes = scriptedFetch();
+    await solvePhotos(
+      { images: ["a", "b", "c"], sparseMaxDim: 640 },
+      { fetchImpl: withRes.fetchImpl, delay: async () => {} },
+    );
+    expect(withRes.submitBody()!.sparse_max_dim).toBe(640);
+
     // Unset → absent entirely (the service's own defaults apply; nothing sent speculatively).
     const bare = scriptedFetch();
     await solvePhotos({ images: ["x"] }, { fetchImpl: bare.fetchImpl, delay: async () => {} });
     const bareBody = bare.submitBody()!;
-    for (const k of ["names", "matching", "dense", "undistort", "max_features", "seed"]) {
+    for (const k of ["names", "matching", "dense", "undistort", "max_features", "seed", "sparse_max_dim"]) {
       expect(k in bareBody).toBe(false);
     }
     expect(bareBody.images).toEqual(["x"]);

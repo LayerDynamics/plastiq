@@ -29,6 +29,13 @@ export interface PhotogrammetrySolveInput {
   maxFeatures?: number;
   /** RANSAC seed for a deterministic solve (default 0, D-10). Sent as `seed`. */
   seed?: number;
+  /**
+   * Longest-side pixel cap for **sparse** SfM only (256..4096). When set and an upload is larger,
+   * the service downscales for registration and densifies MVS at full native resolution
+   * (`dense_images`). Recommended ~640 for robustness (pixel-absolute RANSAC thresholds).
+   * Sent as `sparse_max_dim`. Omit ⇒ both stages run at native resolution.
+   */
+  sparseMaxDim?: number;
 }
 
 /** The self-calibrated shared camera (one device per job, §6.2): OpenCV pinhole + Brown-Conrady. */

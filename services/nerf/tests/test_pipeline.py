@@ -73,12 +73,17 @@ def test_pipeline_wires_encoding_and_importance_into_the_served_model(monkeypatc
     assert model.importance_samples == 8
     assert model.pdf_sampler is not None and model.pdf_sampler.n_samples == 8  # fine pass is live
 
-    # Defaults are unchanged: frequency encoding, coarse-only sampling.
+    # Nerf defaults: frequency encoding, coarse-only sampling.
     model = _capture_pipeline_model(monkeypatch, method="nerf")
     assert isinstance(model.field.pos_enc, FrequencyEncoding)
     assert model.importance_samples == 0 and model.pdf_sampler is None
 
-    # Importance sampling is supported by BOTH methods (the surface model has the same PDF pass).
+    # Neus production default enables hierarchical PDF (T28 proposal-style fine pass).
+    model = _capture_pipeline_model(monkeypatch, method="neus")
+    assert isinstance(model, VolSDFModel)
+    assert model.pdf_sampler is not None and model.importance_samples == 32
+
+    # Explicit importance sampling is supported by BOTH methods.
     model = _capture_pipeline_model(monkeypatch, method="neus", importance_samples=4)
     assert isinstance(model, VolSDFModel)
     assert model.pdf_sampler is not None and model.pdf_sampler.n_samples == 4

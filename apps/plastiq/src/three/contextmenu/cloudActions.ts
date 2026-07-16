@@ -71,14 +71,20 @@ export async function runCompleteScan(deps: CloudActionDeps): Promise<void> {
     return;
   }
   deps.setStatus("completing partial scan (minutes)…");
-  const { meshDocId } = await deps.completeScan(
+  const { meshDocId, report } = await deps.completeScan(
     { points: toRows(deps.cloud.points) },
     { persist: deps.persist },
     { ...(deps.captureBaseURL ? { baseURL: deps.captureBaseURL } : {}), onState: (s) => deps.setStatus(s) },
     name,
   );
   await deps.open(meshDocId);
-  deps.setStatus(`completed '${name}' into a full mesh — run “Convert to CAD” to make it editable`);
+  // T24/M2: surface demo-weights honesty when CAPTURE_COMPLETION_CHECKPOINT is unset.
+  const demoNote = report.demoWeights
+    ? " (demo sphere-family weights — set CAPTURE_COMPLETION_CHECKPOINT for real meshes)"
+    : "";
+  deps.setStatus(
+    `completed '${name}' into a full mesh${demoNote} — run “Convert to CAD” to make it editable`,
+  );
 }
 
 /** Wire the DI deps to the live stores/services for the active cloud; null when no cloud is open. */

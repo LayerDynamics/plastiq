@@ -4,9 +4,9 @@
 // preset (Anthropic / local Ollama / OpenAI-compatible), choose a model from the curated
 // catalog (Appendix A) OR type a free-text override, set the base URL (also the hosted-proxy
 // seam — FR-5), the BYO API key, the creative mesh-gen (fal) key + proxy URL, and the
-// self-hosted reconstruction / NeRF / NURBS / capture service URLs (+ the optional NeRF and
-// NURBS API keys for NERF_API_KEY/NURBS_API_KEY-protected deployments — SPEC-11 §5,
-// SPEC-12 §6.1). The tool-capability preflight warning (FR-5b) is
+// self-hosted reconstruction / NeRF / NURBS / capture / photogrammetry service URLs and
+// their optional API keys (RECONSTRUCT_API_KEY, CAPTURE_API_KEY, NERF_API_KEY, NURBS_API_KEY,
+// PHOTOGRAMMETRY_API_KEY — SPEC-7/10/11/12/13). The tool-capability preflight warning (FR-5b) is
 // SURFACED here so a non-tool model isn't silently accepted: the static catalog hint
 // shows immediately, and a debounced LIVE probe (probeModelCapabilities — Ollama model
 // metadata or a minimal tools-enabled chat probe, §6.9) supersedes it once the endpoint
@@ -57,11 +57,13 @@ export function SettingsPanel(props: { onClose?: () => void }): React.JSX.Elemen
   const [apiKey, setApiKey] = useState(settings?.apiKeys[settings.providerKey] ?? "");
   const [falKey, setFalKey] = useState(settings?.apiKeys["fal"] ?? "");
   const [reconstructBaseURL, setReconstructBaseURL] = useState(settings?.reconstructBaseURL ?? "");
+  const [reconstructApiKey, setReconstructApiKey] = useState(settings?.reconstructApiKey ?? "");
   const [nerfBaseURL, setNerfBaseURL] = useState(settings?.nerfBaseURL ?? "");
   const [nerfApiKey, setNerfApiKey] = useState(settings?.nerfApiKey ?? "");
   const [nurbsBaseURL, setNurbsBaseURL] = useState(settings?.nurbsBaseURL ?? "");
   const [nurbsApiKey, setNurbsApiKey] = useState(settings?.nurbsApiKey ?? "");
   const [captureBaseURL, setCaptureBaseURL] = useState(settings?.captureBaseURL ?? "");
+  const [captureApiKey, setCaptureApiKey] = useState(settings?.captureApiKey ?? "");
   const [photogrammetryBaseURL, setPhotogrammetryBaseURL] = useState(
     settings?.photogrammetryBaseURL ?? "",
   );
@@ -130,11 +132,13 @@ export function SettingsPanel(props: { onClose?: () => void }): React.JSX.Elemen
       apiKeys,
       ...(baseURL.trim() ? { baseURL: baseURL.trim() } : {}),
       ...(reconstructBaseURL.trim() ? { reconstructBaseURL: reconstructBaseURL.trim() } : {}),
+      ...(reconstructApiKey.trim() ? { reconstructApiKey: reconstructApiKey.trim() } : {}),
       ...(nerfBaseURL.trim() ? { nerfBaseURL: nerfBaseURL.trim() } : {}),
       ...(nerfApiKey.trim() ? { nerfApiKey: nerfApiKey.trim() } : {}),
       ...(nurbsBaseURL.trim() ? { nurbsBaseURL: nurbsBaseURL.trim() } : {}),
       ...(nurbsApiKey.trim() ? { nurbsApiKey: nurbsApiKey.trim() } : {}),
       ...(captureBaseURL.trim() ? { captureBaseURL: captureBaseURL.trim() } : {}),
+      ...(captureApiKey.trim() ? { captureApiKey: captureApiKey.trim() } : {}),
       ...(photogrammetryBaseURL.trim()
         ? { photogrammetryBaseURL: photogrammetryBaseURL.trim() }
         : {}),
@@ -252,6 +256,18 @@ export function SettingsPanel(props: { onClose?: () => void }): React.JSX.Elemen
       />
 
       <Field
+        testid="settings-reconstruct-key"
+        label="Reconstruction service API key (if it sets RECONSTRUCT_API_KEY)"
+        value={reconstructApiKey}
+        onChange={(v) => {
+          setReconstructApiKey(v);
+          setSaved(false);
+        }}
+        type="password"
+        placeholder="(blank = open dev service)"
+      />
+
+      <Field
         testid="settings-nerf-url"
         label="NeRF / photo-capture service URL"
         value={nerfBaseURL}
@@ -306,6 +322,18 @@ export function SettingsPanel(props: { onClose?: () => void }): React.JSX.Elemen
           setSaved(false);
         }}
         placeholder="http://localhost:8001"
+      />
+
+      <Field
+        testid="settings-capture-key"
+        label="Capture service API key (if it sets CAPTURE_API_KEY)"
+        value={captureApiKey}
+        onChange={(v) => {
+          setCaptureApiKey(v);
+          setSaved(false);
+        }}
+        type="password"
+        placeholder="(blank = open dev service)"
       />
 
       <Field

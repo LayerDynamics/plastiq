@@ -137,6 +137,8 @@ export interface CadStore {
     opts?: { history?: boolean },
   ) => void;
   setFeatureData: (id: FeatureId, data: Record<string, unknown>) => void;
+  /** Rebind feature deps (e.g. sketch binding for extrude/cut/revolve) — C10 Properties. */
+  setFeatureDeps: (id: FeatureId, deps: FeatureId[] | undefined) => void;
   renameFeature: (id: FeatureId, name: string) => void;
   removeFeature: (id: FeatureId) => void;
   toggleSuppress: (id: FeatureId) => void;
@@ -404,6 +406,14 @@ export const useCadStore = create<CadStore>((set, get) => ({
     set((s) => ({
       ...pushHistory(s),
       features: s.features.map((f) => (f.id === id ? { ...f, data: { ...f.data, ...data } } : f)),
+    })),
+
+  setFeatureDeps: (id, deps) =>
+    set((s) => ({
+      ...pushHistory(s),
+      features: s.features.map((f) =>
+        f.id === id ? { ...f, deps: deps && deps.length > 0 ? deps : undefined } : f,
+      ),
     })),
 
   renameFeature: (id, name) =>

@@ -16,11 +16,12 @@ from __future__ import annotations
 import asyncio
 import base64
 import logging
+import secrets
 
 import os
 from typing import Literal
 
-from fastapi import FastAPI, HTTPException, Response
+from fastapi import Depends, FastAPI, Header, HTTPException, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
@@ -54,12 +55,31 @@ _RUNNING_TTL = float(os.environ.get("RECONSTRUCT_RUNNING_JOB_TTL_SECONDS", "1800
 
 store = JobStore(running_ttl_seconds=_RUNNING_TTL)
 
+
+def _api_key() -> str | None:
+    """Optional bearer key (RECONSTRUCT_API_KEY). Read per-request so tests can monkeypatch."""
+    return os.environ.get("RECONSTRUCT_API_KEY")
+
+
+def require_auth(authorization: str | None = Header(default=None)) -> None:
+    """If RECONSTRUCT_API_KEY is set, require Authorization: Bearer <key> on mutating routes (T36)."""
+    key = _api_key()
+    if not key:
+        return
+    expected = f"Bearer {key}"
+    if authorization is None or not secrets.compare_digest(
+        authorization.encode("utf-8"), expected.encode("utf-8")
+    ):
+        raise HTTPException(status_code=401, detail="missing or invalid API key")
+
+
 # Startup config summary (env-derived, no secrets) — one line an operator can grep for.
 logger.info(
     "plastiq-reconstruct configured: cors_origins=%s (RECONSTRUCT_CORS_ORIGINS), "
-    "max_concurrent_jobs=%d (RECONSTRUCT_MAX_CONCURRENT_JOBS), "
+    "auth=%s (RECONSTRUCT_API_KEY), max_concurrent_jobs=%d (RECONSTRUCT_MAX_CONCURRENT_JOBS), "
     "running_job_ttl=%gs (RECONSTRUCT_RUNNING_JOB_TTL_SECONDS)",
     _origins,
+    "bearer" if _api_key() else "open (dev)",
     _MAX_CONCURRENT,
     _RUNNING_TTL,
 )
@@ -86,7 +106,7 @@ def health() -> dict:
     return {"status": "ok", "service": "plastiq-reconstruct"}
 
 
-@app.post("/reconstruct", response_model=JobView)
+@app.post("/reconstruct", response_model=JobView, dependencies=[Depends(require_auth)])
 async def submit_reconstruction(body: SubmitBody) -> JobView:
     if store.running_count() >= _MAX_CONCURRENT:
         logger.warning(
@@ -139,7 +159,7 @@ def job_result(job_id: str) -> dict:
     return job.result
 
 
-@app.delete("/jobs/{job_id}", status_code=204)
+@app.delete("/jobs/{job_id}", status_code=204, dependencies=[Depends(require_auth)])
 def cancel_job(job_id: str) -> Response:
     """Drop a job record (client cancel/cleanup). An in-flight worker thread cannot be force-killed,
     so its eventual result is simply discarded; status/result for this id return 404 afterwards."""

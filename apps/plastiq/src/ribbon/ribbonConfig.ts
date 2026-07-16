@@ -64,7 +64,6 @@ export const RIBBON: Record<Workspace, RibbonTab[]> = {
             a("mirror"),
             a("linearPattern"),
             a("circularPattern"),
-            a("boolean"),
             a("booleanBody"),
             a("transform"),
           ],

@@ -3,7 +3,7 @@
 // "completed" → GET /jobs/{id}/result. (SPEC-12 §6.1, U9.2.)
 
 import { describe, expect, it } from "vitest";
-import { fitNurbs } from "./client.js";
+import { cancelJob, fitNurbs } from "./client.js";
 
 /** A §6.2 surface exactly as the service serializes it — snake_case, compact knots. The client
  * must pass this through VERBATIM (untranslated), so the fixture doubles as the contract check. */
@@ -178,6 +178,16 @@ describe("fitNurbs (SPEC-12 §6.1, U9.2)", () => {
     ).rejects.toThrow(/nurbs submit: HTTP 400.*not valid base64/);
   });
 
+  it("exposes the submitted job id via onJob before polling (the cancelJob handle)", async () => {
+    const { fetchImpl, calls } = scriptedFetch();
+    const ids: string[] = [];
+    await fitNurbs({ glbBase64: "" }, { fetchImpl, delay: async () => {}, onJob: (id) => ids.push(id) });
+    // Fired exactly once, with the id the /jobs/{id}/… polls then use — so a caller holding it
+    // mid-fit can DELETE the same job the service is running.
+    expect(ids).toEqual(["job-12"]);
+    expect(calls[1]).toBe("http://localhost:8003/jobs/job-12/status");
+  });
+
   it("times out after maxPolls when the job never completes", async () => {
     const fetchImpl = (async (url: string) => {
       if (url.endsWith("/fit")) return jsonResponse({ id: "j", state: "queued" });
@@ -186,6 +196,54 @@ describe("fitNurbs (SPEC-12 §6.1, U9.2)", () => {
     await expect(
       fitNurbs({ glbBase64: "" }, { fetchImpl, delay: async () => {}, maxPolls: 3 }),
     ).rejects.toThrow(/timed out after 3 polls/);
+  });
+});
+
+/** A single-shot fetch answering the DELETE with `status`, recording the request for assertions. */
+function deleteFetch(status: number, body: unknown = {}): {
+  fetchImpl: typeof fetch;
+  calls: string[];
+  inits: (RequestInit | undefined)[];
+} {
+  const calls: string[] = [];
+  const inits: (RequestInit | undefined)[] = [];
+  const fetchImpl = (async (url: string, init?: RequestInit) => {
+    calls.push(url);
+    inits.push(init);
+    return jsonResponse(body, status >= 200 && status < 300, status);
+  }) as unknown as typeof fetch;
+  return { fetchImpl, calls, inits };
+}
+
+describe("cancelJob (SPEC-12 §6.1 — DELETE /jobs/{id})", () => {
+  it("issues DELETE {base}/jobs/{id} (base normalized) and resolves on 204", async () => {
+    const { fetchImpl, calls, inits } = deleteFetch(204);
+    await cancelJob("job-12", { baseURL: "http://localhost:8003/", fetchImpl });
+    expect(calls).toEqual(["http://localhost:8003/jobs/job-12"]);
+    expect(inits[0]?.method).toBe("DELETE");
+  });
+
+  it("treats 404 as already-gone (no throw) — cancelling twice is not an error", async () => {
+    const { fetchImpl, calls } = deleteFetch(404, { detail: "no such job" });
+    await expect(cancelJob("gone", { fetchImpl })).resolves.toBeUndefined();
+    expect(calls).toEqual(["http://localhost:8003/jobs/gone"]); // default base URL
+  });
+
+  it("surfaces other HTTP errors with the server detail, like the fit helpers", async () => {
+    const { fetchImpl } = deleteFetch(401, { detail: "missing or invalid API key" });
+    await expect(cancelJob("job-12", { fetchImpl })).rejects.toThrow(
+      /nurbs cancel: HTTP 401 — missing or invalid API key/,
+    );
+  });
+
+  it("sends Authorization: Bearer <key> when apiKey is set, and no header otherwise", async () => {
+    const withKey = deleteFetch(204);
+    await cancelJob("job-12", { fetchImpl: withKey.fetchImpl, apiKey: "nurbs-secret" });
+    expect(authOf(withKey.inits[0])).toBe("Bearer nurbs-secret");
+
+    const withoutKey = deleteFetch(204);
+    await cancelJob("job-12", { fetchImpl: withoutKey.fetchImpl });
+    expect(authOf(withoutKey.inits[0])).toBeUndefined();
   });
 });
 

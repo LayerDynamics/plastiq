@@ -28,8 +28,9 @@ import trimesh
 from OCC.Core.BRepCheck import BRepCheck_Analyzer
 from OCC.Core.TopoDS import TopoDS_Face
 
+from app.fitted import fitted_shape
 from app.freeform import face_max_point_error, freeform_face, freeform_region_face
-from app.nurbs_delegate import delegate_region_face
+from app.nurbs_delegate import delegate_closed_solid, delegate_region_face
 from app.occ_step import shape_to_step
 
 ENV = "RECONSTRUCT_NURBS_URL"
@@ -254,3 +255,115 @@ def test_freeform_region_falls_back_to_makefilling_on_failure(monkeypatch, facto
     assert face is not None
     rim = np.asarray(m.outline(cap_idx).discrete[0])
     assert face_max_point_error(face, rim) < 2e-4
+
+
+# --------------------------------------------------------------------------------------------------
+# T38: closed genus-0 organic mesh → nurbs mode="closed" whole-solid delegation
+# --------------------------------------------------------------------------------------------------
+def _closed_blob():
+    """A closed genus-0 organic-ish mesh (icosphere) — no planar facets."""
+    return trimesh.creation.icosphere(subdivisions=2, radius=0.02)
+
+
+def _sphere_solid_step(radius: float = 0.02) -> str:
+    """STEP for a full analytic sphere (volume-matches an icosphere of the same radius)."""
+    from OCC.Core.BRepPrimAPI import BRepPrimAPI_MakeSphere
+    from OCC.Core.gp import gp_Pnt
+
+    return shape_to_step(BRepPrimAPI_MakeSphere(gp_Pnt(0, 0, 0), radius).Solid())
+
+
+def _closed_happy_client(step_text: str, *, fitted_patches: int = 6) -> _FakeClient:
+    return _FakeClient(
+        submit=_resp(200, {"id": "job-c", "state": "queued"}),
+        status=_resp(200, {"id": "job-c", "state": "completed"}),
+        result=_resp(
+            200,
+            {
+                "step": step_text,
+                "surfaces": _surfaces_json(),
+                "report": {
+                    "mode": "closed",
+                    "is_solid": True,
+                    "is_valid": True,
+                    "fitted_patches": fitted_patches,
+                    "faceted_patches": 0,
+                    "free_edges": 0,
+                },
+            },
+        ),
+    )
+
+
+def test_unset_env_closed_delegate_returns_none(monkeypatch):
+    monkeypatch.delenv(ENV, raising=False)
+    fake = _closed_happy_client(_sphere_solid_step())
+    assert delegate_closed_solid(_closed_blob(), fetch=fake) is None
+    assert fake.calls == []
+
+
+def test_closed_delegate_returns_volume_validated_solid(monkeypatch):
+    monkeypatch.setenv(ENV, "http://nurbs.test/")
+    mesh = _closed_blob()
+    fake = _closed_happy_client(_sphere_solid_step(0.02))
+    res = delegate_closed_solid(mesh, fetch=fake)
+    assert res is not None
+    assert res.is_solid and res.is_valid
+    assert res.free_edges == 0
+    assert res.primitive == "nurbs_closed"
+    assert abs(res.volume - float(mesh.volume)) / float(mesh.volume) < 0.08
+    # closed mode must be requested on the wire
+    assert any(c[0] == "POST" and c[1].endswith("/fit") for c in fake.calls)
+
+
+def test_closed_delegate_posts_mode_closed(monkeypatch):
+    monkeypatch.setenv(ENV, "http://nurbs.test")
+    posted: list[dict] = []
+
+    class _CaptureClient(_FakeClient):
+        def post(self, url, json=None):
+            posted.append(json or {})
+            return super().post(url, json=json)
+
+    mesh = _closed_blob()
+    client = _CaptureClient(
+        submit=_resp(200, {"id": "job-c", "state": "queued"}),
+        status=_resp(200, {"id": "job-c", "state": "completed"}),
+        result=_resp(
+            200,
+            {
+                "step": _sphere_solid_step(),
+                "surfaces": _surfaces_json(),
+                "report": {"mode": "closed", "is_solid": True, "fitted_patches": 6},
+            },
+        ),
+    )
+    assert delegate_closed_solid(mesh, fetch=client) is not None
+    assert posted and posted[0].get("mode") == "closed"
+    assert posted[0].get("iters") == 0
+
+
+def test_closed_delegate_rejects_open_mesh(monkeypatch):
+    monkeypatch.setenv(ENV, "http://nurbs.test/")
+    # A single-cap open mesh is not genus-0 closed.
+    m, cap_idx = _sphere_cap()
+    open_mesh = trimesh.Trimesh(
+        vertices=m.vertices, faces=m.faces[cap_idx], process=True
+    )
+    fake = _closed_happy_client(_sphere_solid_step())
+    assert delegate_closed_solid(open_mesh, fetch=fake) is None
+    assert fake.calls == []  # declined before HTTP
+
+
+def test_fitted_shape_uses_closed_delegation_when_env_set(monkeypatch):
+    """fitted_shape on a whole organic blob with RECONSTRUCT_NURBS_URL hits closed mode (T38)."""
+    import httpx
+
+    mesh = _closed_blob()
+    fake = _closed_happy_client(_sphere_solid_step(0.02))
+    monkeypatch.setenv(ENV, "http://nurbs.test")
+    monkeypatch.setattr(httpx, "Client", lambda **kw: fake)
+    result = fitted_shape(np.asarray(mesh.vertices), np.asarray(mesh.faces, dtype=np.int64))
+    assert result.is_solid
+    assert result.freeform_faces > 0  # report fitted_patches (or classify count)
+    assert any(u.endswith("/fit") for _, u in fake.calls)

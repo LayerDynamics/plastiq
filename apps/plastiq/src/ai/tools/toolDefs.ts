@@ -11,6 +11,13 @@ import { buildPart, type BuildPartDeps } from "./buildPart.js";
 import { inspectGeometry, type MeshProbe } from "./inspectGeometry.js";
 import { createMesh, type CreateMeshDeps } from "./createMesh.js";
 import { fitNurbs, reconstructBrep, type MeshToCadDeps } from "./meshToCad.js";
+import {
+  CLOUD_TO_MESH,
+  COMPLETE_SCAN,
+  cloudToMesh,
+  completeScan,
+  type CloudCaptureDeps,
+} from "./cloudCapture.js";
 import { planSchema, summarizePlan, validatePlan, type PlanGraph } from "../planning.js";
 import type { ToolDef, JsonSchema } from "../providers/types.js";
 import type { AgentTools, ToolHandler } from "../agentRunner.js";
@@ -51,7 +58,11 @@ function planJsonSchema(): JsonSchema {
 
 /** The model-facing tool definitions. `creative` adds create_mesh (the paid 3D path); `meshToCad`
  * adds the reconstruct_brep + fit_nurbs conversions (local services) for turning a mesh into CAD. */
-export function toolDefs(opts: { creative: boolean; meshToCad?: boolean }): ToolDef[] {
+export function toolDefs(opts: {
+  creative: boolean;
+  meshToCad?: boolean;
+  cloudCapture?: boolean;
+}): ToolDef[] {
   const defs: ToolDef[] = [
     {
       name: "plan_part",
@@ -126,6 +137,22 @@ export function toolDefs(opts: { creative: boolean; meshToCad?: boolean }): Tool
       },
     );
   }
+  if (opts.cloudCapture) {
+    defs.push(
+      {
+        name: CLOUD_TO_MESH,
+        description:
+          "Convert the currently OPEN oriented point-cloud document into a watertight mesh via the local capture service (/capture), then open the mesh project. Requires normals on the cloud. After success, call reconstruct_brep or fit_nurbs to make editable CAD.",
+        parameters: { type: "object", additionalProperties: false, properties: {} },
+      },
+      {
+        name: COMPLETE_SCAN,
+        description:
+          "Complete a PARTIAL point-cloud document (holes allowed, normals optional) into a full mesh via the local capture /complete service, then open the mesh. May use demo weights unless CAPTURE_COMPLETION_CHECKPOINT is set. Then reconstruct_brep or fit_nurbs.",
+        parameters: { type: "object", additionalProperties: false, properties: {} },
+      },
+    );
+  }
   return defs;
 }
 
@@ -140,6 +167,8 @@ export interface AgentToolDeps {
   createMesh?: CreateMeshDeps;
   /** mesh→CAD deps — when present, reconstruct_brep + fit_nurbs are offered + wired. */
   meshToCad?: MeshToCadDeps;
+  /** cloud→mesh deps — when present, cloud_to_mesh + complete_scan are offered + wired (T34). */
+  cloudCapture?: CloudCaptureDeps;
   /** M5: called when the agent commits a (validated) decomposition plan, so the trace/UX
    * can show it (9-M1). Both production runners inject it: buildTurnTools (agentTurn.ts)
    * records the FULL plan into the conversation trace (kind "plan") and the panel renders
@@ -242,5 +271,22 @@ export function buildAgentTools(deps: AgentToolDeps): AgentTools {
     handlers[FIT_NURBS] = async (args) => asResult(await fitNurbs(args, mc));
   }
 
-  return { defs: toolDefs({ creative: deps.createMesh != null, meshToCad: deps.meshToCad != null }), handlers };
+  if (deps.cloudCapture) {
+    const cc = deps.cloudCapture;
+    const asResult = (r: { status: "ok" | "error"; message: string; errors?: string }): { result: string; isError: boolean } => ({
+      result: r.status === "ok" ? r.message : `${r.message}${r.errors ? ` Errors: ${r.errors}` : ""}`,
+      isError: r.status === "error",
+    });
+    handlers[CLOUD_TO_MESH] = async (args) => asResult(await cloudToMesh(args, cc));
+    handlers[COMPLETE_SCAN] = async (args) => asResult(await completeScan(args, cc));
+  }
+
+  return {
+    defs: toolDefs({
+      creative: deps.createMesh != null,
+      meshToCad: deps.meshToCad != null,
+      cloudCapture: deps.cloudCapture != null,
+    }),
+    handlers,
+  };
 }

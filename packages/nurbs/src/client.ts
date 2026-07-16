@@ -7,7 +7,14 @@
 // polling machinery. The STEP then feeds the app's existing stepToImportDocument → importStep
 // path. Self-hosted, reached by base URL.
 
-import type { NurbsFitInput, NurbsOptions, NurbsReport, NurbsResult, NurbsSurfaceJson } from "./types.js";
+import type {
+  NurbsCancelOptions,
+  NurbsFitInput,
+  NurbsOptions,
+  NurbsReport,
+  NurbsResult,
+  NurbsSurfaceJson,
+} from "./types.js";
 
 /** The documented dev port for services/nurbs (reconstruct=8000, capture=8001, nerf=8002, nurbs=8003). */
 const DEFAULT_BASE_URL = "http://localhost:8003";
@@ -54,7 +61,10 @@ async function httpError(res: Response, what: string): Promise<string> {
  * `surfaces` array is the SPEC-12 §6.2 wire JSON, untranslated. When `opts.apiKey` is set it is
  * sent as `Authorization: Bearer <key>` on EVERY request — the service enforces it on `POST /fit`
  * (and `DELETE /jobs/{id}`) when deployed with `NURBS_API_KEY`; sending it uniformly keeps the
- * client correct if the read endpoints are ever guarded too (SPEC-12 §6.1 auth model). */
+ * client correct if the read endpoints are ever guarded too (SPEC-12 §6.1 auth model).
+ *
+ * `opts.onJob` fires with the job id right after the submit returns — the handle for cancelling
+ * the job server-side ({@link cancelJob}) while this call keeps polling. */
 export async function fitNurbs(input: NurbsFitInput, opts: NurbsOptions = {}): Promise<NurbsResult> {
   const base = (opts.baseURL ?? DEFAULT_BASE_URL).replace(/\/+$/, "");
   const f = opts.fetchImpl ?? globalThis.fetch;
@@ -86,6 +96,7 @@ export async function fitNurbs(input: NurbsFitInput, opts: NurbsOptions = {}): P
   const submitted = (await submitRes.json()) as { id?: string };
   if (!submitted.id) throw new Error("nurbs: submit returned no job id");
   const id = submitted.id;
+  opts.onJob?.(id);
 
   for (let i = 0; i < maxPolls; i++) {
     if (opts.signal?.aborted) throw new DOMException("aborted", "AbortError");
@@ -122,4 +133,21 @@ export async function fitNurbs(input: NurbsFitInput, opts: NurbsOptions = {}): P
     await delay(interval);
   }
   throw new Error(`nurbs fit timed out after ${maxPolls} polls`);
+}
+
+/** Cancel/clean up a fitting job server-side: `DELETE {baseURL}/jobs/{id}` (SPEC-12 §6.1). A 204
+ * drops the job record. Resolves on 204 AND on 404 (already gone — cancelling twice, or after the
+ * job was dropped, is not an error). When `opts.apiKey` is set it is sent as
+ * `Authorization: Bearer <key>`, matching {@link fitNurbs}. Other HTTP errors throw with detail. */
+export async function cancelJob(id: string, opts: NurbsCancelOptions = {}): Promise<void> {
+  const base = (opts.baseURL ?? DEFAULT_BASE_URL).replace(/\/+$/, "");
+  const f = opts.fetchImpl ?? globalThis.fetch;
+  if (!f) throw new Error("nurbs: no fetch implementation available");
+  const auth: Record<string, string> = opts.apiKey ? { Authorization: `Bearer ${opts.apiKey}` } : {};
+  const res = await f(`${base}/jobs/${id}`, {
+    method: "DELETE",
+    ...(opts.apiKey ? { headers: auth } : {}),
+  });
+  if (res.ok || res.status === 404) return;
+  throw new Error(await httpError(res, "cancel"));
 }

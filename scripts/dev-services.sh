@@ -123,6 +123,11 @@ for spec in "${SERVICES[@]}"; do
   echo "[$name] starting on http://127.0.0.1:$port (env: $prefix)"
   (
     cd "$REPO_ROOT/$dir"
+    # Freeform reconstruct → NURBS service when both run together (M1 / Grok T23).
+    if [ "$name" = "reconstruct" ]; then
+      export RECONSTRUCT_NURBS_URL="${RECONSTRUCT_NURBS_URL:-http://127.0.0.1:8003}"
+      echo "[$name] RECONSTRUCT_NURBS_URL=$RECONSTRUCT_NURBS_URL"
+    fi
     exec "$LAUNCHER" run -p "$prefix" uvicorn app.main:app --host 127.0.0.1 --port "$port"
   ) 2>&1 | prefix_lines "$name" &
   PIDS+=($!)
