@@ -29,6 +29,22 @@ export const FEATURE_EDIT_SPECS: Record<string, FeatureEditSpec> = {
   draft: { param: "angle", unit: "deg", world: false },
 };
 
+/**
+ * Secondary params editable via properties/gizmo scrub (T16): not the primary
+ * world-drag axis, but available for value-box / multi-param edit UIs.
+ * `back` is SI metres; pattern spacing/count as named.
+ */
+export const FEATURE_SECONDARY_PARAMS: Record<string, readonly string[]> = {
+  extrude: ["back"],
+  cut: ["back"],
+  linearPattern: ["spacing", "count"],
+  circularPattern: ["count", "angle"],
+  fillet: ["radius2"],
+  chamfer: ["distance2"],
+  loft: [],
+  revolve: [],
+};
+
 /** Floor (SI: metres or radians) so an edited feature never collapses to zero (or
  * inverts) as the value is dragged/scrubbed/typed down. */
 export const MIN_SI = 5e-4;

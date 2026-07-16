@@ -3,11 +3,13 @@
 
 import type { Occt } from "../oc/init.js";
 import type { Vec3 } from "../math/index.js";
-import { scale } from "../math/index.js";
+import { normalize, scale } from "../math/index.js";
 import type { Solid } from "../solid/solid.js";
 import { rotate, translate } from "./transform.js";
 
-/** `count` copies of `base`, each offset by `spacing` along `dir` (i = 0…count−1). */
+/** `count` copies of `base`, each offset by `spacing` along `dir` (i = 0…count−1).
+ * `dir` is unitized so a non-unit authoring vector does not silently scale the
+ * spacing (G11). A zero-length direction throws. */
 export function linearPattern(
   oc: Occt,
   base: Solid,
@@ -16,9 +18,10 @@ export function linearPattern(
   count: number,
 ): Solid[] {
   if (count < 1) throw new Error("linearPattern: count must be ≥ 1");
+  const unit = normalize(dir);
   const copies: Solid[] = [];
   for (let i = 0; i < count; i++) {
-    copies.push(translate(oc, base, scale(dir, spacing * i)));
+    copies.push(translate(oc, base, scale(unit, spacing * i)));
   }
   return copies;
 }

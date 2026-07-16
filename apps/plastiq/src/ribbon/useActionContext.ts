@@ -5,6 +5,7 @@
 
 import { useCadStore } from "../store/store.js";
 import { useSketchStore } from "../sketch/sketchStore.js";
+import { useProjectsStore } from "../persistence/projectsStore.js";
 import { resolveContextTarget, type ContextTarget } from "../three/contextmenu/contextSelection.js";
 
 export function useActionContext(): ContextTarget {
@@ -25,6 +26,8 @@ export function useActionContext(): ContextTarget {
   const sketchSelection = useSketchStore((s) => s.selection);
   const solverReady = useSketchStore((s) => s.solverReady);
   const sketchModel = useSketchStore((s) => s.model);
+  const activeMeshDoc = useProjectsStore((s) => s.activeMeshDoc);
+  const activePointCloudDoc = useProjectsStore((s) => s.activePointCloudDoc);
 
   return resolveContextTarget({
     cad: {
@@ -45,5 +48,7 @@ export function useActionContext(): ContextTarget {
     sketch: { active: sketchActive, selection: sketchSelection, solverReady, model: sketchModel },
     hit: null,
     worldPoint: [0, 0, 0],
+    activeMeshDoc,
+    activePointCloudDoc,
   });
 }

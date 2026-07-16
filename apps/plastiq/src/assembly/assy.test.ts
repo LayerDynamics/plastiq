@@ -19,6 +19,38 @@ describe("parseAssy", () => {
     expect(() => parseAssy({ links: [{}] })).toThrow(/part/);
     expect(() => parseAssy({ links: [{ part: 5 }] })).toThrow(/part/);
   });
+
+  it("rejects a direct sub-assembly self-cycle, naming the path", () => {
+    expect(() =>
+      parseAssy({ links: [{ part: "a" }], subAssemblies: { a: { links: [{ part: "a" }] } } }),
+    ).toThrow(/assy: sub-assembly cycle: a -> a/);
+  });
+
+  it("rejects a transitive sub-assembly cycle, naming the path", () => {
+    expect(() =>
+      parseAssy({
+        links: [{ part: "a" }],
+        subAssemblies: {
+          a: { links: [{ part: "b" }] },
+          b: { links: [{ part: "a" }] },
+        },
+      }),
+    ).toThrow(/assy: sub-assembly cycle: a -> b -> a/);
+  });
+
+  it("valid deep nesting (and diamond sharing) still parses and realizes", () => {
+    const doc = parseAssy({
+      links: [{ part: "a" }],
+      subAssemblies: {
+        // a → b → c is a chain; a ALSO references c directly (diamond) — legal, not a cycle.
+        a: { links: [{ part: "b" }, { part: "c" }] },
+        b: { links: [{ part: "c" }] },
+        c: { links: [{ part: "washer" }] },
+      },
+    });
+    expect(realizeAssembly(doc).instances.map((i) => i.part)).toEqual(["washer", "washer"]);
+    expect(deriveBOM(doc)).toEqual([{ part: "washer", count: 2 }]);
+  });
 });
 
 describe("realizeAssembly", () => {

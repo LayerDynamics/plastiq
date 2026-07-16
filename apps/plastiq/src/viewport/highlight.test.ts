@@ -43,6 +43,10 @@ function vtxColorHex(part: ReturnType<typeof buildPart>, i: number): number {
   return new THREE.Color(attr.getX(i), attr.getY(i), attr.getZ(i)).getHex();
 }
 
+function selectedFaceHex(part: ReturnType<typeof buildPart>): number {
+  return ((part.mesh.material as THREE.MeshStandardMaterial[])[FACE_MATERIAL.selected]!).color.getHex();
+}
+
 describe("applyHighlight — base/hover/selected per entity", () => {
   it("selecting a face flips only that group's material slot", () => {
     const part = buildPart(quad());
@@ -69,13 +73,30 @@ describe("applyHighlight — base/hover/selected per entity", () => {
     const sel = part.edges.find((l) => l.userData["edgeId"] === 5)!;
     const base = part.edges.find((l) => l.userData["edgeId"] === 4)!;
     expect(sel.material).toBe(part.edgeMaterials[FACE_MATERIAL.selected]);
+    expect((sel.material as THREE.LineBasicMaterial).color.getHex()).toBe(selectedFaceHex(part));
+    expect(base.material).toBe(part.edgeMaterials[FACE_MATERIAL.base]);
+  });
+
+  it("hovering an edge points that line at the hover material", () => {
+    const part = buildPart(quad());
+    applyHighlight(part, [], { kind: "edge", id: 5 });
+    const hovered = part.edges.find((l) => l.userData["edgeId"] === 5)!;
+    const base = part.edges.find((l) => l.userData["edgeId"] === 4)!;
+    expect(hovered.material).toBe(part.edgeMaterials[FACE_MATERIAL.hover]);
     expect(base.material).toBe(part.edgeMaterials[FACE_MATERIAL.base]);
   });
 
   it("selecting a vertex writes only that corner's colour", () => {
     const part = buildPart(quad());
     applyHighlight(part, [{ kind: "vertex", id: 13 }], null);
-    expect(vtxColorHex(part, 2)).toBe(ENTITY_COLOR.selected); // vertexIds[2] === 13
+    expect(vtxColorHex(part, 2)).toBe(selectedFaceHex(part)); // vertexIds[2] === 13
+    expect(vtxColorHex(part, 0)).toBe(ENTITY_COLOR.base);
+  });
+
+  it("hovering a vertex writes only that corner's hover colour", () => {
+    const part = buildPart(quad());
+    applyHighlight(part, [], { kind: "vertex", id: 13 });
+    expect(vtxColorHex(part, 2)).toBe(ENTITY_COLOR.hover); // vertexIds[2] === 13
     expect(vtxColorHex(part, 0)).toBe(ENTITY_COLOR.base);
   });
 

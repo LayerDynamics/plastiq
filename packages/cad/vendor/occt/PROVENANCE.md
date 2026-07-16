@@ -31,9 +31,9 @@ written to `packages/cad/`; move it here, overwriting these files.
 ## The symbol list (occt.build.yml) — three layers
 
 `occt.build.yml` lists every symbol that must be bound. It was derived and then
-**verified by running the full test suite against the trimmed wasm** (288 unit +
-15 browser E2E), which surfaces any missing symbol as an embind
-`UnboundTypeError`. Three layers are required:
+**verified by running the full test suite against the trimmed wasm** (1474
+unit/integration + 69 browser E2E as of 2026-07-03), which surfaces any missing
+symbol as an embind `UnboundTypeError`. Three layers are required:
 
 1. **Leaf API classes/enums** the kernel calls via `oc.X` or holds as a return
    value (`BRepPrimAPI_MakeBox`, `gp_Pnt`, `Poly_Triangulation`, the STEP/IGES
@@ -48,3 +48,21 @@ written to `packages/cad/`; move it here, overwriting these files.
 
 If a kernel change touches a new OCCT symbol, add it (plus any new base/handle it
 pulls in), rebuild, and re-run `pnpm exec vitest run` — a missing entry fails loud.
+
+## License
+
+The vendored `plastiq-occt.{js,wasm,d.ts}` build is derived from Open CASCADE
+Technology (OCCT) via `opencascade.js`, whose package metadata declares
+`LGPL-2.1-only` (see `apps/plastiq/node_modules/opencascade.js/package.json`).
+Upstream OCCT is published by Open Cascade SAS under the GNU Lesser General
+Public License version 2.1 with the additional "Open CASCADE Exception
+(version 1.0)"; the `opencascade.js` npm package ships the plain LGPL-2.1
+text as its `LICENSE` file.
+
+The complete, verbatim GNU LGPL-2.1 text is included alongside this file as
+[`LICENSE_LGPL_2_1.txt`](./LICENSE_LGPL_2_1.txt). These vendored artifacts
+remain under that license — the repository's first-party PolyForm
+Noncommercial license (root `LICENSE`) does **not** apply to them. The wasm
+module is a separable, replaceable artifact: it can be rebuilt or swapped
+independently of the first-party code via `just cad-occt` as described above
+(see also the root `THIRD-PARTY-NOTICES.md`).

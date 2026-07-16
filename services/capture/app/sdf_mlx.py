@@ -1,6 +1,6 @@
 """MLX neural-SDF surface reconstruction (M7).
 
-A self-contained SIREN signed-distance network fit to an oriented point cloud (points + per-point
+A self-contained Softplus/IGR signed-distance network fit to an oriented point cloud (points + per-point
 normals), trained with the implicit-geometric-regularization losses (Gropp et al. / IGR): surface
 (f≈0 on the points), normal-alignment (∇f ≈ normal), and eikonal (|∇f|≈1). The zero level-set is then
 marching-cubed into a watertight mesh. Pure MLX — runs and trains on Apple Silicon (the M4 Max), no
@@ -18,7 +18,8 @@ import mlx.core as mx
 import mlx.nn as nn
 import mlx.optimizers as optim
 import numpy as np
-from skimage import measure
+
+from .marching import marching_cubes_field
 
 
 class SDFNet(nn.Module):
@@ -70,8 +71,9 @@ def fit_sdf(
     lam_eikonal: float = 0.1,
     seed: int = 0,
 ) -> SDFNet:
-    """Fit a Softplus SDF (IGR losses) to an oriented point cloud. Deterministic given `seed`."""
-    mx.random.seed(seed)
+    """Fit a Softplus SDF (IGR losses) to an oriented point cloud. Deterministic given `seed` — the
+    net's weights init from a numpy RNG (SDFNet) and the eikonal batch from `rng` below, so no global
+    MLX seed is involved here."""
     rng = np.random.default_rng(seed + 1)
     p = np.asarray(points, dtype=np.float32)
     radius = float(np.linalg.norm(p - p.mean(axis=0), axis=1).mean())  # bounding-sphere scale for the init
@@ -103,15 +105,6 @@ def fit_sdf(
 
 
 def extract_mesh(net: SDFNet, *, bound: float = 1.6, res: int = 64) -> tuple[np.ndarray, np.ndarray]:
-    """Marching-cubes the SDF zero level-set over [−bound, bound]³ → (vertices, faces). Vertices are
-    in world units. Raises ValueError (from skimage) if the field never crosses zero."""
-    lin = np.linspace(-bound, bound, res, dtype=np.float32)
-    gx, gy, gz = np.meshgrid(lin, lin, lin, indexing="ij")
-    grid = np.stack([gx, gy, gz], axis=-1).reshape(-1, 3)
-    vals = []
-    for i in range(0, len(grid), 65536):
-        vals.append(np.asarray(net(mx.array(grid[i : i + 65536]))).reshape(-1))
-    field = np.concatenate(vals).reshape(res, res, res)
-    verts, faces, _, _ = measure.marching_cubes(field, level=0.0)
-    verts = verts / (res - 1) * (2.0 * bound) - bound  # index space → world units
-    return verts.astype(np.float32), faces.astype(np.int64)
+    """Marching-cubes the SDF zero level-set over [−bound, bound]³ → (vertices, faces) in world units.
+    Raises a clear ValueError (via `marching_cubes_field`) if the field never crosses zero."""
+    return marching_cubes_field(net, bound=bound, res=res)

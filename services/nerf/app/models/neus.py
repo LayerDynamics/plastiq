@@ -17,6 +17,8 @@ this family; VolSDF's closed-form Laplace transform drops directly into the exis
 
 from __future__ import annotations
 
+import math
+
 import mlx.core as mx
 
 from ..utils.config import NerfConfig
@@ -24,11 +26,23 @@ from .base_surface_model import BaseSurfaceModel
 
 
 class VolSDFModel(BaseSurfaceModel):
-    def __init__(self, config: NerfConfig, *, laplace_beta: float = 0.2, lam_eikonal: float = 0.1, seed: int = 0):
+    def __init__(self, config: NerfConfig, *, laplace_beta: float = 0.2, lam_eikonal: float = 0.1,
+                 learnable_beta: bool = False, beta_min: float = 5e-3, seed: int = 0):
         # β=0.2 is the stable/trainable default; smaller β gives a sharper surface but needs more
-        # iterations (VolSDF anneals β large→small). Pass a smaller value explicitly when annealing.
+        # iterations (VolSDF anneals β large→small). With `learnable_beta` the density sharpness is a
+        # trainable parameter that the optimizer anneals large→small on its own (the reference VolSDF/
+        # sdfstudio behaviour) — the fixed β can never sharpen, so the surface stays soft or collapses.
+        # Parameterized in log-space (β = β_min + exp(logβ)) so it stays strictly positive.
         super().__init__(config, lam_eikonal=lam_eikonal, seed=seed)
-        self.laplace_beta = laplace_beta
+        self.learnable_beta = learnable_beta
+        self.beta_min = beta_min
+        if learnable_beta:
+            self.log_beta = mx.array(math.log(max(laplace_beta - beta_min, 1e-4)))  # trainable leaf
+        else:
+            self.laplace_beta = laplace_beta
+
+    def _beta(self):
+        return (self.beta_min + mx.exp(self.log_beta)) if self.learnable_beta else self.laplace_beta
 
     def sdf_to_density(self, sdf: mx.array) -> mx.array:
         """VolSDF Laplace-CDF transform: signed distance `(...,1)` → density `(...,1)`.
@@ -37,7 +51,7 @@ class VolSDFModel(BaseSurfaceModel):
         UNSELECTED branch overflowing to inf for large |sdf| (which would poison gradients with 0·inf
         → NaN). On the selected branch the clamp is a no-op (the arg is already ≤ 0), so values are
         exact: ½·exp(s/β) outside, 1 − ½·exp(−s/β) inside, ×α with α = 1/β."""
-        beta = self.laplace_beta
+        beta = self._beta()
         s = -sdf
         psi = mx.where(
             s <= 0,

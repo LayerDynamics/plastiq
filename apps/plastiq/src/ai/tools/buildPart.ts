@@ -55,6 +55,19 @@ export async function buildPart(input: unknown, deps: BuildPartDeps): Promise<Bu
     return { status: "error", message: "The document did not match the build_part schema.", errors: formatZodError(parsed.error) };
   }
 
+  // Guard a common model mistake: features dumped under "assembly" (a real
+  // AssemblyModel carries components/mates, not features). rebuildDocument only
+  // evaluates doc.features, so these would SILENTLY vanish — fail loudly instead so
+  // the model moves them into the top-level features array.
+  const strayFeatures = (input as { assembly?: { features?: unknown } }).assembly?.features;
+  if (Array.isArray(strayFeatures) && strayFeatures.length > 0) {
+    return {
+      status: "error",
+      message: 'Features must go in the top-level "features" array, not "assembly".',
+      errors: `${strayFeatures.length} feature(s) were under "assembly" and would be ignored — move them into "features" in build order. The document has only "features" and "params".`,
+    };
+  }
+
   // Convert the ORIGINAL validated input (not the zod-parsed copy) so no fields are
   // stripped; validity is already guaranteed by safeParse above.
   let si: CadDocument;
@@ -82,8 +95,11 @@ export async function buildPart(input: unknown, deps: BuildPartDeps): Promise<Bu
 
 /** App probe: build the document in the geometry worker. A null mesh (the worker's
  * signal for a failed/empty build — see bridge.build) is reported as an error; the
- * timeline already flags the offending feature via the Viewport's rebuild. */
-export function geometryClientProbe(client: GeometryClient): BuildProbe {
+ * timeline already flags the offending feature via the Viewport's rebuild. Accepts
+ * anything with GeometryClient's `build` shape: the app wraps the `__plastiqBuild`
+ * seam the Viewport publishes off its single worker (agentTurn.buildTurnTools), and a
+ * direct GeometryClient works too. */
+export function geometryClientProbe(client: Pick<GeometryClient, "build">): BuildProbe {
   return async (doc) => {
     try {
       const mesh = await client.build(doc);

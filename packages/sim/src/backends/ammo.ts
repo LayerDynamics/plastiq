@@ -1,13 +1,22 @@
 // ammo.js (Bullet) physics backend, via ammojs-typed (wasm). Rigid bodies posed
 // by world COM, each carrying a btCompoundShape of one or more convex-hull
-// children (a compound collider for a decomposed concave part); hinge/fixed
-// constraints become bt hinge/fixed joints.
+// children (a compound collider for a decomposed concave part). The full
+// constraint vocabulary maps onto Bullet joints (see engine.ts support matrix):
+//   hinge       → btHingeConstraint (per-body pivots + axes)
+//   slider      → btSliderConstraint (linear free, angular locked)
+//   cylindrical → btSliderConstraint with the angular limit opened (both DOF free)
+//   ball        → btPoint2PointConstraint
+//   planar      → btGeneric6DofConstraint (normal translation + two tilts locked)
+//   fixed       → btFixedConstraint
+// The frame-based joints (slider/cylindrical/planar) build each body's local
+// joint frame as conjugate(q_body)·axisFrame(axis) so both frames coincide in
+// world space at spawn — correct for ANY spawn orientations.
 
 import Ammo from "ammojs-typed";
 
 import type { BodyState, PhysicsBackend, PhysicsEngine, PhysicsPose, PhysicsSnapshot } from "../engine.js";
 import type { SimManifest } from "../manifest.js";
-import { conjugate, localAnchor, localAxis } from "../frame.js";
+import { axisFrame, conjugate, localAnchor, localAxis, quatMul, type SimQuat } from "../frame.js";
 
 type AmmoModule = Awaited<ReturnType<typeof Ammo>>;
 
@@ -120,10 +129,10 @@ export class AmmoEngine implements PhysicsEngine {
       const a = byId.get(c.bodyA);
       const b = byId.get(c.bodyB);
       if (!a || !b) {
-        console.warn(
-          `ammo: dropping ${c.kind} constraint — missing body (bodyA='${c.bodyA}'${a ? "" : " [missing]"}, bodyB='${c.bodyB}'${b ? "" : " [missing]"})`,
+        // parseManifest rejects dangling refs before any backend runs — defensive.
+        throw new Error(
+          `ammo: ${c.kind} constraint references missing body '${!a ? c.bodyA : c.bodyB}'`,
         );
-        continue;
       }
       // Anchors/axes/frames are body-LOCAL: inverse-rotate the world origin/axis by
       // each body's orientation (identity-safe — reduces to `origin − translation`
@@ -136,6 +145,26 @@ export class AmmoEngine implements PhysicsEngine {
       const lb = localAnchor(c.origin, [tb.x(), tb.y(), tb.z()], qb);
       const pivotA = new m.btVector3(la[0], la[1], la[2]);
       const pivotB = new m.btVector3(lb[0], lb[1], lb[2]);
+
+      // Build the pair of body-local joint-frame transforms whose X axis is the
+      // joint axis and which COINCIDE in world space at spawn (zero initial
+      // violation): frame_body = conjugate(q_body) · axisFrame(worldAxis). The
+      // caller must free the returned transforms once the constraint copied them.
+      const axisFrames = (): [Ammo.btTransform, Ammo.btTransform] => {
+        const w = axisFrame(c.axis);
+        const make = (q: SimQuat, pivot: Ammo.btVector3): Ammo.btTransform => {
+          const f = quatMul(conjugate(q), w);
+          const t = new m.btTransform();
+          t.setIdentity();
+          t.setOrigin(pivot);
+          const fq = new m.btQuaternion(f[0], f[1], f[2], f[3]);
+          t.setRotation(fq);
+          m.destroy(fq); // setRotation copies — scratch
+          return t;
+        };
+        return [make(qa, pivotA), make(qb, pivotB)];
+      };
+
       if (c.kind === "hinge") {
         const axA = localAxis(c.axis, qa);
         const axB = localAxis(c.axis, qb);
@@ -146,6 +175,50 @@ export class AmmoEngine implements PhysicsEngine {
         world.addConstraint(hinge, true);
         m.destroy(axisA); // the constraint built its frames from these — scratch
         m.destroy(axisB);
+      } else if (c.kind === "ball") {
+        const ball = new m.btPoint2PointConstraint(a, b, pivotA, pivotB);
+        this.constraints.push(ball);
+        world.addConstraint(ball, true);
+      } else if (c.kind === "slider" || c.kind === "cylindrical") {
+        const [frameA, frameB] = axisFrames();
+        const slider = new m.btSliderConstraint(a, b, frameA, frameB, true);
+        // Bullet slider limits: lower > upper → free, lower == upper → locked.
+        slider.setLowerLinLimit(1);
+        slider.setUpperLinLimit(-1); // translation along the axis: free
+        if (c.kind === "cylindrical") {
+          slider.setLowerAngLimit(1);
+          slider.setUpperAngLimit(-1); // rotation about the axis: free
+        } else {
+          slider.setLowerAngLimit(0);
+          slider.setUpperAngLimit(0); // slider: rotation locked at the spawn angle
+        }
+        this.constraints.push(slider);
+        world.addConstraint(slider, true);
+        m.destroy(frameA); // the constraint copied both frames — scratch
+        m.destroy(frameB);
+      } else if (c.kind === "planar") {
+        // 6-DOF with the joint X axis along the plane NORMAL: lock translation
+        // along X and both tilts; leave in-plane translation (Y,Z) and spin about
+        // the normal (angular X) free. lower == upper → locked; lower > upper → free.
+        const [frameA, frameB] = axisFrames();
+        const dof = new m.btGeneric6DofConstraint(a, b, frameA, frameB, true);
+        const linLower = new m.btVector3(0, 1, 1);
+        const linUpper = new m.btVector3(0, -1, -1);
+        const angLower = new m.btVector3(1, 0, 0);
+        const angUpper = new m.btVector3(-1, 0, 0);
+        dof.setLinearLowerLimit(linLower);
+        dof.setLinearUpperLimit(linUpper);
+        dof.setAngularLowerLimit(angLower);
+        dof.setAngularUpperLimit(angUpper);
+        this.constraints.push(dof);
+        world.addConstraint(dof, true);
+        // The constraint copied the frames and limit vectors — all scratch.
+        m.destroy(linLower);
+        m.destroy(linUpper);
+        m.destroy(angLower);
+        m.destroy(angUpper);
+        m.destroy(frameA);
+        m.destroy(frameB);
       } else {
         // Fixed: each body's reference-frame basis is its inverse orientation, so the
         // frames coincide in world space at spawn → locks the CURRENT relative pose

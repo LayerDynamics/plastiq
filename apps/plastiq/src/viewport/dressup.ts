@@ -8,8 +8,10 @@
 import type { EdgeRef, FaceRef, SpinePath } from "@plastiq/cad";
 import type { NewFeature } from "../store/store.js";
 import type { SelectionRefs } from "../store/store.js";
-import type { Pick } from "../store/types.js";
+import type { EditorFeature, Pick } from "../store/types.js";
 import type { Profile } from "../sketch/profile.js";
+import { isProfile } from "../sketch/profile.js";
+import type { SketchPlaneSpec } from "../sketch/model.js";
 
 /** Persistent EdgeRefs for the currently picked edges (skips unresolved ids). */
 export function edgeRefsFromPicks(picks: readonly Pick[], refs: SelectionRefs): EdgeRef[] {
@@ -27,42 +29,61 @@ export function faceRefsFromPicks(picks: readonly Pick[], refs: SelectionRefs): 
     .filter(Boolean) as FaceRef[];
 }
 
-/** A fillet feature on the picked edges (constant radius), or null if none. */
+/** A fillet feature on the picked edges (constant or variable radius via endRadius), or null. */
 export function filletFeature(
   picks: readonly Pick[],
   refs: SelectionRefs,
   radius: number,
+  endRadius?: number,
 ): NewFeature | null {
   const edges = edgeRefsFromPicks(picks, refs);
   if (edges.length === 0) return null;
-  return { type: "fillet", params: { radius }, data: { edges } };
+  const params: Record<string, number> = { radius };
+  // C8: radius2 is the rebuild/UI param name for variable end radius.
+  if (endRadius !== undefined && Number.isFinite(endRadius)) params["radius2"] = endRadius;
+  return { type: "fillet", params, data: { edges } };
 }
 
-/** A chamfer feature on the picked edges (symmetric setback), or null if none. */
+/** A chamfer on the picked edges; optional distance2 + face for two-distance chamfer (C8). */
 export function chamferFeature(
   picks: readonly Pick[],
   refs: SelectionRefs,
   distance: number,
+  opts?: { distance2?: number; face?: FaceRef },
 ): NewFeature | null {
   const edges = edgeRefsFromPicks(picks, refs);
   if (edges.length === 0) return null;
-  return { type: "chamfer", params: { distance }, data: { edges } };
+  const params: Record<string, number> = { distance };
+  if (opts?.distance2 !== undefined && Number.isFinite(opts.distance2)) {
+    params["distance2"] = opts.distance2;
+  }
+  const data: Record<string, unknown> = { edges };
+  if (opts?.face) data["face"] = opts.face;
+  return { type: "chamfer", params, data };
 }
 
-/** A shell feature opening the picked faces to a wall thickness, or null. */
+/** A shell feature opening the picked faces to a wall thickness, or null.
+ * `direction: "outward"` grows walls out (T12 / G13). */
 export function shellFeature(
   picks: readonly Pick[],
   refs: SelectionRefs,
   thickness: number,
+  direction: "inward" | "outward" = "inward",
 ): NewFeature | null {
   const faces = faceRefsFromPicks(picks, refs);
   if (faces.length === 0) return null;
-  return { type: "shell", params: { thickness }, data: { faces } };
+  return {
+    type: "shell",
+    params: { thickness },
+    data: direction === "outward" ? { faces, direction: "outward" } : { faces },
+  };
 }
 
-/** A two-sided extrude pad of the active profile (`height` up + `back` down). */
+/** A two-sided extrude pad of the active profile (`height` up + `back` down).
+ * `op: "join"` so a pad on an existing body adds material (C1); rebuild also
+ * joins by default when `op` is unset and a solid exists. */
 export function extrudeTwoSidedFeature(height: number, back: number): NewFeature {
-  return { type: "extrude", params: { height, back } };
+  return { type: "extrude", params: { height, back }, data: { op: "join" } };
 }
 
 /** An extrude of the active profile up to the first picked face (FR-29), or null. */
@@ -83,7 +104,38 @@ export function extrudeAlongEdgeFeature(
 ): NewFeature | null {
   const edge = edgeRefsFromPicks(picks, refs)[0];
   if (!edge) return null;
-  return { type: "extrude", params: { height }, data: { directionEdge: edge } };
+  return { type: "extrude", params: { height }, data: { directionEdge: edge, op: "join" } };
+}
+
+/** Revolve the active profile about the first picked edge (C2). Angle in SI radians. */
+export function revolveAboutEdgeFeature(
+  picks: readonly Pick[],
+  refs: SelectionRefs,
+  angle: number,
+): NewFeature | null {
+  const edge = edgeRefsFromPicks(picks, refs)[0];
+  if (!edge) return null;
+  return {
+    type: "revolve",
+    params: { angle },
+    data: { axisEdge: edge, op: "join" },
+  };
+}
+
+/** Two-sided pocket cut (`depth` + `back`) of the active profile (G5 / T04). */
+export function cutTwoSidedFeature(depth: number, back: number): NewFeature {
+  return { type: "cut", params: { depth, back } };
+}
+
+/** Cut the active profile along the first picked edge's direction (T04). */
+export function cutAlongEdgeFeature(
+  picks: readonly Pick[],
+  refs: SelectionRefs,
+  depth: number,
+): NewFeature | null {
+  const edge = edgeRefsFromPicks(picks, refs)[0];
+  if (!edge) return null;
+  return { type: "cut", params: { depth }, data: { directionEdge: edge } };
 }
 
 /**
@@ -99,39 +151,106 @@ export function booleanBodyFeature(
   return { type: "boolean", params: {}, data: { op, toolFeatures } };
 }
 
-/** A loft through ≥2 section profiles, each at its own height z (FR-32). */
-export function loftFeature(
-  sections: { profile: Profile; z: number }[],
-  ruled = false,
-): NewFeature | null {
+/** One loft section: profile + either legacy `z` (world-XY offset) or a full plane. */
+export type LoftSectionInput = {
+  profile: Profile;
+  z?: number;
+  plane?: SketchPlaneSpec;
+};
+
+/** A loft through ≥2 section profiles (FR-32). Prefer `plane` per section (C4/G6). */
+export function loftFeature(sections: LoftSectionInput[], ruled = false): NewFeature | null {
   if (sections.length < 2) return null;
   return { type: "loft", data: { sections, ruled } };
 }
 
-/** A sweep of `profile` along a polyline/arc `path` (FR-32). */
-export function sweepFeature(profile: Profile, path: SpinePath): NewFeature {
-  return { type: "sweep", data: { profile, path } };
+/**
+ * Build a loft from finished sketch features by id (T08). Each sketch must carry
+ * a buildable profile; its stored plane is used as the section plane.
+ */
+export function loftFromSketchFeatures(
+  features: readonly EditorFeature[],
+  sketchIds: readonly string[],
+  ruled = false,
+): NewFeature | null {
+  if (sketchIds.length < 2) return null;
+  const sections: LoftSectionInput[] = [];
+  for (const id of sketchIds) {
+    const sk = features.find((f) => f.id === id && f.type === "sketch" && !f.suppressed);
+    if (!sk) return null;
+    const prof = sk.data?.["profile"] as Profile | undefined;
+    if (!isProfile(prof)) return null;
+    const plane = sk.data?.["plane"] as SketchPlaneSpec | undefined;
+    sections.push(plane ? { profile: prof, plane } : { profile: prof, z: 0 });
+  }
+  return loftFeature(sections, ruled);
 }
 
-/** A draft feature tapering the first picked face about the base plane, or null. */
+/** A sweep of `profile` along a polyline path (FR-32). Optional `plane` places
+ * the profile (defaults to world-XY at rebuild when omitted). */
+export function sweepFeature(
+  profile: Profile,
+  path: SpinePath,
+  plane?: SketchPlaneSpec,
+  opts?: { mode?: string; transition?: string },
+): NewFeature {
+  return {
+    type: "sweep",
+    data: {
+      profile,
+      path,
+      ...(plane ? { plane } : {}),
+      ...(opts?.mode ? { mode: opts.mode } : {}),
+      ...(opts?.transition ? { transition: opts.transition } : {}),
+    },
+  };
+}
+
+/**
+ * Sweep from a sketch feature (profile + plane) along a world polyline (T09).
+ */
+export function sweepFromSketchFeature(
+  features: readonly EditorFeature[],
+  sketchId: string,
+  path: SpinePath,
+  opts?: { mode?: string; transition?: string },
+): NewFeature | null {
+  const sk = features.find((f) => f.id === sketchId && f.type === "sketch" && !f.suppressed);
+  if (!sk) return null;
+  const prof = sk.data?.["profile"] as Profile | undefined;
+  if (!isProfile(prof)) return null;
+  const plane = sk.data?.["plane"] as SketchPlaneSpec | undefined;
+  return sweepFeature(prof, path, plane, opts);
+}
+
+/** A draft feature tapering the picked face(s) about a neutral plane, or null.
+ * Multi-face selection is stored as `data.faces` (G9); a single face also sets
+ * `data.face` for back-compat with older documents.
+ * When a face ref carries a normal, pull/neutral follow that face (T12 / C6). */
 export function draftFeature(
   picks: readonly Pick[],
   refs: SelectionRefs,
   angle: number,
 ): NewFeature | null {
   const faces = faceRefsFromPicks(picks, refs);
-  const face = faces[0];
-  if (!face) return null;
-  // Default neutral plane = the world base (z=0, +Z), pulling along +Z; suitable
-  // for tapering the upright faces of a part for mold release.
+  if (faces.length === 0) return null;
+  const n = faces[0]!.normal;
+  const pull: [number, number, number] = [n[0], n[1], n[2]];
+  // Neutral plane through face centroid if known, else world origin with face normal.
+  const c = faces[0]!.centroid;
+  const neutralOrigin: [number, number, number] = c
+    ? [c[0], c[1], c[2]]
+    : [0, 0, 0];
+  const neutralNormal: [number, number, number] = [n[0], n[1], n[2]];
   return {
     type: "draft",
     params: { angle },
     data: {
-      face,
-      pull: [0, 0, 1],
-      neutralOrigin: [0, 0, 0],
-      neutralNormal: [0, 0, 1],
+      face: faces[0],
+      faces,
+      pull,
+      neutralOrigin,
+      neutralNormal,
     },
   };
 }

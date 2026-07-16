@@ -15,7 +15,21 @@ const ctx = self as unknown as {
 };
 
 let ocPromise: Promise<Occt> | null = null;
-const getOc = (): Promise<Occt> => (ocPromise ??= initOcct({ wasmUrl }));
+// Memoized OCCT init. A FAILED init must not poison the memo — without the
+// reset, every later build request would re-await the same rejected promise
+// and the worker could never recover from a transient wasm-fetch failure.
+// Same pattern as packages/cad/src/lower/decompose.ts (initDecomposer);
+// concurrent awaiters reset idempotently (the identity check keeps a late
+// failure from clobbering a retry another request already started).
+async function getOc(): Promise<Occt> {
+  const pending = (ocPromise ??= initOcct({ wasmUrl }));
+  try {
+    return await pending;
+  } catch (err) {
+    if (ocPromise === pending) ocPromise = null;
+    throw err;
+  }
+}
 
 // Thin RPC shim: init OCCT once, delegate the request to the pure core (which is
 // unit-tested in geometry.worker.core.test.ts), then post its response back. A

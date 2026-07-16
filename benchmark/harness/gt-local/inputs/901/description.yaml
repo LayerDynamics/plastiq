@@ -1,0 +1,6 @@
+# Self-owned fixture (CB6.3 mini-GT). Part proven in the llama run (CAD Score 1.0).
+task_type: generation
+input_type: text
+description: >-
+  A rectangular block, 60 mm long, 40 mm wide, 8 mm thick.
+input_files: []

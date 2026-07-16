@@ -1,5 +1,5 @@
-"""M7 — MLX neural-SDF surface reconstruction (app/sdf_mlx.py). Trains a SIREN SDF on an oriented
-point cloud (the IGR losses) and marching-cubes the zero level-set into a mesh. Runs REAL MLX
+"""M7 — MLX neural-SDF surface reconstruction (app/sdf_mlx.py). Trains an IGR-style Softplus SDF on an
+oriented point cloud (the IGR losses) and marching-cubes the zero level-set into a mesh. Runs REAL MLX
 training on Apple Silicon (the M4 Max) — not a stub. See docs/adr/0007.
 """
 

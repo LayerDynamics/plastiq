@@ -1,11 +1,10 @@
-// The 2D sketch overlay (SPEC-5 M3.1/M3.2). An SVG surface over the 3D viewport,
-// shown while a sketch is active: plane grid, origin, X/Y axes, the drawn
-// entities, with wheel-zoom (at cursor) and drag-pan. Drawing tools place
-// line/rectangle/circle geometry; inference (M3.3), constraints (M3.4) and
-// dimensions (M3.5) render into this same SVG. SVG (not three.js) gives crisp
-// text and trivial hit-testing for selectable glyphs.
+// Sketch HUD + legacy dim glyphs (ADR-0014 in-place rewrite). Curve authoring and
+// plane picking live in the 3D scene (`SketchScene`); this overlay is pointer-events
+// transparent except for tool chrome so orbit + raycast drawing work underneath.
+// Dimensions/constraint glyphs still render as SVG labels for crisp text until the
+// 3D dim layer lands.
 
-import { useEffect, useRef, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { useSketchStore, sketchId, type SketchTool } from "./sketchStore.js";
 import { circumcircle, type SketchModel } from "./model.js";
 import {
@@ -26,7 +25,7 @@ import { resolveContextTarget, type ContextTarget } from "../three/contextmenu/c
 import { buildMenuSections, type MenuSection } from "../three/contextmenu/contextOptions.js";
 import { runContextAction } from "../three/contextmenu/config.js";
 import { snapshotCad, snapshotSketch } from "../three/contextmenu/snapshot.js";
-import { ContextMenuView } from "../three/contextmenu/ContextMenuView.js";
+import { PlastiqScreenContextMenu } from "../three/contextmenu/PlastiqContextMenu.js";
 import {
   centeredView,
   gridStep,
@@ -38,7 +37,17 @@ import {
   type View2D,
 } from "./transform2d.js";
 
-function GridAndAxes({ view, w, h }: { view: View2D; w: number; h: number }): React.JSX.Element {
+/** Memoised (perf): the grid depends only on the view transform and the viewport
+ * size, so a drag-solve tick (model change) must not rebuild its line array. */
+const GridAndAxes = memo(function GridAndAxes({
+  view,
+  w,
+  h,
+}: {
+  view: View2D;
+  w: number;
+  h: number;
+}): React.JSX.Element {
   const step = gridStep(view.scale);
   const lines: React.JSX.Element[] = [];
   // World bounds of the viewport corners.
@@ -90,7 +99,15 @@ function GridAndAxes({ view, w, h }: { view: View2D; w: number; h: number }): Re
       <circle cx={o.x} cy={o.y} r={4} fill="#ffd34a" />
     </g>
   );
-}
+},
+// The view object is re-created by pan/zoom; compare its fields so an unrelated
+// re-render with an equivalent view still skips the grid rebuild.
+(prev, next) =>
+  prev.w === next.w &&
+  prev.h === next.h &&
+  prev.view.scale === next.view.scale &&
+  prev.view.panX === next.view.panX &&
+  prev.view.panY === next.view.panY);
 
 /** Three-state solver colour (FR-20): under = blue, well = green, over = red. */
 export function verdictColor(verdict: string | undefined): string {
@@ -126,8 +143,10 @@ function arcPolyline(a: Pt, through: Pt, b: Pt): string {
   return pts.join(" ");
 }
 
-/** The drawn sketch entities (lines, arcs, circles, points) in screen space. */
-function SketchGeometry({
+/** The drawn sketch entities (lines, arcs, circles, points) in screen space.
+ * Memoised (perf, shallow props): the store only replaces `model` / `selection`
+ * when they actually change, so a hover-only tick skips the whole rebuild. */
+const SketchGeometry = memo(function SketchGeometry({
   model,
   view,
   selection,
@@ -232,7 +251,7 @@ function SketchGeometry({
       })}
     </g>
   );
-}
+});
 
 const MM = 1000;
 const DEG = 180 / Math.PI;
@@ -290,8 +309,10 @@ function DimensionEditor({
 }
 
 /** Selectable, deletable constraint glyphs (FR-18/FR-19). Click removes; a valued
- * (dimension) glyph shows its value and double-click edits it. */
-function ConstraintGlyphs({
+ * (dimension) glyph shows its value and double-click edits it.
+ * Memoised (perf, shallow props): the callbacks are stable store actions, so a
+ * hover-only tick skips re-walking every constraint. */
+const ConstraintGlyphs = memo(function ConstraintGlyphs({
   model,
   view,
   onDelete,
@@ -407,7 +428,7 @@ function ConstraintGlyphs({
       })}
     </g>
   );
-}
+});
 
 const TOOLS: { tool: SketchTool; label: string }[] = [
   { tool: "select", label: "Select" },
@@ -594,7 +615,9 @@ export function Sketcher(): React.JSX.Element | null {
   // Finish (FR-21): commit the sketch via the shared helper (solve → derive the
   // closed profile → persist model+profile+plane → exit), used identically by the
   // ribbon / context-menu "Finish sketch" so the surfaces can't diverge.
-  const profileReady = extractProfile(model) !== null;
+  // Memoised (perf): profile extraction walks every entity, so run it only when
+  // the model actually changes — not on every hover/preview re-render.
+  const profileReady = useMemo(() => extractProfile(model) !== null, [model]);
 
   const hostRef = useRef<HTMLDivElement>(null);
   const [size, setSize] = useState({ w: 800, h: 600 });
@@ -616,6 +639,16 @@ export function Sketcher(): React.JSX.Element | null {
   const dragDraw = useRef<{ px: Px; snap: Snap } | null>(null);
   /** Live drag-draw rubber-band (press → cursor) for the preview overlay. */
   const [dragPreview, setDragPreview] = useState<{ from: Px; to: Px } | null>(null);
+  /** rAF-coalesced point-drag (perf): pointermove only records the latest pointer
+   * here; at most ONE movePoint+solve runs per animation frame (with that latest
+   * position), and pointerup flushes any unapplied position synchronously, so the
+   * end state is identical to solving on every move. */
+  const dragSolveFrame = useRef<number | null>(null);
+  const dragSolveLatest = useRef<{ id: string; u: number; v: number } | null>(null);
+  /** rAF-coalesced hover preview (perf): snap/inference (inferAt) runs at most
+   * once per animation frame with the latest pointer, not on every pointermove. */
+  const hoverFrame = useRef<number | null>(null);
+  const hoverLatest = useRef<Px | null>(null);
   const baseColor = verdictColor(result?.verdict);
 
   // The world point the in-progress gesture started from (rubber-band anchor).
@@ -698,6 +731,83 @@ export function Sketcher(): React.JSX.Element | null {
         : null;
     return { snap, hint };
   };
+  // Latest-render bridge for the rAF callbacks (same pattern as startDraftRef): a
+  // frame scheduled during one render must infer with the freshest model/view/tool.
+  const inferAtRef = useRef(inferAt);
+  inferAtRef.current = inferAt;
+
+  // --- rAF coalescing (perf; semantics-preserving) ---
+  // Dragging a point re-solves the whole sketch; hovering re-runs snap inference.
+  // Doing either on EVERY pointermove floods the wasm solver / hit-testing at the
+  // pointer's event rate (often 120+ Hz). Coalesce both to at most once per
+  // animation frame, always with the LATEST pointer; pointerup flushes the drag
+  // so the committed end state is byte-identical to the unthrottled path.
+  const applyDragSolve = (): void => {
+    const latest = dragSolveLatest.current;
+    dragSolveLatest.current = null;
+    if (!latest) return;
+    movePoint(latest.id, latest.u, latest.v);
+    solve();
+  };
+  const scheduleDragSolve = (pid: string, u: number, v: number): void => {
+    dragSolveLatest.current = { id: pid, u, v };
+    if (dragSolveFrame.current != null) return;
+    dragSolveFrame.current = requestAnimationFrame(() => {
+      dragSolveFrame.current = null;
+      applyDragSolve();
+    });
+  };
+  /** Cancel the pending frame and apply the latest unapplied drag position NOW
+   * (pointerup): the final solve is authoritative. No-op when nothing is pending. */
+  const flushDragSolve = (): void => {
+    if (dragSolveFrame.current != null) {
+      cancelAnimationFrame(dragSolveFrame.current);
+      dragSolveFrame.current = null;
+    }
+    applyDragSolve();
+  };
+  const scheduleHover = (p: Px): void => {
+    hoverLatest.current = p;
+    if (hoverFrame.current != null) return;
+    hoverFrame.current = requestAnimationFrame(() => {
+      hoverFrame.current = null;
+      const px = hoverLatest.current;
+      hoverLatest.current = null;
+      if (!px) return;
+      // A drag-draw in progress also rubber-bands from the press to the cursor.
+      const draw = dragDraw.current;
+      if (draw) setDragPreview({ from: draw.px, to: px });
+      setHover({ px, ...inferAtRef.current(px) });
+    });
+  };
+  /** Drop any coalesced hover so a stale frame can't overwrite a synchronous
+   * setHover (pointerup) or a cleared one (pointerleave). */
+  const cancelHover = (): void => {
+    if (hoverFrame.current != null) {
+      cancelAnimationFrame(hoverFrame.current);
+      hoverFrame.current = null;
+    }
+    hoverLatest.current = null;
+  };
+
+  // Leaving the sketch (or unmounting) drops any coalesced frame — a late frame
+  // must not solve against a reset model.
+  useEffect(() => {
+    if (active) return;
+    if (dragSolveFrame.current != null) cancelAnimationFrame(dragSolveFrame.current);
+    dragSolveFrame.current = null;
+    dragSolveLatest.current = null;
+    if (hoverFrame.current != null) cancelAnimationFrame(hoverFrame.current);
+    hoverFrame.current = null;
+    hoverLatest.current = null;
+  }, [active]);
+  useEffect(
+    () => () => {
+      if (dragSolveFrame.current != null) cancelAnimationFrame(dragSolveFrame.current);
+      if (hoverFrame.current != null) cancelAnimationFrame(hoverFrame.current);
+    },
+    [],
+  );
 
   // Track the host size; centre the view the first time the sketch opens.
   useEffect(() => {
@@ -788,9 +898,31 @@ export function Sketcher(): React.JSX.Element | null {
   );
 
   return (
-    <div ref={hostRef} data-testid="sketcher" className="absolute inset-0 z-10">
-      <div className="absolute left-2 top-2 z-20 flex items-center gap-2 rounded border border-[#2a3444] bg-black/60 px-2 py-1 text-xs text-[#cfe]">
+    <div
+      ref={hostRef}
+      data-testid="sketcher"
+      className="pointer-events-none absolute inset-0 z-10"
+    >
+      <div className="pointer-events-auto absolute left-2 top-2 z-20 flex items-center gap-2 rounded border border-[#2a3444] bg-black/60 px-2 py-1 text-xs text-[#cfe]">
         <span className="font-bold">Sketch</span>
+        <button
+          type="button"
+          data-testid="sketch-look-at"
+          className="rounded border border-[#2a3444] px-1.5 py-0.5 text-[10px] text-[#9ab] hover:bg-[#1b2230]"
+          title="Look at the sketch plane (normal-to)"
+          onClick={() => {
+            const vp = (
+              globalThis as {
+                __plastiqViewport?: { setView?: (d: [number, number, number]) => void };
+              }
+            ).__plastiqViewport;
+            // Default: look along +Z; for non-XY planes the Viewport sketchFrame
+            // drive is preferred — setView uses a world direction for now.
+            vp?.setView?.([0, -0.5, 1]);
+          }}
+        >
+          Look At
+        </button>
         <span className="text-[#789]">{plane}</span>
         <div className="mx-1 h-3 w-px bg-[#2a3444]" />
         {TOOLS.map((t) => toolBtn(t.tool, t.label))}
@@ -854,7 +986,7 @@ export function Sketcher(): React.JSX.Element | null {
           current selection fits the constraint. */}
       <div
         data-testid="constraint-palette"
-        className="absolute left-2 top-12 z-20 flex items-center gap-1 rounded border border-[#2a3444] bg-black/60 px-2 py-1 text-xs text-[#cfe]"
+        className="pointer-events-auto absolute left-2 top-12 z-20 flex items-center gap-1 rounded border border-[#2a3444] bg-black/60 px-2 py-1 text-xs text-[#cfe]"
       >
         <span className="text-[10px] uppercase text-[#567]">Constrain</span>
         {(
@@ -916,7 +1048,7 @@ export function Sketcher(): React.JSX.Element | null {
       {/* Solver feedback (FR-20): DOF counter, three-state verdict, conflict list. */}
       <div
         data-testid="solver-feedback"
-        className="absolute right-2 top-2 z-20 w-48 rounded border border-[#2a3444] bg-black/70 px-2 py-1 text-xs"
+        className="pointer-events-auto absolute right-2 top-2 z-20 w-48 rounded border border-[#2a3444] bg-black/70 px-2 py-1 text-xs"
       >
         <div className="flex items-center justify-between">
           <span data-testid="verdict" style={{ color: baseColor }} className="font-bold capitalize">
@@ -932,18 +1064,23 @@ export function Sketcher(): React.JSX.Element | null {
               Conflicts — click to remove
             </div>
             <ul className="max-h-32 space-y-0.5 overflow-auto">
-              {model.constraints.map((c) => (
-                <li key={c.id}>
-                  <button
-                    type="button"
-                    data-testid="conflict-item"
-                    onClick={() => removeConstraint(c.id)}
-                    className="w-full rounded px-1 text-left text-[#ff9b9b] hover:bg-[#2a1717]"
-                  >
-                    {c.kind}
-                  </button>
-                </li>
-              ))}
+              {/* Driven (reference) dimensions add no solver equation (they are
+                  skipped by toSolverInput), so they can never be the conflict —
+                  filter them out, matching how the glyphs treat them. */}
+              {model.constraints
+                .filter((c) => !("driven" in c && c.driven === true))
+                .map((c) => (
+                  <li key={c.id}>
+                    <button
+                      type="button"
+                      data-testid="conflict-item"
+                      onClick={() => removeConstraint(c.id)}
+                      className="w-full rounded px-1 text-left text-[#ff9b9b] hover:bg-[#2a1717]"
+                    >
+                      {c.kind}
+                    </button>
+                  </li>
+                ))}
             </ul>
           </div>
         )}
@@ -957,147 +1094,27 @@ export function Sketcher(): React.JSX.Element | null {
           model={model}
         />
       )}
+      {/* Dim/constraint glyphs only — drawing is 3D (SketchScene). pointer-events-none
+          so the canvas receives orbit + plane picks (ADR-0014). */}
       <svg
         data-testid="sketch-svg"
         width={size.w}
         height={size.h}
-        className={`block touch-none ${tool === "select" ? "cursor-grab" : "cursor-crosshair"}`}
-        onContextMenu={(e) => {
-          e.preventDefault();
-          const target = resolveContextTarget({
-            cad: snapshotCad(),
-            sketch: snapshotSketch(),
-            hit: null,
-            worldPoint: [0, 0, 0],
-          });
-          setCtxMenu({ x: e.clientX, y: e.clientY, sections: buildMenuSections(target), target });
-        }}
-        onWheel={(e) => {
-          const r = (e.currentTarget as SVGElement).getBoundingClientRect();
-          const anchorPx = { x: e.clientX - r.left, y: e.clientY - r.top };
-          setView(zoomAt(view, anchorPx, e.deltaY < 0 ? 1.1 : 1 / 1.1));
-        }}
-        onPointerDown={(e) => {
-          const p = rectPx(e);
-          // Middle button always pans (Fusion convention), in any tool.
-          if (e.button === 1) {
-            e.preventDefault();
-            (e.currentTarget as SVGElement).setPointerCapture(e.pointerId);
-            pan.current = p;
-            moved.current = false;
-            return;
-          }
-          if (e.button !== 0) return; // right-click opens the menu
-          (e.currentTarget as SVGElement).setPointerCapture(e.pointerId);
-          moved.current = false;
-          // In Select, pressing on a point starts a live drag (FR-20 re-solve).
-          if (tool === "select") {
-            const hit = hitTest(model, view, p);
-            dragPoint.current = hit?.kind === "point" ? hit.id : null;
-            pan.current = p; // left-drag pans in Select
-            return;
-          }
-          // A fresh DRAG_DRAW shape: arm a press-drag-release draw (no left-pan).
-          if (DRAG_DRAW.has(tool) && pending.length === 0 && !draft) {
-            dragDraw.current = { px: p, snap: nearestSnap(model, view, p) };
-            return;
-          }
-          pan.current = p; // other drawing tools: left-drag still pans
-        }}
-        onPointerMove={(e) => {
-          const p = rectPx(e);
-          // Dragging a point: move it and re-solve live (under-constrained DOF).
-          if (dragPoint.current) {
-            moved.current = true;
-            const w = toWorld(view, p);
-            movePoint(dragPoint.current, w.u, w.v);
-            solve();
-            return;
-          }
-          // A drag-draw in progress: rubber-band from the press to the cursor.
-          if (dragDraw.current) {
-            if (moved.current || Math.hypot(p.x - dragDraw.current.px.x, p.y - dragDraw.current.px.y) >= 3) {
-              moved.current = true;
-              setDragPreview({ from: dragDraw.current.px, to: p });
-              setHover({ px: p, ...inferAt(p) });
-            }
-            return;
-          }
-          const start = pan.current;
-          if (start && (moved.current || Math.hypot(p.x - start.x, p.y - start.y) >= 3)) {
-            moved.current = true; // a drag → pan
-            setView(panBy(view, p.x - start.x, p.y - start.y));
-            pan.current = p;
-            return;
-          }
-          // Hovering in a drawing tool: live snap + inference preview (FR-17).
-          if (tool !== "select") setHover({ px: p, ...inferAt(p) });
-        }}
-        onPointerLeave={() => setHover(null)}
-        onPointerUp={(e) => {
-          if (e.button !== 0 && e.button !== 1) return;
-          const wasMove = moved.current;
-          const wasDrag = dragPoint.current !== null;
-          const draw = dragDraw.current;
-          const p = rectPx(e);
-          pan.current = null;
-          moved.current = false;
-          dragPoint.current = null;
-          dragDraw.current = null;
-          setDragPreview(null);
-          // Completed drag-draw: press = first click, release = second click.
-          if (draw && wasMove) {
-            clickAt(draw.snap.u, draw.snap.v, { reusePointId: draw.snap.pointId });
-            const rel = inferAt(p);
-            clickAt(rel.snap.u, rel.snap.v, { reusePointId: rel.snap.pointId });
-            setHover({ px: p, ...rel });
-            return;
-          }
-          if (wasMove || wasDrag) return; // a pan / point-drag, not a click
-          if (tool === "select") {
-            // Select-then-constrain: pick the entity under the cursor (Shift adds).
-            const hit = hitTest(model, view, p);
-            if (!hit) setSelection([]);
-            else if (e.shiftKey) toggleSelect(hit.id);
-            else setSelection([hit.id]);
-            return;
-          }
-          // A typed value in the inline box wins: commit geometry at the resolved
-          // (exact) point + its driving dimension(s).
-          if (draft && draft.values.some((v) => v !== "")) {
-            commitDraft();
-            setHover({ px: p, ...inferAt(p) });
-            return;
-          }
-          // Place at the snapped point; persist the inferred constraint unless Shift.
-          const { snap, hint } = inferAt(p);
-          clickAt(snap.u, snap.v, {
-            reusePointId: snap.pointId,
-            constraint: !e.shiftKey && hint ? hint.constraint : undefined,
-          });
-          setHover({ px: p, ...inferAt(p) });
-        }}
+        className="pointer-events-none block touch-none"
+        style={{ backgroundColor: "transparent" }}
+        aria-hidden
       >
-        <GridAndAxes view={view} w={size.w} h={size.h} />
-        <SketchGeometry model={model} view={view} selection={selection} baseColor={baseColor} />
         <ConstraintGlyphs
           model={model}
           view={view}
           onDelete={removeConstraint}
           onEdit={setEditingDim}
         />
-        {hover && (
-          <InferenceOverlay
-            hover={hover}
-            tip={toScreen(view, { u: hover.snap.u, v: hover.snap.v })}
-            anchor={anchor ? toScreen(view, { u: anchor.u, v: anchor.v }) : null}
-          />
-        )}
-        {dragPreview && <DragDrawPreview tool={tool} from={dragPreview.from} to={dragPreview.to} />}
       </svg>
       {/* Inline precise-value box: appears during a drawing gesture near the cursor;
           shows live values, type to lock + auto-dimension (FR — Fusion precise input). */}
       {drawFieldsNow.length > 0 && boxPos && (
+        <div className="pointer-events-auto">
         <DrawInputBox
           fields={drawFieldsNow}
           live={liveNow}
@@ -1106,30 +1123,30 @@ export function Sketcher(): React.JSX.Element | null {
           onCommit={commitDraft}
           at={boxPos}
         />
+        </div>
       )}
       {ctxMenu && (
         <>
           {/* Backdrop dismisses on the next click (matches the feature-tree menu). */}
           <div
             data-testid="sketch-ctx-backdrop"
-            className="fixed inset-0 z-40"
+            className="pointer-events-auto fixed inset-0 z-40"
             onClick={() => setCtxMenu(null)}
             onContextMenu={(e) => {
               e.preventDefault();
               setCtxMenu(null);
             }}
           />
-          <div className="fixed z-50" style={{ left: ctxMenu.x, top: ctxMenu.y }}>
-            <ContextMenuView
-              testid="sketch-context-menu"
-              sections={ctxMenu.sections}
-              onClose={() => setCtxMenu(null)}
-              onRun={(id) => {
-                runContextAction(id, ctxMenu.target);
-                setCtxMenu(null);
-              }}
-            />
-          </div>
+          <PlastiqScreenContextMenu
+            open={true}
+            anchor={{ x: ctxMenu.x, y: ctxMenu.y }}
+            target={ctxMenu.target}
+            onClose={() => setCtxMenu(null)}
+            onRun={(id) => {
+              runContextAction(id, ctxMenu.target);
+              setCtxMenu(null);
+            }}
+          />
         </>
       )}
     </div>

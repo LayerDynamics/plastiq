@@ -1,0 +1,36 @@
+schema: 1
+name: services
+version: 0.1.0
+target: services
+build: []
+bundle:
+  - source: services/capture/app
+    destination: services/capture/app
+  - source: services/capture/environment.yml
+    destination: services/capture/environment.yml
+  - source: services/nerf/app
+    destination: services/nerf/app
+  - source: services/nerf/environment.yml
+    destination: services/nerf/environment.yml
+  - source: services/nerf/pyproject.toml
+    destination: services/nerf/pyproject.toml
+  - source: services/nurbs/app
+    destination: services/nurbs/app
+  - source: services/nurbs/environment.yml
+    destination: services/nurbs/environment.yml
+  - source: services/nurbs/pyproject.toml
+    destination: services/nurbs/pyproject.toml
+  - source: services/photogrammetry/app
+    destination: services/photogrammetry/app
+  - source: services/photogrammetry/environment.yml
+    destination: services/photogrammetry/environment.yml
+  - source: services/photogrammetry/pyproject.toml
+    destination: services/photogrammetry/pyproject.toml
+  - source: services/reconstruct/app
+    destination: services/reconstruct/app
+  - source: services/reconstruct/environment.yml
+    destination: services/reconstruct/environment.yml
+  - source: services/reconstruct/pyproject.toml
+    destination: services/reconstruct/pyproject.toml
+  - source: services/reconstruct/Dockerfile
+    destination: services/reconstruct/Dockerfile

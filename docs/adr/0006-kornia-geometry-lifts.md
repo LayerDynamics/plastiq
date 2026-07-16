@@ -37,17 +37,24 @@ them, for the same evidence-based reason M3/M1.5 were re-scoped:
 
 Revisit criteria: if Plastiq ever hand-rolls SfM (instead of COLMAP/MLX), port the 5-point solver then.
 
+**Revisit criterion fired (2026-07-04):** [SPEC-13](../specs/SPEC-13-photogrammetry-service.md)
+commits to a first-party SfM front-end (`services/photogrammetry`); the Nistér 5-point port is planned
+there (SPEC-13 P2). The Kannala-Brandt fisheye deferral stands (SPEC-13 §10 keeps it out of scope).
+
 ## Consequences
 
 - New `services/capture/app/geometry.py` (**MLX**; no OCC, no torch, no numpy in the module) + tests —
   also seeds the M7 capture service directory. Deterministic.
 - `Expanse.md` kornia item updated; the SfM-solver deferral recorded here and in M7's ADR.
 
-## Wiring status (accuracy note)
+## Wiring status
 
-`geometry.py` is a **standalone utility, not yet called by the capture service.** M7's `/capture`
-endpoint takes an *already-oriented* point cloud (`points` + `normals`) as input, so it does not invoke
-`depth_to_normals`. `geometry.py` is the depth-map → points/normals front-end for a **depth-scan**
-ingestion path (a phone/LiDAR depth frame + intrinsics → `unproject_depth`/`depth_to_normals` → the
-oriented cloud `/capture` consumes); that ingestion endpoint is the wiring step that makes it live.
-Built + tested now; reachable from the running service when the depth-ingestion path is added.
+**Wired and live (as of 2026-07-04).** The capture service exposes `POST /points-from-depth
+{depth, fx, fy, cx, cy} → {points, normals}` (`services/capture/app/main.py`), the depth-scan
+ingestion endpoint this ADR was built for: it constructs a `PinholeCamera` from the intrinsics and
+calls `unproject_depth` + `depth_to_normals` to turn a phone/LiDAR depth frame into the oriented point
+cloud `POST /capture` consumes. It runs **synchronously** (a fixed handful of vectorized ops over H·W
+pixels, no training loop), and is end-to-end tested feeding `/capture`
+(`tests/test_api.py::test_points_from_depth_sphere_feeds_capture_end_to_end`, plus validation-400 and
+pixel-cap-422 tests). M7's `/capture` still also accepts an already-oriented cloud directly (e.g. from
+COLMAP), so `depth_to_normals` is one of two ways to produce that input, not the only one.

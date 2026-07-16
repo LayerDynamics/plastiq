@@ -14,7 +14,9 @@ and the plan in `docs/plans/2026-06-20-spec7-r6-reconstruction.md`.
 
 All detection and fitting are **deterministic** (SPEC-7 NFR-2): a normal-cluster /
 Gauss-map axis with closed-form least-squares primitive fits — **no RANSAC** (randomised
-fitters break reproducibility). The same mesh always reconstructs to the same B-rep.
+fitters break reproducibility). The report's `surface_deviation` sampling does use
+`mx.random`, but seeded from a SHA-256 of the mesh geometry (`fidelity.py`), so the same
+mesh always reconstructs to the same B-rep and the same report.
 
 ## What it does today
 
@@ -23,20 +25,34 @@ reconstruction that volume-validates, and always falls back so nothing is droppe
 
 1. **single analytic primitive** — the whole mesh is one **cylinder / sphere / cone** →
    one watertight analytic solid (`detect.py` + `curved_faces.py`, box-safe shape gates).
-2. **surface of revolution** — a turned part (stepped shaft, chamfered / capped cylinder)
+2. **cut sphere** — a sphere trimmed by a plane (hemisphere / spherical cap): `GeomAPI_IntSS`
+   confirms sphere∩plane, half-space cuts, volume-validated (`topology.py`, R6.9 / T37).
+3. **surface of revolution** — a turned part (stepped shaft, chamfered / capped cylinder)
    → a section profile revolved with `BRepPrimAPI_MakeRevol` into one analytic solid,
    volume-validated (`revolution.py`).
-3. **CSG booleans** — an axis-aligned box with cylindrical features → `BRepAlgoAPI_Fuse`
-   (bosses) then `BRepAlgoAPI_Cut` (through-holes), OCCT computing the shared edges
-   (InverseCSG paradigm), volume-validated (`csg.py`).
-4. **`fitted`** — group coplanar+adjacent triangles into **facets**, collapse each planar
+4. **CSG booleans** — a box (axis-aligned or rotated) with cylindrical features →
+   `BRepAlgoAPI_Fuse` (bosses) then `BRepAlgoAPI_Cut` (through-holes), OCCT computing the
+   shared edges (InverseCSG paradigm), volume-validated (`csg.py`).
+5. **cut cylinder** — a cylinder trimmed by non-perpendicular / axis-parallel planes (an
+   obliquely-capped cylinder): `GeomAPI_IntSS` confirms each fitted plane crosses the
+   cylinder, then boolean half-space cuts build the exact shared edges, volume-validated
+   (`topology.py`, SPEC-7 R6.9).
+6. **`fitted`** — group coplanar+adjacent triangles into **facets**, collapse each planar
    facet into a **single trimmed OCCT planar face**, AND collapse each single-loop non-planar
    region into one **freeform face** (R6.5; accuracy- and volume-guarded), with a per-triangle
-   faceted fallback for holed facets, closed regions, and leftovers. A clean, compact B-rep
-   for flat *and* smooth regions (a box → 6 faces; a domed box → flat sides + a freeform cap).
-   Selectable directly as `method="fitted"`.
-5. **`faceted`** — the per-triangle baseline; always produces a valid B-rep from any
-   triangle soup. Selectable as `method="faceted"` (fallback / comparison).
+   faceted fallback for holed facets, closed regions, and leftovers. When
+   `RECONSTRUCT_NURBS_URL` is set, a whole closed genus-0 organic blob is delegated to the
+   nurbs service **closed** mode (6-patch cube-map solid, T38) before faceting. Selectable
+   directly as `method="fitted"`.
+7. **`faceted`** — the per-triangle baseline; always produces a valid B-rep from any
+   triangle soup. Selectable as `method="faceted"` (fallback / comparison). If the fitted
+   route itself raises, the pipeline emits this baseline instead of failing the job (NFR-1);
+   any raising analytic route likewise degrades to the next route, recorded in the report's
+   `attempted` trail.
+
+Every route verifies closure with the same shared chain (`closure.py`: real free-edge count
+via `ShapeAnalysis_FreeBounds` → optional `OrientClosedSolid` → `BRepCheck_Analyzer` →
+positive volume) — `is_solid` is never assumed and `free_edges` is never hardcoded.
 
 Freeform faces (`freeform.py` — `BRepOffsetAPI_MakeFilling`) handle smooth non-primitive
 regions, and the **`fitted` path now uses them**: each connected non-planar region with a
@@ -44,11 +60,12 @@ single boundary loop is collapsed into ONE freeform face (sharing the mesh-polyl
 of its planar/faceted neighbours), guarded by a per-region accuracy gate and a post-assembly
 volume check (rebuilds faceted-only if freeform breaks closure/volume). A domed box becomes a
 freeform-capped solid instead of hundreds of triangles. Honest limits: a CLOSED region (no
-boundary loop — e.g. a whole organic blob) can't be one filled patch → stays faceted; and the
-analytic-rim sagitta case (a smooth fitted arc vs a faceted polyline neighbour — see the
-caveat) still needs the surface-intersection tail. Cleanup (weld coincident vertices, drop
-degenerate/duplicate faces, fix winding/normals, fill small holes — `cleanup.py`) runs first;
-STEP is written via `STEPControl_Writer`.
+boundary loop — e.g. a whole organic blob) can't be one `MakeFilling` patch; with
+`RECONSTRUCT_NURBS_URL` set it delegates to nurbs closed mode (T38), otherwise stays faceted.
+The general per-region analytic-rim sagitta case (smooth fitted arc vs faceted polyline
+neighbour) still needs further FR-6 graph work beyond cylinder/sphere∩plane. Cleanup (weld
+coincident vertices, drop degenerate/duplicate faces, fix winding/normals, fill small holes —
+`cleanup.py`) runs first; STEP is written via `STEPControl_Writer`.
 
 Coordinates are passed through unscaled (SI metres), matching `@plastiq/cad`'s STEP I/O
 (`packages/cad/src/io/index.ts`), so the output imports back with consistent units.
@@ -58,18 +75,26 @@ Coordinates are passed through unscaled (SI metres), matching `@plastiq/cad`'s S
 | Method | Path | Body / result |
 |---|---|---|
 | `GET`  | `/health` | `{ status, service }` |
-| `POST` | `/reconstruct` | `{ glb_base64, file_type? }` → `{ id, state }` |
+| `POST` | `/reconstruct` | `{ glb_base64, file_type?, method? }` → `{ id, state }` — `method` ∈ `auto` (default) / `fitted` / `faceted` (SPEC-7 FR-11; unknown values → 422). 400 on bad/empty base64; **429** when `RECONSTRUCT_MAX_CONCURRENT_JOBS` jobs are already in flight |
 | `GET`  | `/jobs/{id}/status` | `{ id, state, error? }` — `queued`/`running`/`completed`/`failed` |
 | `GET`  | `/jobs/{id}/result` | `{ step, report }` when completed (409 while running, 500 if failed) |
+| `DELETE` | `/jobs/{id}` | 204 — drop/cancel a job record (404 if unknown; an in-flight worker thread can't be force-killed, its result is discarded) |
 
 `report` = `{ triangles_in, triangles_used, faces_built, planar_faces, curved_faces, freeform_faces,
-faceted_faces, surface_deviation, fidelity_tol, tangent_regions, is_solid, is_valid, method, primitive? }` —
-`triangles_in` = raw, `triangles_used` = after cleanup, `planar_faces` = facets collapsed into single
-trimmed faces (0 unless `method="fitted"`), `method` = the path taken
-(`cylinder`/`sphere`/`cone`/`revolution`/`csg`/`cut_cylinder`/`fitted`/`faceted`), `primitive` = the
-analytic kind when `auto` matched one (else absent), `surface_deviation` = the **Scaled Chamfer
-Distance** of the built B-rep vs the input mesh (a pose/scale-robust surface-fidelity score, lower =
-closer; advisory — complements the volume gate), `fidelity_tol` = its advisory threshold,
+faceted_faces, surface_deviation, fidelity_tol, tangent_regions, is_solid, is_valid, method,
+primitive, attempted }` —
+`triangles_in` = raw, `triangles_used` = after cleanup, `planar_faces` = flat analytic faces — for
+`fitted` the facets collapsed into single trimmed faces, for the analytic routes the built shape's
+`Geom_Plane` faces (a cylinder's 2 caps, a CSG box's sides), 0 for `faceted`, `method` = the route
+taken — never `"auto"`
+(`cylinder`/`sphere`/`cone`/`revolution`/`csg`/`cut_cylinder`/`cut_sphere`/`fitted`/`faceted`), `primitive` = the
+analytic kind when an analytic route matched (else `null`), `attempted` = the auto chain's per-route
+trail in run order (`{ route, outcome: "matched"|"no_match"|"error", error? }` — an errored analytic
+route degrades to the next route; a `fitted` attempt can record `"error"` while `method` is still
+`"fitted"`, meaning a freeform region crashed and fell back faceted inside the emitted result),
+`surface_deviation` = the **Scaled Chamfer
+Distance** of the built B-rep vs the cleaned input mesh (a pose/scale-robust surface-fidelity score,
+lower = closer; advisory — complements the volume gate), `fidelity_tol` = its advisory threshold,
 `tangent_regions` = tangent-connected regions recognised in the input mesh (box→6, cylinder→3; M2c, a
 structural fingerprint — see [`docs/adr/0002`](../../docs/adr/0002-brepnet-cleanroom-traversal.md)).
 
@@ -77,16 +102,43 @@ structural fingerprint — see [`docs/adr/0002`](../../docs/adr/0002-brepnet-cle
 > [StepForge](https://github.com/) `reward/{step_to_pointcloud,scd_reward}.py`; the pose-alignment
 > stage (FPFH/RANSAC/ICP, the only open3d user) is omitted because the reconstructed B-rep is built
 > from the input mesh — same frame. The metric math (sampling + bidirectional Chamfer) and the M2c
-> recognition (dihedral angles + normal spread) run in **MLX** (`mlx.core`, Apple Silicon; pip dep),
-> with OCCT/trimesh for geometry and a Python union-find for connected components.
+> recognition (dihedral angles + normal spread) run in **MLX** (`mlx.core`; pip dep), with
+> OCCT/trimesh for geometry and a Python union-find for connected components. MLX is a **hard
+> runtime dependency** — `main.py → pipeline.py → fidelity.py/recognition.py` import `mlx.core`
+> at startup. Bare `mlx` ships a backend only on macOS (mlx-metal); on Linux the Dockerfile and
+> CI install `mlx[cpu]` explicitly.
 > See [`docs/adr/0001`](../../docs/adr/0001-scd-fidelity-metric.md) / [`0002`](../../docs/adr/0002-brepnet-cleanroom-traversal.md).
 
 ## Run locally
+
+One command (repo root) starts **all four** Plastiq services — reconstruct :8000, capture
+:8001, nerf :8002, nurbs :8003 — creating any missing conda env from its `environment.yml`
+first, with name-prefixed logs and clean Ctrl-C shutdown:
+
+```bash
+just services          # scripts/dev-services.sh; `just services-stop` frees stray listeners
+```
+
+Or run just this service manually:
 
 ```bash
 mamba env create -f environment.yml          # one-time (pythonocc-core is conda-forge only)
 mamba run -n plastiq-reconstruct uvicorn app.main:app --port 8000
 ```
+
+Job lifecycle (submit/start/complete/fail + duration) and rejected submits are logged via
+Python `logging` (INFO default — `RECONSTRUCT_LOG_LEVEL` overrides). The in-memory job store
+is bounded in every direction (`app/jobs.py` + `app/main.py`):
+
+- terminal (completed/failed) jobs are evicted by TTL + a max-count cap;
+- concurrent submits are capped — beyond `RECONSTRUCT_MAX_CONCURRENT_JOBS` (default 2) a
+  submit is rejected with 429 so CPU-bound OCCT load sheds early;
+- a job stuck queued/running past `RECONSTRUCT_RUNNING_JOB_TTL_SECONDS` (default 1800) is
+  force-failed so it stops holding the concurrency cap;
+- `DELETE /jobs/{id}` drops a record on client cancel/cleanup.
+
+CORS is permissive by default (the service holds no secrets); lock it down with
+`RECONSTRUCT_CORS_ORIGINS` (comma-separated origins).
 
 ## Test (real OCCT, no mocks)
 
@@ -94,13 +146,21 @@ mamba run -n plastiq-reconstruct uvicorn app.main:app --port 8000
 mamba run -n plastiq-reconstruct python -m pytest -q
 ```
 
-Covers (real OCCT, no mocks): cleanup; planar `fitted` and `faceted`; the deterministic
+Covers (real OCCT, no mocks — **122 tests**, all passing as of 2026-07-04): cleanup; planar
+`fitted` and `faceted`; the deterministic
 cylinder / sphere / cone fits → watertight analytic solids; `auto` classification (and that
 a box is not misread as a primitive); surface-of-revolution stepped shafts; CSG box−hole /
-box+boss / rotated-base / two-hole solids; freeform faces + `freeform_capped_solid` + the
+box+boss / rotated-base / two-hole solids; the `GeomAPI_IntSS` shared-edge primitive + the
+oblique cut-cylinder route (`test_topology.py`); freeform faces + `freeform_capped_solid` + the
 **fitted/auto freeform integration** (a domed box → a freeform-capped solid, `freeform_faces>0`);
-and the full `POST /reconstruct` → poll → `result` flow over the ASGI app (incl. a CORS
-preflight) with real GLB fixtures.
+the shared closure-verification chain (`test_closure.py`); the SCD fidelity metric + tangent-region
+recognition (`test_fidelity.py`/`test_recognition.py`); the route-attempt trail and fitted→faceted
+exception fallback (`test_pipeline.py`); the bounded submit→poll job store (TTL + cap eviction +
+running-job TTL — `test_jobs.py`); and the full
+`POST /reconstruct` → poll → `result` flow over the ASGI app (incl. a CORS preflight, the
+`method` param round-trip, `DELETE /jobs/{id}`, and the 429 concurrency cap) with
+real GLB fixtures. The suite also runs in CI on ubuntu (see `.github/workflows/ci.yml`, which
+installs the `mlx[cpu]` Linux backend) with one platform-numerics deselect documented there.
 
 ## Docker / deploy
 
@@ -109,14 +169,18 @@ docker build -t plastiq-reconstruct services/reconstruct
 docker run -p 8000:8000 plastiq-reconstruct
 ```
 
-The image builds the conda env from `environment.yml` on `condaforge/miniforge3`. **Verified
-locally:** it builds, `/health` returns ok, and a real GLB reconstructs end-to-end through
-the running container. The browser reaches it by base URL (set the app's
-`reconstructBaseURL`) — same BYO/self-host spirit as the AI proxy seam, so no provider key
-leaves the user's control.
+The image builds the conda env from `environment.yml` on `condaforge/miniforge3`, then
+installs **`mlx[cpu]`** explicitly — bare `mlx` ships no Linux backend, and the service
+imports `mlx.core` at startup, so without this step uvicorn cannot start in the container
+(the same fix CI uses; the image was silently broken on this between 2026-06-22 and
+2026-07-04). **Verified locally (2026-07-04):** it builds, `/health` returns ok, and a real
+cylinder GLB reconstructs end-to-end through the running container (`method` `cylinder`,
+`is_solid` true, SCD ≈0.0039 on the Linux CPU MLX backend). The browser reaches it by base
+URL (set the app's `reconstructBaseURL`) — same BYO/self-host spirit as the AI proxy seam,
+so no provider key leaves the user's control.
 
-The image is **≈4.7 GB** (conda + OCCT/pythonOCC + numpy/scipy/trimesh). That is fine for
-local Docker but **exceeds the ~4 GB cap** of some hosted runners — a hosted deploy needs
+The image is **≈4.8 GB** (conda + OCCT/pythonOCC + numpy/scipy/trimesh + MLX). That is fine
+for local Docker but **exceeds the ~4 GB cap** of some hosted runners — a hosted deploy needs
 slimming first (multi-stage copy of just the conda env, prune build tooling). A hosted
 deploy is descoped for now (SPEC-7 decision D-6); local Docker is the supported mode.
 
@@ -161,7 +225,22 @@ automatic reconstruction, not an implementation gap.
 - **R6.7 (done)** — server tests (real-OCCT pytest) + client↔server integration test (keyed
   on `RECONSTRUCT_URL`) + a no-mock browser E2E (`e2e/plastiq/reconstruct.spec.ts`, gated on
   the service being reachable; CORS added to `main.py` so the browser can call cross-origin).
-- **R6.8 (deferred, local-only)** — the Dockerfile + `environment.yml` build/run locally
-  (below); a hosted deploy is descoped for now (SPEC-7 decision D-6).
+- **R6.8 (done, local-only)** — the Dockerfile + `environment.yml` build/run locally,
+  verified end-to-end in-container on 2026-07-04 (above); a hosted deploy is descoped for
+  now (SPEC-7 decision D-6).
+- **R6.9 (partial)** — the FR-6 surface-intersection tail: the `GeomAPI_IntSS` shared-edge
+  primitive + the oblique **cut-cylinder** `auto` route shipped (`topology.py`); the fully
+  general per-region analytic reconstruction, the analytic-rim sagitta case, and the
+  snapped-boundary-polyline / edge–edge corner mechanisms remain open (those regions stay
+  faceted — nothing is dropped). See SPEC-7 §8.
 
 [pythonOCC]: https://github.com/tpaviot/pythonocc-core
+
+## Freeform → NURBS delegation (U10)
+
+When `RECONSTRUCT_NURBS_URL` is set (e.g. `http://127.0.0.1:8003`), freeform single-loop
+regions are offloaded to `services/nurbs` for a B-spline fit. `just services` /
+`scripts/dev-services.sh` exports this automatically for the reconstruct process so
+organic freeform quality uses NURBS by default when both services are running.
+
+Unset the env var to force local `MakeFilling` only.

@@ -1,0 +1,12 @@
+schema: 1
+name: desktop
+version: 0.1.0
+target: desktop
+build:
+  - name: Build native Tauri wizard installers
+    program: pnpm
+    args: ["--filter", "@plastiq/desktop", "run", "build"]
+    working_directory: .
+bundle:
+  - source: apps/desktop/src-tauri/target/release/bundle
+    destination: native

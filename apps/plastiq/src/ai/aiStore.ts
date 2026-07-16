@@ -14,6 +14,7 @@ import {
   putConversation as dbPutConversation,
   deleteConversation as dbDeleteConversation,
 } from "./conversation.js";
+import { EMPTY_SESSION_USAGE, foldRunIntoSession, type SessionUsage, type UsageSnapshot } from "./usage.js";
 import type { ChatMessage } from "./providers/types.js";
 
 interface AiState {
@@ -41,6 +42,13 @@ interface AiState {
   appendTrace: (entry: TraceEntry) => Promise<void>;
   /** Remove a project's conversation (on delete); resets memory if it was active. */
   deleteConversation: (projectId: string) => Promise<void>;
+
+  /** Session-cumulative usage across ALL generation runs (both the panel and the palette),
+   * 6-L2. Unlike the per-run UsageMeter this survives each run, so the panel/palette readouts
+   * show the whole session's spend instead of resetting every generation. */
+  sessionUsage: SessionUsage;
+  /** Fold a completed run's usage snapshot into the session totals (one turn). */
+  recordRunUsage: (run: UsageSnapshot) => void;
 }
 
 export const useAiStore = create<AiState>((set, get) => ({
@@ -89,4 +97,7 @@ export const useAiStore = create<AiState>((set, get) => ({
       set({ conversation: emptyConversation(), conversationProjectId: null });
     }
   },
+
+  sessionUsage: EMPTY_SESSION_USAGE,
+  recordRunUsage: (run) => set((s) => ({ sessionUsage: foldRunIntoSession(s.sessionUsage, run) })),
 }));

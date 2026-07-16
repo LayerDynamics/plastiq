@@ -18,10 +18,11 @@ const REGISTRY: Record<BackendName, () => Promise<PhysicsBackend>> = {
 
 let active: PhysicsBackend | null = null;
 
-/** Load a physics backend (default MuJoCo — its native tree joints express
- * world-axis hinges between differently-oriented bodies, the case rapier-compat
- * cannot; rapier/ammo/cannon remain selectable). Await before constructing a
- * PredictionSim. */
+/** Load a physics backend (default MuJoCo — its native tree joints express the
+ * FULL constraint vocabulary for arbitrarily-oriented bodies; rapier/ammo/cannon
+ * remain selectable but not every kind×backend cell is supported — unsupported
+ * cells throw loudly at spawn; see the support matrix in engine.ts). Await
+ * before constructing a PredictionSim. */
 export async function initSim(opts?: { backend?: BackendName }): Promise<void> {
   const name = opts?.backend ?? "mujoco";
   const backend = await REGISTRY[name]();

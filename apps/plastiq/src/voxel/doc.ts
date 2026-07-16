@@ -32,3 +32,13 @@ export function docToGrid(doc: VoxelDoc): VoxelGrid {
 export function voxelDocToMesh(doc: VoxelDoc): VoxelMesh {
   return docToGrid(doc).toMesh();
 }
+
+/** Default sculpt grid: 32³ cells at 2 mm (SI metres) → a 64 mm working cube, matching the
+ * seeded parametric box's scale (store/seed.ts). Origin centres the grid on the XY ground
+ * plane (Z-up, grid base at z=0). Seeded with a small central slab so a fresh sculpt shows
+ * geometry immediately (the seed.ts philosophy) and the first click has a surface to hit. */
+export function defaultVoxelDoc(name?: string): VoxelDoc {
+  const grid = new VoxelGrid([32, 32, 32], 0.002, [-0.032, -0.032, 0]);
+  grid.addBox([12, 12, 0], [19, 19, 1]); // an 8×8×2 starter slab at the centre of the floor
+  return gridToDoc(grid, name ?? "Voxel Sculpt");
+}

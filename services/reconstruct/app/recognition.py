@@ -62,6 +62,22 @@ def _connected_components(n: int, pairs: np.ndarray) -> np.ndarray:
     return labels
 
 
+def _group_tangent_regions(mesh, face_normals: mx.array, smooth_angle_deg: float) -> np.ndarray:
+    """Region labels given an ALREADY-built trimesh + its MLX face normals — so a caller that needs
+    both (e.g. `recognize`) builds the mesh/normals once instead of twice."""
+    n = len(mesh.faces)
+    if n == 0:
+        return np.zeros(0, dtype=np.int64)
+    adjacency = mesh.face_adjacency  # (m, 2) pairs of triangles sharing an edge (trimesh, combinatorial)
+    if len(adjacency) == 0:
+        return _connected_components(n, np.empty((0, 2), dtype=np.int64))
+    na = mx.take(face_normals, mx.array(np.asarray(adjacency[:, 0], dtype=np.int32)), axis=0)
+    nb = mx.take(face_normals, mx.array(np.asarray(adjacency[:, 1], dtype=np.int32)), axis=0)
+    angle_deg = mx.degrees(mx.arccos(mx.clip(mx.sum(na * nb, axis=1), -1.0, 1.0)))
+    smooth = np.asarray(angle_deg < smooth_angle_deg)  # (m,) bool
+    return _connected_components(n, adjacency[smooth])
+
+
 def group_tangent_regions(
     vertices: np.ndarray, faces: np.ndarray, smooth_angle_deg: float = SMOOTH_ANGLE_DEG
 ) -> np.ndarray:
@@ -69,18 +85,8 @@ def group_tangent_regions(
     low-dihedral — face adjacencies). The dihedral angle between adjacent face normals is computed in
     MLX; the adjacency + components are combinatorial. Deterministic."""
     mesh = _mesh(vertices, faces)
-    n = len(mesh.faces)
-    if n == 0:
-        return np.zeros(0, dtype=np.int64)
-    adjacency = mesh.face_adjacency  # (m, 2) pairs of triangles sharing an edge (trimesh, combinatorial)
-    if len(adjacency) == 0:
-        return _connected_components(n, np.empty((0, 2), dtype=np.int64))
     fn = mx.array(np.asarray(mesh.face_normals, dtype=np.float32))  # (n, 3) — MLX
-    na = mx.take(fn, mx.array(np.asarray(adjacency[:, 0], dtype=np.int32)), axis=0)
-    nb = mx.take(fn, mx.array(np.asarray(adjacency[:, 1], dtype=np.int32)), axis=0)
-    angle_deg = mx.degrees(mx.arccos(mx.clip(mx.sum(na * nb, axis=1), -1.0, 1.0)))
-    smooth = np.asarray(angle_deg < smooth_angle_deg)  # (m,) bool
-    return _connected_components(n, adjacency[smooth])
+    return _group_tangent_regions(mesh, fn, smooth_angle_deg)
 
 
 def recognize(
@@ -94,8 +100,8 @@ def recognize(
     mesh = _mesh(vertices, faces)
     if len(mesh.faces) == 0:
         return {"tangent_regions": 0, "curved_regions": 0}
-    labels = group_tangent_regions(vertices, faces, smooth_angle_deg)
-    fn = mx.array(np.asarray(mesh.face_normals, dtype=np.float32))
+    fn = mx.array(np.asarray(mesh.face_normals, dtype=np.float32))  # built once, reused for both passes
+    labels = _group_tangent_regions(mesh, fn, smooth_angle_deg)
     curved = 0
     unique_labels = sorted(set(labels.tolist()))
     for r in unique_labels:

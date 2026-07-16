@@ -94,12 +94,26 @@ describe("extractProfile — circle profile (FR-16 true curved edge)", () => {
     expect(extractProfile(m)).toBeNull();
   });
 
-  it("a circle mixed with lines is not (yet) a single profile", () => {
+  it("a circle mixed with lines becomes a loop with a hole (C5 / T11)", () => {
     const m = rect();
     m.points.push({ id: "cc", u: 0.025, v: 0.015 });
     m.entities.push({ id: "e0", kind: "circle", center: "cc", radius: 0.005 });
-    // The line loop still wins; the circle (a hole/second loop) isn't merged yet.
-    expect(extractProfile(m)!.kind).toBe("loop");
+    const p = extractProfile(m)!;
+    expect(p.kind).toBe("loop");
+    if (p.kind === "loop") {
+      expect(p.holes).toHaveLength(1);
+      expect(p.holes![0]!.radius).toBe(0.005);
+      expect(p.holes![0]!.center).toEqual([0.025, 0.015]);
+    }
+  });
+
+  it("rejects a circle whose centre is outside the outer loop (C9 containment)", () => {
+    const m = rect(); // [0,0]–[0.05,0.03]
+    m.points.push({ id: "out", u: 0.1, v: 0.1 }); // outside
+    m.entities.push({ id: "e0", kind: "circle", center: "out", radius: 0.005 });
+    const p = extractProfile(m)!;
+    expect(p.kind).toBe("loop");
+    if (p.kind === "loop") expect(p.holes ?? []).toHaveLength(0);
   });
 });
 

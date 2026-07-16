@@ -69,6 +69,17 @@ describe("linearPattern", () => {
     acc.delete();
     box.delete();
   });
+
+  it("unitizes a non-unit direction so spacing is not silently scaled (G11)", () => {
+    const box = makeBox(oc, mm(10), mm(10), mm(10));
+    // dir = (2,0,0) must behave identically to (1,0,0) for the same spacing.
+    const unit = linearPattern(oc, box, [1, 0, 0], mm(20), 2);
+    const scaled = linearPattern(oc, box, [2, 0, 0], mm(20), 2);
+    expect(scaled[1]!.boundingBox().min[0]).toBeCloseTo(unit[1]!.boundingBox().min[0], 9);
+    for (const c of unit) c.delete();
+    for (const c of scaled) c.delete();
+    box.delete();
+  });
 });
 
 describe("circularPattern", () => {
@@ -125,11 +136,13 @@ describe("extrudeToFace", () => {
     pad.delete();
   });
 
-  it("characterizes the centroid-projection limit on a non-perpendicular target (T3)", () => {
+  it("fails loudly on a non-perpendicular target that cannot terminate the pad (T3)", () => {
     // Target a SIDE face (+X), whose normal is perpendicular to the +Z extrude
-    // direction. The pad height is the side face's centroid projected onto +Z =
-    // mid-height (15mm), NOT the face itself (which spans z∈[0,30]). This documents
-    // the exact-only-for-perpendicular-planar limitation called out in the doc.
+    // direction — the face is parallel to the extrude, so no pad can terminate
+    // on it. The old centroid-projection approximation silently padded to the
+    // centroid's projected depth (mid-height, 15mm); the true up-to-face trim
+    // rejects it instead of fabricating geometry. (Angled/curved targets that CAN
+    // terminate the pad are covered exactly in extrudeToFace.test.ts.)
     const base = makeBox(oc, mm(60), mm(40), mm(30));
     const mesh = tessellateTagged(oc, base);
     const side = mesh.faceGroups.find((g) => Math.round(g.normal[0]) === 1)!;
@@ -139,10 +152,7 @@ describe("extrudeToFace", () => {
     sk.lineTo(mm(20), 0);
     sk.lineTo(mm(20), mm(20));
     sk.lineTo(0, mm(20));
-    const pad = extrudeToFace(oc, sk, base, sideRef);
-    // Pad reaches the centroid projection (z ≈ 15mm), demonstrably NOT the face.
-    expect(pad.boundingBox().max[2]).toBeCloseTo(mm(15), 6);
+    expect(() => extrudeToFace(oc, sk, base, sideRef)).toThrow(/cannot terminate the extrude/);
     base.delete();
-    pad.delete();
   });
 });

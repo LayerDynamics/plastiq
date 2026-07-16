@@ -2,18 +2,25 @@
   "name": "@plastiq/app",
   "version": "0.0.0",
   "private": true,
+  "license": "SEE LICENSE IN LICENSE",
   "type": "module",
   "description": "Plastiq CAD Studio: an interactive parametric CAD editor (React + three.js) on @plastiq/cad (SPEC-5).",
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit -p tsconfig.json && vite build",
     "preview": "vite preview",
-    "typecheck": "tsc --noEmit -p tsconfig.json"
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "gen": "tsx src/headless/cli.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.105.0",
     "@plastiq/cad": "workspace:*",
+    "@plastiq/capture": "workspace:*",
     "@plastiq/nerf": "workspace:*",
+    "@plastiq/nurbs": "workspace:*",
+    "@plastiq/photogrammetry": "workspace:*",
+    "@plastiq/recon": "workspace:*",
+    "@plastiq/recm": "workspace:*",
     "@plastiq/sim": "workspace:*",
     "@react-three/drei": "^10.7.7",
     "@react-three/fiber": "^9.6.1",
@@ -36,6 +43,7 @@
     "@vitejs/plugin-react": "^5.0.0",
     "fake-indexeddb": "^6.2.5",
     "tailwindcss": "^4.0.0",
+    "tsx": "^4.20.0",
     "vite": "^8.0.0"
   }
 }

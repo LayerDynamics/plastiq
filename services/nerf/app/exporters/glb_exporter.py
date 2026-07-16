@@ -15,7 +15,10 @@ import trimesh
 def mesh_to_glb(vertices: np.ndarray, faces: np.ndarray) -> bytes:
     """(vertices `(V,3)`, faces `(F,3)`) → a GLB byte blob."""
     mesh = trimesh.Trimesh(vertices=np.asarray(vertices), faces=np.asarray(faces), process=False)
-    return mesh.export(file_type="glb")
+    glb = mesh.export(file_type="glb")
+    # trimesh returns bytes only when no file object is passed; the whole wire contract depends on it.
+    assert isinstance(glb, bytes), f"expected GLB bytes, got {type(glb).__name__}"
+    return glb
 
 
 def pointcloud_to_glb(points: np.ndarray, colors: np.ndarray | None = None) -> bytes:

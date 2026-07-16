@@ -1,5 +1,5 @@
-// Named standard views for the sidebar's Inspect panel (FR-12). The in-canvas 3D
-// view cube (viewCube.gizmo) is the primary click-to-orient control; these buttons
+// Named standard views for the sidebar's Inspect panel (FR-12). The SVG view cube
+// (viewport/ViewCube) is the primary click-to-orient control; these buttons
 // reach every named view explicitly (incl. the back/bottom faces the cube hides),
 // without floating a panel over the cube. Each drives the camera via the viewport's
 // published setView seam — the same call the cube faces make.

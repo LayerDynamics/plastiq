@@ -4,15 +4,20 @@
 // preset (Anthropic / local Ollama / OpenAI-compatible), choose a model from the curated
 // catalog (Appendix A) OR type a free-text override, set the base URL (also the hosted-proxy
 // seam — FR-5), the BYO API key, the creative mesh-gen (fal) key + proxy URL, and the
-// self-hosted reconstruction-service URL. The tool-capability preflight warning (FR-5b) is
-// SURFACED here so a non-tool model isn't silently accepted. Persists via the aiStore.
+// self-hosted reconstruction / NeRF / NURBS / capture / photogrammetry service URLs and
+// their optional API keys (RECONSTRUCT_API_KEY, CAPTURE_API_KEY, NERF_API_KEY, NURBS_API_KEY,
+// PHOTOGRAMMETRY_API_KEY — SPEC-7/10/11/12/13). The tool-capability preflight warning (FR-5b) is
+// SURFACED here so a non-tool model isn't silently accepted: the static catalog hint
+// shows immediately, and a debounced LIVE probe (probeModelCapabilities — Ollama model
+// metadata or a minimal tools-enabled chat probe, §6.9) supersedes it once the endpoint
+// answers — confirming, refuting, or leaving the unverified note. Persists via the aiStore.
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useAiStore } from "./aiStore.js";
 import type { AiSettings } from "./settings.js";
-import { MODEL_CATALOG, preflightModel } from "./providers/models.js";
+import { MODEL_CATALOG, preflightModel, probeModelCapabilities, type ProbeResult } from "./providers/models.js";
 
-const PRESET_KEYS = Object.keys(MODEL_CATALOG); // "anthropic" | "ollama" | "openai"
+const PRESET_KEYS = Object.keys(MODEL_CATALOG); // "anthropic" | "ollama" | "openai" | "llama-mlx"
 
 const field = "min-w-0 flex-1 rounded border border-[#2a3444] bg-[#0b0d12] px-2 py-1 text-[#cfe]";
 const labelCls = "flex flex-col gap-0.5 text-[10px] text-[#9ab]";
@@ -52,7 +57,19 @@ export function SettingsPanel(props: { onClose?: () => void }): React.JSX.Elemen
   const [apiKey, setApiKey] = useState(settings?.apiKeys[settings.providerKey] ?? "");
   const [falKey, setFalKey] = useState(settings?.apiKeys["fal"] ?? "");
   const [reconstructBaseURL, setReconstructBaseURL] = useState(settings?.reconstructBaseURL ?? "");
+  const [reconstructApiKey, setReconstructApiKey] = useState(settings?.reconstructApiKey ?? "");
   const [nerfBaseURL, setNerfBaseURL] = useState(settings?.nerfBaseURL ?? "");
+  const [nerfApiKey, setNerfApiKey] = useState(settings?.nerfApiKey ?? "");
+  const [nurbsBaseURL, setNurbsBaseURL] = useState(settings?.nurbsBaseURL ?? "");
+  const [nurbsApiKey, setNurbsApiKey] = useState(settings?.nurbsApiKey ?? "");
+  const [captureBaseURL, setCaptureBaseURL] = useState(settings?.captureBaseURL ?? "");
+  const [captureApiKey, setCaptureApiKey] = useState(settings?.captureApiKey ?? "");
+  const [photogrammetryBaseURL, setPhotogrammetryBaseURL] = useState(
+    settings?.photogrammetryBaseURL ?? "",
+  );
+  const [photogrammetryApiKey, setPhotogrammetryApiKey] = useState(
+    settings?.photogrammetryApiKey ?? "",
+  );
   const [meshGenBaseURL, setMeshGenBaseURL] = useState(settings?.meshGenBaseURL ?? "");
   const [saved, setSaved] = useState(false);
 
@@ -62,6 +79,36 @@ export function SettingsPanel(props: { onClose?: () => void }): React.JSX.Elemen
     () => (model.trim() ? preflightModel(providerKey, model.trim()) : null),
     [providerKey, model],
   );
+
+  // The LIVE capability probe (FR-5b/§6.9): fired (debounced) whenever the selection
+  // changes, aborting the previous in-flight probe. Non-blocking — the static catalog
+  // hint shows meanwhile; the probe's answer supersedes it below once it lands.
+  const [probe, setProbe] = useState<ProbeResult | null>(null);
+  useEffect(() => {
+    setProbe(null);
+    const m = model.trim();
+    if (!m) return undefined;
+    const controller = new AbortController();
+    const timer = setTimeout(() => {
+      void probeModelCapabilities(providerKey, m, {
+        ...(baseURL.trim() ? { baseURL: baseURL.trim() } : {}),
+        ...(apiKey.trim() ? { apiKey: apiKey.trim() } : {}),
+        signal: controller.signal,
+      }).then((result) => {
+        if (!controller.signal.aborted) setProbe(result);
+      });
+    }, 350);
+    return () => {
+      clearTimeout(timer);
+      controller.abort();
+    };
+  }, [providerKey, model, baseURL, apiKey]);
+
+  // Probe (live) supersedes catalog (static): a confirmation only counts when the
+  // endpoint actually answered (source ≠ catalog — Anthropic's catalog truth stays quiet,
+  // as does the offline fallback); a landed probe's warning replaces the static hint.
+  const liveConfirmed = probe !== null && probe.verdict === "confirmed" && probe.source !== "catalog" ? probe : null;
+  const toolWarning = probe ? probe.warning : preflight?.warning;
 
   /** Switching presets resets the model + base URL to that preset's defaults. */
   const onPreset = (key: string): void => {
@@ -85,7 +132,17 @@ export function SettingsPanel(props: { onClose?: () => void }): React.JSX.Elemen
       apiKeys,
       ...(baseURL.trim() ? { baseURL: baseURL.trim() } : {}),
       ...(reconstructBaseURL.trim() ? { reconstructBaseURL: reconstructBaseURL.trim() } : {}),
+      ...(reconstructApiKey.trim() ? { reconstructApiKey: reconstructApiKey.trim() } : {}),
       ...(nerfBaseURL.trim() ? { nerfBaseURL: nerfBaseURL.trim() } : {}),
+      ...(nerfApiKey.trim() ? { nerfApiKey: nerfApiKey.trim() } : {}),
+      ...(nurbsBaseURL.trim() ? { nurbsBaseURL: nurbsBaseURL.trim() } : {}),
+      ...(nurbsApiKey.trim() ? { nurbsApiKey: nurbsApiKey.trim() } : {}),
+      ...(captureBaseURL.trim() ? { captureBaseURL: captureBaseURL.trim() } : {}),
+      ...(captureApiKey.trim() ? { captureApiKey: captureApiKey.trim() } : {}),
+      ...(photogrammetryBaseURL.trim()
+        ? { photogrammetryBaseURL: photogrammetryBaseURL.trim() }
+        : {}),
+      ...(photogrammetryApiKey.trim() ? { photogrammetryApiKey: photogrammetryApiKey.trim() } : {}),
       ...(meshGenBaseURL.trim() ? { meshGenBaseURL: meshGenBaseURL.trim() } : {}),
     };
     void save(next).then(() => {
@@ -147,10 +204,18 @@ export function SettingsPanel(props: { onClose?: () => void }): React.JSX.Elemen
         placeholder="e.g. qwen2.5 / claude-opus-4-8 / gpt-…"
       />
 
-      {/* Tool-capability warning (FR-5b) — surfaced, never silent. */}
-      {preflight?.warning && (
+      {/* Tool-capability preflight (FR-5b/§6.9) — surfaced, never silent. The live probe's
+          verdict supersedes the static catalog hint: confirmed ⇒ the green verified line,
+          refuted ⇒ its hard warning, couldn't-verify ⇒ the unverified note. */}
+      {liveConfirmed && (
+        <p data-testid="settings-tool-confirmed" className="rounded border border-[#2a5a3a] bg-[#102217] px-2 py-1 text-[10px] text-[#9fc]">
+          ✓ '{model.trim()}' supports tool calling — verified against the endpoint
+          {liveConfirmed.supportsVision ? " (vision-capable)" : ""}.
+        </p>
+      )}
+      {!liveConfirmed && toolWarning && (
         <p data-testid="settings-tool-warning" className="rounded border border-[#7a5a2a] bg-[#221a10] px-2 py-1 text-[10px] text-[#fc9]">
-          ⚠ {preflight.warning}
+          ⚠ {toolWarning}
         </p>
       )}
 
@@ -191,6 +256,18 @@ export function SettingsPanel(props: { onClose?: () => void }): React.JSX.Elemen
       />
 
       <Field
+        testid="settings-reconstruct-key"
+        label="Reconstruction service API key (if it sets RECONSTRUCT_API_KEY)"
+        value={reconstructApiKey}
+        onChange={(v) => {
+          setReconstructApiKey(v);
+          setSaved(false);
+        }}
+        type="password"
+        placeholder="(blank = open dev service)"
+      />
+
+      <Field
         testid="settings-nerf-url"
         label="NeRF / photo-capture service URL"
         value={nerfBaseURL}
@@ -199,6 +276,87 @@ export function SettingsPanel(props: { onClose?: () => void }): React.JSX.Elemen
           setSaved(false);
         }}
         placeholder="http://localhost:8002"
+      />
+
+      <Field
+        testid="settings-nerf-key"
+        label="NeRF service API key (if it sets NERF_API_KEY)"
+        value={nerfApiKey}
+        onChange={(v) => {
+          setNerfApiKey(v);
+          setSaved(false);
+        }}
+        type="password"
+        placeholder="(blank = open dev service)"
+      />
+
+      <Field
+        testid="settings-nurbs-url"
+        label="NURBS fitting service URL (mesh→smooth CAD)"
+        value={nurbsBaseURL}
+        onChange={(v) => {
+          setNurbsBaseURL(v);
+          setSaved(false);
+        }}
+        placeholder="http://localhost:8003"
+      />
+
+      <Field
+        testid="settings-nurbs-key"
+        label="NURBS service API key (if it sets NURBS_API_KEY)"
+        value={nurbsApiKey}
+        onChange={(v) => {
+          setNurbsApiKey(v);
+          setSaved(false);
+        }}
+        type="password"
+        placeholder="(blank = open dev service)"
+      />
+
+      <Field
+        testid="settings-capture-url"
+        label="Capture service URL (point cloud→mesh)"
+        value={captureBaseURL}
+        onChange={(v) => {
+          setCaptureBaseURL(v);
+          setSaved(false);
+        }}
+        placeholder="http://localhost:8001"
+      />
+
+      <Field
+        testid="settings-capture-key"
+        label="Capture service API key (if it sets CAPTURE_API_KEY)"
+        value={captureApiKey}
+        onChange={(v) => {
+          setCaptureApiKey(v);
+          setSaved(false);
+        }}
+        type="password"
+        placeholder="(blank = open dev service)"
+      />
+
+      <Field
+        testid="settings-photogrammetry-url"
+        label="Photogrammetry service URL (photos→poses+cloud)"
+        value={photogrammetryBaseURL}
+        onChange={(v) => {
+          setPhotogrammetryBaseURL(v);
+          setSaved(false);
+        }}
+        placeholder="http://localhost:8004"
+      />
+
+      <Field
+        testid="settings-photogrammetry-key"
+        label="Photogrammetry service API key (if it sets PHOTOGRAMMETRY_API_KEY)"
+        value={photogrammetryApiKey}
+        onChange={(v) => {
+          setPhotogrammetryApiKey(v);
+          setSaved(false);
+        }}
+        type="password"
+        placeholder="(blank = open dev service)"
       />
 
       <Field

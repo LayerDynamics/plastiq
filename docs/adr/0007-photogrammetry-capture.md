@@ -38,6 +38,9 @@ service (`services/capture/`).
   *radiance* field (multi-view RGB volume rendering) is heavier and unnecessary for a points/depth →
   surface path; the SDF-from-points approach is the right fit and reuses M6. (Mirrors M6's deferral of
   the SfM camera solvers for the same reason.)
+- **Update (2026-07-04):** that front end is now planned **first-party** — `services/photogrammetry`,
+  [SPEC-13](../specs/SPEC-13-photogrammetry-service.md) / ADR-0013 — superseding this deferral **in
+  part** (the capture service's own scope is unchanged; nothing is built there yet as of this note).
 
 ## Consequences
 

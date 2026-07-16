@@ -6,23 +6,28 @@
 // Capabilities still being ported in later stages (picking R1, gizmos R2/R3,
 // sketch camera R4, section R5, assembly/sim R6) are not wired here yet.
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import * as THREE from "three";
 import { useCadStore } from "../store/store.js";
-import { PLACEMENT_TYPE, type CadDocument, type MeshDoc } from "../store/types.js";
+import { PLACEMENT_TYPE, type CadDocument, type MeshDoc, type PointCloudDoc } from "../store/types.js";
 import { GeometryClient } from "../worker/bridge.js";
 import { useProjectsStore } from "../persistence/projectsStore.js";
 import { importGltf } from "../mesh/importGltf.js";
+import { meshBodiesToGlbBase64 } from "../mesh/glb.js";
+import { deserializeMeshBody, serializeMeshBody } from "../mesh/meshBody.js";
 import type { MeshBody } from "../mesh/meshBody.js";
 import { Viewport3D } from "./Viewport3D.js";
 import { resolveDatumPlane } from "../worker/sketchPlane.js";
 import { createCoalescer } from "./coalesce.js";
 import { useSketchStore } from "../sketch/sketchStore.js";
 import { explodeInstances } from "../viewport/explode.js";
+import { ViewCubeOverlay } from "../viewport/ViewCube.js";
+import { LoadingOverlay } from "./LoadingOverlay.js";
 import { findClashes, type InstanceBox } from "../viewport/interference.js";
 import { Simulator } from "../sim/simulator.js";
+import { applyExperiment, buildTelemetry } from "../sim/experiments.js";
 import { applyJointDrives, type AssemblyModel, type Quat, type Vec3 } from "../assembly/model.js";
-import { activeBackend, type BackendName } from "@plastiq/sim";
+import { activeBackend, type BackendName, type SimManifest } from "@plastiq/sim";
 import type { InstanceBody } from "./Assembly.js";
 import type { DatumPlane } from "@plastiq/cad";
 import type { TransferMesh } from "../worker/protocol.js";
@@ -131,6 +136,9 @@ export function Viewport(): React.JSX.Element {
   // The generated mesh document's bodies (SPEC-6 R4.2), re-derived from its inline GLB
   // via importGltf. Non-null ⇒ the viewport renders a mesh document (B-rep path off).
   const [meshBodies, setMeshBodies] = useState<MeshBody[] | null>(null);
+  // The open dense point-cloud document (SPEC-13), rendered as a THREE.Points cloud on the same
+  // canvas. Non-null ⇒ the viewport is in cloud mode (B-rep + mesh paths off).
+  const [pointCloud, setPointCloud] = useState<PointCloudDoc | null>(null);
   // The resolved plane the active sketch is "normal to" (datum or, via the worker,
   // a model face) — drives the ortho sketch camera. null when not sketching.
   const [sketchFrame, setSketchFrame] = useState<DatumPlane | null>(null);
@@ -142,6 +150,21 @@ export function Viewport(): React.JSX.Element {
   const setStatus = useCadStore((s) => s.setStatus);
   const measuring = useCadStore((s) => s.measuring);
   const measureResult = useCadStore((s) => s.measureResult);
+  const onMeshBodiesChange = useCallback((bodies: MeshBody[], persist = false): void => {
+    setMeshBodies(bodies);
+    if (!persist) return;
+    const projects = useProjectsStore.getState();
+    const doc = projects.activeMeshDoc;
+    if (!doc) return;
+    useProjectsStore.setState({
+      activeMeshDoc: {
+        ...doc,
+        glb: meshBodiesToGlbBase64(bodies),
+        editedBodies: bodies.map(serializeMeshBody),
+      },
+      status: "mesh edited",
+    });
+  }, []);
 
   useEffect(() => {
     const client = new GeometryClient();
@@ -295,14 +318,53 @@ export function Viewport(): React.JSX.Element {
     const updatePoses = (): void => {
       if (simulator) setInstances(simulator.poses());
     };
-    // Lower the document, spawn the sim, render its bodies. Returns body count.
+    /** Publish body poses + experiment telemetry from the live simulator. */
+    const publishTelemetry = (): void => {
+      if (!simulator) {
+        useCadStore.getState().setSimTelemetry(null);
+        return;
+      }
+      const st = useCadStore.getState();
+      const ids = simulator.bodyIds();
+      const coms = simulator.comPositions();
+      const speeds = simulator.speeds();
+      const fixedSet = new Set(
+        // Ground is always fixed; assembly "Fix" instances too.
+        [
+          "__experiment_ground",
+          ...st.assembly.instances.filter((i) => i.fixed).map((i) => i.id),
+        ],
+      );
+      // Bare single-part path uses body0.
+      if (ids.length === 0 && coms.length > 0) {
+        // still publish whatever the sim has
+      }
+      const rows = ids.map((id, i) => ({
+        id,
+        position: (coms[i] ?? [0, 0, 0]) as [number, number, number],
+        speed: speeds[i] ?? 0,
+        fixed: fixedSet.has(id) || id === "__experiment_ground",
+      }));
+      st.setSimTelemetry(
+        buildTelemetry(simulator.elapsedSeconds, st.simExperiment.kind, rows),
+      );
+    };
+    // Lower the document, apply the experiment recipe, spawn the sim. Returns body count.
     const buildSimulator = async (): Promise<number> => {
       simTicks = 0; // a fresh run starts at t=0
-      const { manifest, localCom } = await client.lower(useCadStore.getState().toDocument());
-      const bodies = simBodies(useCadStore.getState().assembly);
+      const state = useCadStore.getState();
+      const { manifest, localCom } = await client.lower(state.toDocument());
+      // Experiment layer: lift, gravity, ground — pure transform of the CAD lower.
+      const prepared = applyExperiment(manifest as SimManifest, state.simExperiment);
+      const bodies = simBodies(state.assembly);
       setInstances(bodies);
-      simulator = new Simulator(JSON.stringify(manifest), localCom, bodies.map((b) => b.id));
-      return simulator.start(simBackend);
+      // Experiment backend override (else last explicit setBackend / default MuJoCo).
+      const expBackend =
+        state.simExperiment.backend === "default" ? undefined : state.simExperiment.backend;
+      simulator = new Simulator(JSON.stringify(prepared), localCom, bodies.map((b) => b.id));
+      const count = await simulator.start(expBackend ?? simBackend);
+      publishTelemetry();
+      return count;
     };
     const loop = (): void => {
       if (!simulator) {
@@ -316,6 +378,7 @@ export function Viewport(): React.JSX.Element {
         simTicks += TICKS_PER_FRAME;
         useCadStore.getState().setSimTicks(simTicks);
         updatePoses();
+        publishTelemetry();
       }
       raf = requestAnimationFrame(loop);
     };
@@ -326,6 +389,7 @@ export function Viewport(): React.JSX.Element {
       simTicks += TICKS_PER_FRAME;
       useCadStore.getState().setSimTicks(simTicks);
       updatePoses();
+      publishTelemetry();
     };
     // Rewind to t=0 (FR-41): rebuild a fresh sim; the running loop picks up the new
     // simulator, and buildSimulator re-seeds the bodies + resets simTicks.
@@ -334,12 +398,14 @@ export function Viewport(): React.JSX.Element {
       await buildSimulator();
       old?.stop();
       updatePoses();
+      publishTelemetry();
     };
     const stopSimulator = (): void => {
       if (raf) cancelAnimationFrame(raf);
       raf = 0;
       simulator?.stop();
       simulator = null;
+      useCadStore.getState().setSimTelemetry(null);
       renderDoc();
     };
     // Deterministic manual control for the strict E2E (no RAF) + backend select.
@@ -390,9 +456,11 @@ export function Viewport(): React.JSX.Element {
         }
         return;
       }
-      // Playback one-shots while simulating (FR-41): step one frame / rewind to t=0.
+      // Playback one-shots while simulating (FR-41): step one frame / rewind to t=0
+      // / restart with a new experiment recipe.
       if (s.simStepReq !== prev.simStepReq) stepOnce();
       if (s.simRewindReq !== prev.simRewindReq && s.simulating) void rewindSimulator();
+      if (s.simRestartReq !== prev.simRestartReq && s.simulating) void rewindSimulator();
       if (s.simulating) return; // the sim owns the poses
       if (
         s.assembly !== prev.assembly ||
@@ -447,6 +515,10 @@ export function Viewport(): React.JSX.Element {
         setMeshBodies(null);
         return;
       }
+      if (doc.editedBodies) {
+        setMeshBodies(doc.editedBodies.map(deserializeMeshBody));
+        return;
+      }
       void importGltf(decodeBase64(doc.glb))
         .then((bodies) => {
           if (!cancelled) setMeshBodies(bodies);
@@ -465,12 +537,35 @@ export function Viewport(): React.JSX.Element {
     };
   }, []);
 
+  // Mirror the open point-cloud document (SPEC-13) into local state so the Scene renders it. Unlike
+  // a mesh document there is no GLB decode — the cloud's buffers ARE the render data — so it flows
+  // straight through; null ⇒ not in cloud mode.
+  useEffect(() => {
+    setPointCloud(useProjectsStore.getState().activePointCloudDoc);
+    return useProjectsStore.subscribe((s, prev) => {
+      if (s.activePointCloudDoc !== prev.activePointCloudDoc) setPointCloud(s.activePointCloudDoc);
+    });
+  }, []);
+
   return (
     <>
-      <Viewport3D mesh={mesh} meshBodies={meshBodies} sketchFrame={sketchFrame} instances={instances} />
-      {/* The in-scene 3D view cube (viewCube.gizmo, top-right) owns click-to-orient;
-          explicit named views + Fit live in the sidebar's Inspect panel (ViewControl
-          + the fit-view action). No floating panel sits over the cube any more. */}
+      <Viewport3D
+        mesh={mesh}
+        meshBodies={meshBodies}
+        pointCloud={pointCloud}
+        sketchFrame={sketchFrame}
+        instances={instances}
+        onMeshBodiesChange={onMeshBodiesChange}
+      />
+      {/* The first-party SVG view cube (viewport/ViewCube, top-right DOM overlay)
+          owns click-to-orient via the setView seam; explicit named views + Fit live
+          in the sidebar's Inspect panel (ViewControl + the fit-view action). No
+          floating panel sits over the cube. */}
+      <ViewCubeOverlay />
+      {/* Wasm-boot / long-rebuild affordance (Review #17): shows immediately for
+          the initial "loading" state and after 300 ms for a "building" rebuild
+          (LoadingOverlay reads the same status this component sets above). */}
+      <LoadingOverlay />
       {measuring && (
         <div
           data-testid="measure-readout"

@@ -47,7 +47,13 @@ export function importStep(oc: Occt, text: string): Solid {
     assertDone(oc, reader.ReadFile(path), "STEP read");
     reader.TransferRoots(progress);
     const shape = reader.OneShape();
-    if (shape.IsNull()) throw new Error("STEP import produced an empty shape");
+    // `OneShape()` is an owned embind handle even when null — free it before the
+    // failure throw (the boolean.ts `finish()` convention) or it leaks in the
+    // long-lived worker. On success the Solid takes ownership instead.
+    if (shape.IsNull()) {
+      shape.delete();
+      throw new Error("STEP import produced an empty shape");
+    }
     return new Solid(oc, shape);
   } finally {
     progress.delete();

@@ -120,19 +120,21 @@ describe("exportForSim — concave part decomposition", () => {
 });
 
 describe("joint lowering", () => {
-  it("lowers revolute→hinge and fixed→fixed, skipping prismatic", () => {
+  it("lowers the full vocabulary — revolute→hinge, prismatic→slider, the rest by name", () => {
     expect(isLowerable("revolute")).toBe(true);
     expect(isLowerable("fixed")).toBe(true);
-    expect(isLowerable("prismatic")).toBe(false);
-    expect(isLowerable("cylindrical")).toBe(false);
+    expect(isLowerable("prismatic")).toBe(true);
+    expect(isLowerable("cylindrical")).toBe(true);
 
     const bindings: JointBinding[] = [
       { joint: makeJoint("revolute", 0, 0, { origin: [0, 0, 0], axis: [0, 0, 1] }), bodyA: "i1", bodyB: "i2" },
       { joint: makeJoint("fixed", 0, 0, { origin: [0, 0, 0], axis: [1, 0, 0] }), bodyA: "i2", bodyB: "i3" },
+      { joint: makeJoint("prismatic", 0, 0, { origin: [0, 0, 0], axis: [1, 0, 0] }), bodyA: "i1", bodyB: "i3" },
     ];
     const constraints = lowerJoints(bindings);
     expect(constraints[0]!.kind).toBe("hinge");
     expect(constraints[0]!.axis).toEqual([0, 0, 1]);
     expect(constraints[1]!.kind).toBe("fixed");
+    expect(constraints[2]!.kind).toBe("slider");
   });
 });

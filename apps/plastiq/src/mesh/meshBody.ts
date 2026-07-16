@@ -17,9 +17,50 @@ export interface MeshBody {
   positions: Float32Array;
   /** Flat triangle indices into `positions` (groups of 3). */
   indices: Uint32Array;
+  /** Optional standalone line segments into `positions` (pairs of vertex indices). */
+  segments?: Uint32Array;
   /** Optional per-vertex normals (flat `[x,y,z,…]`), parallel to `positions`. */
   normals?: Float32Array;
   material?: MeshMaterial;
+}
+
+/** JSON-safe form used when a generated/imported mesh has direct vertex edits. */
+export interface SerializedMeshBody {
+  positions: number[];
+  indices: number[];
+  segments?: number[];
+  normals?: number[];
+  material?: MeshMaterial;
+}
+
+export function cloneMeshBody(body: MeshBody): MeshBody {
+  return {
+    positions: new Float32Array(body.positions),
+    indices: new Uint32Array(body.indices),
+    ...(body.segments ? { segments: new Uint32Array(body.segments) } : {}),
+    ...(body.normals ? { normals: new Float32Array(body.normals) } : {}),
+    ...(body.material ? { material: { ...body.material } } : {}),
+  };
+}
+
+export function serializeMeshBody(body: MeshBody): SerializedMeshBody {
+  return {
+    positions: Array.from(body.positions),
+    indices: Array.from(body.indices),
+    ...(body.segments ? { segments: Array.from(body.segments) } : {}),
+    ...(body.normals ? { normals: Array.from(body.normals) } : {}),
+    ...(body.material ? { material: { ...body.material } } : {}),
+  };
+}
+
+export function deserializeMeshBody(body: SerializedMeshBody): MeshBody {
+  return {
+    positions: new Float32Array(body.positions),
+    indices: new Uint32Array(body.indices),
+    ...(body.segments ? { segments: new Uint32Array(body.segments) } : {}),
+    ...(body.normals ? { normals: new Float32Array(body.normals) } : {}),
+    ...(body.material ? { material: { ...body.material } } : {}),
+  };
 }
 
 /** Triangle count of a mesh body. */

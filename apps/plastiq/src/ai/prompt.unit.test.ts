@@ -36,6 +36,41 @@ describe("R2.4 parametric system prompt", () => {
     expect(p).toMatch(/selector/i);
     expect(p).toMatch(/fillet/i);
   });
+
+  it("teaches that a sketch must precede extrude/cut (the common build failure)", () => {
+    // A cut/extrude with no upstream sketch is the #1 generation error; the prompt
+    // must state the ordering rule explicitly so the model sequences sketch->cut.
+    expect(p).toMatch(/sketch/i);
+    expect(p).toMatch(/preceding "sketch"|before each of them|before the/i);
+    expect(p).toContain("data.profile");
+  });
+
+  it("teaches the box coordinate frame so centred features land in the centre", () => {
+    // The model placed a 'centred' hole at [0,0] (a corner) because it assumed a
+    // centred box; the prompt must state min-corner-at-origin + the centre formula.
+    expect(p).toMatch(/minimum corner at the origin/i);
+    expect(p).toContain("[dx/2, dy/2]");
+  });
+
+  it("teaches the build vocabulary that fixes the common geometry mistakes", () => {
+    // Each phrase guards a real failure observed in generation:
+    expect(p).toMatch(/silently ignored/i);   // features dumped under "assembly" vanish
+    expect(p).toMatch(/round.*sketch|cylinder/i); // a cylinder is sketch-circle+extrude, not a box
+    expect(p).toContain("boolean");           // REMOVE / multi-body tools, not boss pads
+    expect(p).toMatch(/\bsubtract\b/i);
+    expect(p).toContain("convexEdges");        // fillet EVERY edge via the whole-part selector
+    expect(p).toContain("data.edges or data.faces"); // dress-ups: selector only, no explicit edges
+    expect(p).toMatch(/"to":\s*\[60,0\]/);     // a worked closed-loop (L-profile) example
+  });
+
+  it("teaches join-by-default for extrude/revolve (matches rebuild; C11)", () => {
+    expect(p).toMatch(/JOIN BY DEFAULT/i);
+    expect(p).toMatch(/JOIN \(fuse\)|join \(fuse\)|JOIN onto/i);
+    // Must NOT teach replace-body as the default for pads/revolves.
+    expect(p).not.toMatch(/REPLACE the current body/i);
+    expect(p).toMatch(/data\.op is "new"|data\.op "new"/i);
+    expect(p).toMatch(/toFace/i);
+  });
 });
 
 describe("R2.4 creative system prompt", () => {

@@ -16,11 +16,13 @@ import type {
   ChatStreamRequest,
   ContentPart,
   StreamEvent,
+  ToolChoice,
   ToolDef,
 } from "./types.js";
 
 type OAMessage = OpenAI.Chat.Completions.ChatCompletionMessageParam;
 type OATool = OpenAI.Chat.Completions.ChatCompletionTool;
+type OAToolChoice = OpenAI.Chat.Completions.ChatCompletionToolChoiceOption;
 type OAContentPart = OpenAI.Chat.Completions.ChatCompletionContentPart;
 
 /** Map our tool definitions to OpenAI `function` tools. */
@@ -29,6 +31,13 @@ export function toOpenAITools(tools: ToolDef[]): OATool[] {
     type: "function",
     function: { name: t.name, description: t.description, parameters: t.parameters },
   }));
+}
+
+/** Map our tool-choice to OpenAI's `tool_choice`. `undefined` ⇒ omit (auto). */
+export function toOpenAIToolChoice(tc: ToolChoice | undefined): OAToolChoice | undefined {
+  if (tc === undefined || tc === "auto") return undefined;
+  if (tc === "required" || tc === "none") return tc;
+  return { type: "function", function: { name: tc.tool } };
 }
 
 function mapUserContent(content: string | ContentPart[]): string | OAContentPart[] {
@@ -190,6 +199,9 @@ export class OpenAICompatAdapter implements ChatProvider {
           model: this.model,
           messages: toOpenAIMessages(req.system, req.messages),
           tools: req.tools.length > 0 ? toOpenAITools(req.tools) : undefined,
+          ...(req.tools.length > 0 && toOpenAIToolChoice(req.toolChoice) !== undefined
+            ? { tool_choice: toOpenAIToolChoice(req.toolChoice) }
+            : {}),
           stream: true,
           stream_options: { include_usage: true },
         },

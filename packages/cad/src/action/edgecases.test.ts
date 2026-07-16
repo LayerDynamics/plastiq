@@ -140,6 +140,50 @@ describe("boundary-but-valid inputs produce the expected result", () => {
     expect(solid.volume()).toBeLessThan(twoStraight * 1.05);
     solid.delete();
   });
+
+  it("a sweep along a line+arc SpinePath produces a positive-volume solid (G4)", () => {
+    const profile = Sketch.circle(planeXY(), 0, 0, mm(4));
+    // Straight 40 mm along +Z, then a 3-point arc in the YZ plane that continues the path.
+    const solid = sweep(oc, profile, {
+      kind: "path",
+      start: [0, 0, 0],
+      segments: [
+        { kind: "line", to: [0, 0, mm(40)] },
+        { kind: "arc", through: [0, mm(20), mm(60)], to: [0, mm(40), mm(40)] },
+      ],
+    });
+    // Longer than the straight 40 mm segment alone; a pure line of 40 mm would be πr²·40.
+    const lineOnly = Math.PI * mm(4) ** 2 * mm(40);
+    expect(solid.volume()).toBeGreaterThan(lineOnly * 1.2);
+    expect(solid.isValid()).toBe(true);
+    solid.delete();
+  });
+
+  it("sweep with RoundCorner transition still builds a valid solid (G8)", () => {
+    const profile = Sketch.circle(planeXY(), 0, 0, mm(3));
+    const solid = sweep(
+      oc,
+      profile,
+      {
+        kind: "polyline",
+        points: [
+          [0, 0, 0],
+          [0, 0, mm(30)],
+          [mm(30), 0, mm(30)],
+        ],
+      },
+      { transition: "round", mode: "correctedFrenet" },
+    );
+    expect(solid.isValid()).toBe(true);
+    expect(solid.volume()).toBeGreaterThan(0);
+    solid.delete();
+  });
+
+  it("linearPattern rejects a zero-length direction (G11)", () => {
+    const box = makeBox(oc, mm(10), mm(10), mm(10));
+    expect(() => linearPattern(oc, box, [0, 0, 0], mm(20), 3)).toThrow(/zero-length|normalize/i);
+    box.delete();
+  });
 });
 
 describe("persistent refs survive a topology-changing op", () => {

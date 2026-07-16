@@ -2,7 +2,7 @@
 // grouped, context-filtered list the gizmo renders. No store/DOM access, so the
 // "which options for this selection" logic unit-tests in Node.
 
-import { CONTEXT_ACTIONS, type ActionGroup, type ContextAction } from "./config.js";
+import { CONTEXT_ACTIONS, isActionVisible, type ActionGroup, type ContextAction } from "./config.js";
 import type { ContextTarget } from "./contextSelection.js";
 
 export interface MenuItem {
@@ -36,7 +36,7 @@ export function buildMenuSections(
   ctx: ContextTarget,
   catalog: readonly ContextAction[] = CONTEXT_ACTIONS,
 ): MenuSection[] {
-  const visible = catalog.filter((a) => a.visible(ctx));
+  const visible = catalog.filter((a) => isActionVisible(a, ctx));
   const sections: MenuSection[] = [];
   for (const group of GROUP_ORDER) {
     const items: MenuItem[] = visible

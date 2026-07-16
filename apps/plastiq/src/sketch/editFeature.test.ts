@@ -41,6 +41,23 @@ describe("finishSketchFeature", () => {
     expect(cad().features.length).toBe(before); // nothing persisted
   });
 
+  it("feature-driven consumer adds sketch + extrude on Finish (ADR-0014 W4)", () => {
+    sk().enterSketch("XY", 0, undefined, undefined, {
+      type: "extrude",
+      params: { height: 0.02 },
+    });
+    drawRectangle();
+    expect(finishSketchFeature()).toBe(true);
+    expect(sk().active).toBe(false);
+    expect(sk().consumer).toBeNull();
+    const types = cad().features.map((f) => f.type);
+    expect(types).toContain("sketch");
+    expect(types).toContain("extrude");
+    const extrude = cad().features.find((f) => f.type === "extrude");
+    expect(extrude?.params?.height).toBe(0.02);
+    expect(extrude?.deps).toHaveLength(1);
+  });
+
   it("commits a closed profile as a NEW sketch feature and exits sketch mode", () => {
     sk().enterSketch("XY");
     drawRectangle();

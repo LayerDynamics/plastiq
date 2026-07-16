@@ -1,5 +1,6 @@
 // SpinePath — an open 3D path (world coords) used as a sweep spine. The editor
-// builds a polyline path; buildSpineWire turns it into an OCCT wire of segments.
+// builds a polyline or a mixed line/arc path; buildSpineWire turns it into an
+// OCCT wire of edges.
 
 import type { TopoDS_Wire } from "opencascade.js";
 
@@ -15,51 +16,149 @@ type Point3 = readonly [number, number, number];
  */
 const MIN_SEGMENT_LENGTH_M = 1e-7;
 
+/** A straight or 3-point arc segment ending at `to` (world coords). */
+export type SpineSegment =
+  | { readonly kind: "line"; readonly to: Point3 }
+  | { readonly kind: "arc"; readonly through: Point3; readonly to: Point3 };
+
 /** A polyline sweep path through a sequence of world-space points. */
-export interface SpinePath {
+export interface SpinePolyline {
   readonly kind: "polyline";
   readonly points: readonly Point3[];
 }
+
+/**
+ * A mixed line/arc sweep path: starts at `start`, then walks each segment.
+ * Arc segments use the same 3-point construction as sketch arcs
+ * (`GC_MakeArcOfCircle` through start → through → end).
+ */
+export interface SpineSegmented {
+  readonly kind: "path";
+  readonly start: Point3;
+  readonly segments: readonly SpineSegment[];
+}
+
+/** Any spine the sweep builder accepts (polyline or mixed line/arc). */
+export type SpinePath = SpinePolyline | SpineSegmented;
 
 function pnt(oc: Occt, p: Point3) {
   return new oc.gp_Pnt_3(p[0], p[1], p[2]);
 }
 
-/** Build an OPEN OCCT wire (no auto-close) from a polyline spine path. */
+function dist(a: Point3, b: Point3): number {
+  return Math.hypot(b[0] - a[0], b[1] - a[1], b[2] - a[2]);
+}
+
+/** Expand a SpinePath into an ordered chain of consecutive points/arcs for building. */
+function polylinePoints(path: SpinePolyline): readonly Point3[] {
+  return path.points;
+}
+
+/** Build an OPEN OCCT wire (no auto-close) from a polyline or line/arc spine path. */
 export function buildSpineWire(oc: Occt, path: SpinePath): TopoDS_Wire {
-  if (path.points.length < 2) throw new Error("SpinePath: needs at least two points");
+  if (path.kind === "polyline") {
+    return buildPolylineWire(oc, polylinePoints(path));
+  }
+  return buildSegmentedWire(oc, path);
+}
+
+function buildPolylineWire(oc: Occt, points: readonly Point3[]): TopoDS_Wire {
+  if (points.length < 2) throw new Error("SpinePath: needs at least two points");
   const wireMaker = new oc.BRepBuilderAPI_MakeWire_1();
   const trash: Array<{ delete(): void }> = [];
-  const cleanup = (): void => {
+  let segments = 0;
+  // try/finally so a Standard_Failure thrown mid-loop (BRepBuilderAPI_MakeEdge_3
+  // on a pathological segment, or Add_1) still frees the wireMaker and every
+  // temporary made so far — a bare throw would leak them in the worker.
+  try {
+    for (let i = 1; i < points.length; i++) {
+      const p0 = points[i - 1]!;
+      const p1 = points[i]!;
+      // Skip a zero-length segment (coincident consecutive points): OCCT would
+      // build a degenerate edge from it that corrupts the swept solid. A spine of
+      // ENTIRELY coincident points leaves no real segment and is rejected below —
+      // the points.length check alone can't catch a 2-identical-point spine.
+      if (dist(p0, p1) < MIN_SEGMENT_LENGTH_M) continue;
+      const a = pnt(oc, p0);
+      const b = pnt(oc, p1);
+      trash.push(a, b);
+      const em = new oc.BRepBuilderAPI_MakeEdge_3(a, b);
+      trash.push(em);
+      const edge = em.Edge();
+      trash.push(edge);
+      wireMaker.Add_1(edge);
+      segments++;
+    }
+    if (segments === 0) {
+      throw new Error("SpinePath: zero-length spine (all points coincide)");
+    }
+    if (!wireMaker.IsDone()) {
+      throw new Error("SpinePath: failed to build a spine wire");
+    }
+    return wireMaker.Wire();
+  } finally {
     wireMaker.delete();
     for (const t of trash) t.delete();
+  }
+}
+
+function buildSegmentedWire(oc: Occt, path: SpineSegmented): TopoDS_Wire {
+  if (path.segments.length === 0) {
+    throw new Error("SpinePath: needs at least one segment");
+  }
+  const wireMaker = new oc.BRepBuilderAPI_MakeWire_1();
+  const trash: Array<{ delete(): void }> = [];
+  const own = <T extends { delete(): void }>(t: T): T => {
+    trash.push(t);
+    return t;
   };
   let segments = 0;
-  for (let i = 1; i < path.points.length; i++) {
-    const p0 = path.points[i - 1]!;
-    const p1 = path.points[i]!;
-    // Skip a zero-length segment (coincident consecutive points): OCCT would
-    // build a degenerate edge from it that corrupts the swept solid. A spine of
-    // ENTIRELY coincident points leaves no real segment and is rejected below —
-    // the points.length check alone can't catch a 2-identical-point spine.
-    if (Math.hypot(p1[0] - p0[0], p1[1] - p0[1], p1[2] - p0[2]) < MIN_SEGMENT_LENGTH_M) continue;
-    const a = pnt(oc, p0);
-    const b = pnt(oc, p1);
-    const em = new oc.BRepBuilderAPI_MakeEdge_3(a, b);
-    const edge = em.Edge();
-    wireMaker.Add_1(edge);
-    trash.push(a, b, em, edge);
-    segments++;
+  let current = path.start;
+  try {
+    for (const seg of path.segments) {
+      if (seg.kind === "line") {
+        if (dist(current, seg.to) < MIN_SEGMENT_LENGTH_M) {
+          current = seg.to;
+          continue;
+        }
+        const a = own(pnt(oc, current));
+        const b = own(pnt(oc, seg.to));
+        const em = own(new oc.BRepBuilderAPI_MakeEdge_3(a, b));
+        const edge = own(em.Edge());
+        wireMaker.Add_1(edge);
+        segments++;
+        current = seg.to;
+      } else {
+        // 3-point arc: current → through → to (same construction as Sketch.arcTo).
+        if (
+          dist(current, seg.through) < MIN_SEGMENT_LENGTH_M ||
+          dist(seg.through, seg.to) < MIN_SEGMENT_LENGTH_M ||
+          dist(current, seg.to) < MIN_SEGMENT_LENGTH_M
+        ) {
+          throw new Error("SpinePath: arc segment has coincident control points");
+        }
+        const a = own(pnt(oc, current));
+        const m = own(pnt(oc, seg.through));
+        const b = own(pnt(oc, seg.to));
+        const arc = own(new oc.GC_MakeArcOfCircle_4(a, m, b));
+        const trimmed = own(arc.Value());
+        const handle = own(new oc.Handle_Geom_Curve_2(trimmed.get()));
+        const em = own(new oc.BRepBuilderAPI_MakeEdge_24(handle));
+        const edge = own(em.Edge());
+        wireMaker.Add_1(edge);
+        segments++;
+        current = seg.to;
+      }
+    }
+    if (segments === 0) {
+      throw new Error("SpinePath: zero-length spine (all segments degenerate)");
+    }
+    if (!wireMaker.IsDone()) {
+      throw new Error("SpinePath: failed to build a spine wire");
+    }
+    return wireMaker.Wire();
+  } finally {
+    wireMaker.delete();
+    for (let i = trash.length - 1; i >= 0; i--) trash[i]!.delete();
   }
-  if (segments === 0) {
-    cleanup();
-    throw new Error("SpinePath: zero-length spine (all points coincide)");
-  }
-  if (!wireMaker.IsDone()) {
-    cleanup();
-    throw new Error("SpinePath: failed to build a spine wire");
-  }
-  const wire = wireMaker.Wire();
-  cleanup();
-  return wire;
 }

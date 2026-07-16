@@ -13,8 +13,10 @@ Freeform faces are APPROXIMATIONS (unlike the exact planar collapse), so they ar
 twice: a per-region accuracy gate (the fitted surface must stay within a fraction of the
 mesh size of the region's vertices) and, after assembly, a volume check against the mesh —
 if the freeform-enhanced solid drifts, the whole part is rebuilt faceted-only. Closed
-regions with no boundary loop (e.g. a whole organic blob) can't be one filled patch and stay
-faceted — a fundamental limit of single-patch filling, not a fallback bug.
+regions with no boundary loop (e.g. a whole organic blob) can't be one filled patch via
+``MakeFilling``; when ``RECONSTRUCT_NURBS_URL`` is set, ``fitted_shape`` first tries the
+nurbs service **closed** mode (6-patch cube-map solid, T38) and only then falls through to
+the faceted baseline.
 """
 
 from __future__ import annotations
@@ -30,7 +32,6 @@ from OCC.Core.BRepBuilderAPI import (
     BRepBuilderAPI_MakeSolid,
     BRepBuilderAPI_Sewing,
 )
-from OCC.Core.BRepCheck import BRepCheck_Analyzer
 from OCC.Core.BRepGProp import brepgprop
 from OCC.Core.gp import gp_Pnt
 from OCC.Core.GProp import GProp_GProps
@@ -38,6 +39,8 @@ from OCC.Core.TopAbs import TopAbs_SHELL, TopAbs_SOLID
 from OCC.Core.TopExp import TopExp_Explorer
 from OCC.Core.TopoDS import TopoDS_Face, TopoDS_Shape, topods
 
+from . import nurbs_delegate
+from .closure import verify_closure
 from .freeform import face_max_point_error, freeform_region_face
 from .segment import planar_segments
 
@@ -51,6 +54,7 @@ class FittedResult:
     is_solid: bool
     is_valid: bool
     freeform_faces: int = 0
+    free_edges: int = 0  # real naked-edge count (FR-7) — always computed, never assumed
 
 
 def _planar_face_from_loop(points: np.ndarray) -> TopoDS_Face | None:
@@ -106,10 +110,13 @@ def _assemble(
     sew_tol: float,
     use_freeform: bool,
     accuracy_tol: float,
+    errors: list[str] | None = None,
 ) -> FittedResult:
     """Sew planar facet faces + (freeform | faceted) curved regions + leftover triangles into
     a shell/solid. `accuracy_tol` is the max allowed freeform surface error (absolute, metres);
-    a region whose freeform fit exceeds it (or isn't single-loop) is kept faceted."""
+    a region whose freeform fit exceeds it (or isn't single-loop) is kept faceted.
+    `errors` (7-L2): optional collector for crashes swallowed inside the freeform region
+    builder (see `freeform_region_face`) — the region still falls back faceted (FR-8)."""
     verts = np.asarray(mesh.vertices, dtype=float)
     sewing = BRepBuilderAPI_Sewing(sew_tol)
     planar = 0
@@ -135,7 +142,7 @@ def _assemble(
 
     if use_freeform:
         for comp in _curved_components(mesh, leftover):
-            ff = freeform_region_face(mesh, comp) if len(comp) >= 2 else None
+            ff = freeform_region_face(mesh, comp, errors) if len(comp) >= 2 else None
             region_v = mesh.vertices[np.unique(mesh.faces[comp])]
             if ff is not None and face_max_point_error(ff, region_v) <= accuracy_tol:
                 sewing.Add(ff)
@@ -160,11 +167,15 @@ def _assemble(
         exp.Next()
 
     if shells > 0 and solid_maker.IsDone():
-        solid = solid_maker.Solid()
-        if BRepCheck_Analyzer(solid).IsValid():
-            return FittedResult(solid, len(mesh.faces), planar, tri_faces, True, True, freeform)
+        # MakeSolid + IsValid alone do NOT prove closure (FR-7) — verify with the real
+        # free-edge count and a positive enclosed volume (orienting outward first so a
+        # winding artefact isn't misreported as "no volume").
+        solid, rep = verify_closure(solid_maker.Solid(), orient=True)
+        if rep.is_solid:
+            return FittedResult(solid, len(mesh.faces), planar, tri_faces, True, True, freeform, rep.free_edges)
 
-    return FittedResult(sewn, len(mesh.faces), planar, tri_faces, False, BRepCheck_Analyzer(sewn).IsValid(), freeform)
+    _, rep = verify_closure(sewn)
+    return FittedResult(sewn, len(mesh.faces), planar, tri_faces, False, rep.is_valid, freeform, rep.free_edges)
 
 
 def fitted_shape(
@@ -174,16 +185,38 @@ def fitted_shape(
     *,
     freeform: bool = True,
     vol_tol: float = 0.05,
+    errors: list[str] | None = None,
 ) -> FittedResult:
     """Reconstruct planar facets into single trimmed faces + curved single-loop regions into
     freeform faces (faceted fallback otherwise). Freeform is guarded by a per-region accuracy
-    gate and a post-assembly volume check (rebuilds faceted-only if it breaks closure/volume)."""
+    gate and a post-assembly volume check (rebuilds faceted-only if it breaks closure/volume).
+
+    `errors` (7-L2): an optional collector for crashes swallowed inside the freeform region
+    builder (outline crash, or MakeFilling failing on every interior-ladder rung), so the
+    caller can tell a clean freeform decline/gate from an errored-and-fell-back region. The
+    region stays faceted and the result is unchanged either way (FR-8)."""
     mesh, facets, leftover = planar_segments(vertices, faces)
     # Accuracy gate scales with the part: 1% of the mesh bounding-box diagonal.
     diag = float(np.linalg.norm(mesh.bounds[1] - mesh.bounds[0])) if mesh.bounds is not None else 0.0
     accuracy_tol = max(diag * 0.01, 1e-6)
 
-    result = _assemble(mesh, facets, leftover, sew_tol, freeform, accuracy_tol)
+    # T38: whole closed genus-0 organic mesh → nurbs closed mode (when RECONSTRUCT_NURBS_URL set).
+    # Skip when the mesh is mostly planar facets (mechanical parts belong to the local fitted path).
+    if freeform and nurbs_delegate._nurbs_url() and len(facets) == 0 and len(leftover) == len(mesh.faces):
+        closed = nurbs_delegate.delegate_closed_solid(mesh)
+        if closed is not None:
+            return FittedResult(
+                closed.shape,
+                len(mesh.faces),
+                planar_faces=0,
+                triangle_faces=0,
+                is_solid=closed.is_solid,
+                is_valid=closed.is_valid,
+                freeform_faces=closed.n_faces,
+                free_edges=closed.free_edges,
+            )
+
+    result = _assemble(mesh, facets, leftover, sew_tol, freeform, accuracy_tol, errors)
     if not freeform or result.freeform_faces == 0:
         return result
 

@@ -25,6 +25,10 @@ export function makeBody(id: string, material: string): Body {
 /** A node in the assembly tree: an optional placement plus bodies and children. */
 export class Component {
   placement: Placement | null = null;
+  /** Anchored (grounded) — every body in this component AND its descendants
+   * lowers to a static sim body. Composes down the tree like `placement`: a
+   * fixed ancestor grounds the whole subtree. */
+  fixed = false;
   readonly bodies: Body[] = [];
   readonly children: Component[] = [];
   constructor(readonly name: string) {}

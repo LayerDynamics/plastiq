@@ -1,0 +1,11 @@
+# Filled for parity with the sibling services (NFR-4). No Dockerfile ships in v1 — MLX requires
+# Apple-Silicon Metal, so this service is local-only like capture/nerf/nurbs (deploy out of scope).
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+*.egg-info/
+outputs/
+tests/
+*.glb
+*.ply

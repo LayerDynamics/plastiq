@@ -1,9 +1,12 @@
 // Assembly tree (SPEC-5 FR-33): the component instances of this part alongside
 // the feature tree. Each row toggles the instance's fixed/ground state, shows a
 // mate count, and can be removed. Insert adds an occurrence; mates (M4.2) and
-// joints (M4.3) attach between instances.
+// joints (M4.3) attach between instances. The declarative `.assy` bridge (M4.5)
+// surfaces here too: Import loads a JSON document as the live assembly, Export
+// downloads the live assembly back out (actions/registry.ts).
 
 import { useState } from "react";
+import { exportAssyFromStore, importAssyFromDisk } from "../actions/registry.js";
 import { useCadStore } from "../store/store.js";
 import type { AssemblyMate } from "../assembly/model.js";
 import type { JointKind } from "@plastiq/cad";
@@ -367,15 +370,26 @@ export function AssemblyTree(): React.JSX.Element {
     <div data-testid="assembly-tree">
       <div className="mb-1 flex items-center justify-between">
         <h2 className="text-xs font-bold tracking-wide text-[#8aa]">ASSEMBLY</h2>
-        <button
-          type="button"
-          data-testid="insert-instance"
-          onClick={() => addInstance()}
-          className="rounded border border-[#2a3444] px-1.5 py-0.5 text-[11px] text-[#9ab] hover:bg-[#1b2230]"
-          title="Insert a component instance of this part"
-        >
-          + Insert
-        </button>
+        <div className="flex items-center gap-1">
+          <button
+            type="button"
+            data-testid="import-assy"
+            onClick={() => importAssyFromDisk()}
+            className="rounded border border-[#2a3444] px-1.5 py-0.5 text-[11px] text-[#9ab] hover:bg-[#1b2230]"
+            title="Import a declarative .assy assembly document (JSON)"
+          >
+            ⤒ .assy
+          </button>
+          <button
+            type="button"
+            data-testid="insert-instance"
+            onClick={() => addInstance()}
+            className="rounded border border-[#2a3444] px-1.5 py-0.5 text-[11px] text-[#9ab] hover:bg-[#1b2230]"
+            title="Insert a component instance of this part"
+          >
+            + Insert
+          </button>
+        </div>
       </div>
       {instances.length === 0 ? (
         <p className="px-1 text-[11px] opacity-60">No instances. Insert to start an assembly.</p>
@@ -423,12 +437,34 @@ export function AssemblyTree(): React.JSX.Element {
       {instances.length >= 2 && <MatesSection />}
       {instances.length >= 2 && <JointsSection />}
       {instances.length >= 1 && <ExportToSim />}
+      {instances.length >= 1 && <ExportAssy />}
     </div>
   );
 }
 
+/** Download the live assembly as a declarative `.assy` JSON document (M4.5 — the
+ * assemblyToAssy bridge; re-importable via the Import .assy button in the header).
+ * Shown only with ≥1 instance: an empty assembly has nothing to export, matching
+ * the registry action's own gate. */
+function ExportAssy(): React.JSX.Element {
+  return (
+    <button
+      type="button"
+      data-testid="export-assy"
+      onClick={() => exportAssyFromStore()}
+      className="mt-2 w-full rounded border border-[#2a3444] px-2 py-1 text-[11px] text-[#9ab] hover:bg-[#1b2230]"
+      title="Download the assembly as a declarative .assy document (JSON)"
+    >
+      ⤓ Export .assy
+    </button>
+  );
+}
+
 /** Lower the assembly to a SimManifest and download it (M4.5). Each instance
- * becomes a sim body; revolute/fixed joints become constraints. */
+ * becomes a sim body; every joint kind lowers to a constraint (revolute → hinge,
+ * prismatic → slider, cylindrical/ball/planar → themselves, fixed → fixed). The
+ * skipped-joints notice below is only reachable if a future joint kind ships
+ * without a physics-layer equivalent. */
 function ExportToSim(): React.JSX.Element {
   const setStatus = useCadStore((s) => s.setStatus);
   const onExport = async (): Promise<void> => {

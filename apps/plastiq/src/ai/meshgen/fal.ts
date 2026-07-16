@@ -12,7 +12,7 @@
 //   3D:  tripo3d/tripo/v2.5/{text-to-3d,image-to-3d}  → model_mesh.url   (text + image)
 //        fal-ai/meshy/v6-preview/image-to-3d          → model_glb.url    (image)
 //        fal-ai/hunyuan3d/v2                          → model_mesh.url   (image)
-//   Image: fal-ai/flux/schnell                        → images[0].url
+//   Image: fal-ai/flux/{schnell,dev} + fal-ai/fast-sdxl → images[0].url  (text→image, selectable)
 //
 // All fal image inputs accept a base64 data URI, so a generated/attached image is sent
 // inline (no fal-storage upload). Honest constraints (Risk R-1): needs network + a fal
@@ -174,17 +174,29 @@ class FalMeshGenProvider implements MeshGenProvider {
   }
 }
 
+/** Per-model wiring for a fal text→image endpoint (mirrors FalMeshModelSpec). All the
+ * shipped models return images[0].url, so the endpoint id is the only thing that varies. */
+interface FalImageModelSpec {
+  /** Stable provider id for selection/persistence, e.g. "fal:flux-schnell". */
+  id: string;
+  /** Human-facing label for the picker. */
+  label: string;
+  /** fal text→image endpoint (doc-verified against fal's model registry). */
+  modelId: string;
+}
+
 class FalImageGenProvider implements ImageGenProvider {
   readonly id: string;
   readonly label: string;
+  private readonly modelId: string;
 
   constructor(
     private readonly cfg: FalClientConfig,
-    private readonly modelId: string,
-    label: string,
+    spec: FalImageModelSpec,
   ) {
-    this.id = `fal:${modelId}`;
-    this.label = label;
+    this.id = spec.id;
+    this.label = spec.label;
+    this.modelId = spec.modelId;
   }
 
   async generate(prompt: string, signal?: AbortSignal): Promise<GenImage> {
@@ -249,9 +261,29 @@ export function falMeshProviders(cfg: FalClientConfig): MeshGenProvider[] {
   ];
 }
 
-/** The shipped fal image-gen providers (for the text→image stage of text2img3d). */
+/** The shipped fal image-gen providers (the text→image stage of text2img3d), selectable
+ * by id (decision 6). Endpoint ids are doc-verified against fal's text-to-image model
+ * registry (2026-07); like the rest of this file they have NOT been run against the live
+ * API here. All three return images[0].url, so they share FalImageGenProvider unchanged.
+ * Order matters: index 0 (FLUX schnell, the cheapest) is the default when unset. */
 export function falImageProviders(cfg: FalClientConfig): ImageGenProvider[] {
-  return [new FalImageGenProvider(cfg, "fal-ai/flux/schnell", "FLUX schnell (fast)")];
+  return [
+    new FalImageGenProvider(cfg, {
+      id: "fal:flux-schnell",
+      label: "FLUX schnell (fast, cheapest)",
+      modelId: "fal-ai/flux/schnell",
+    }),
+    new FalImageGenProvider(cfg, {
+      id: "fal:flux-dev",
+      label: "FLUX dev (higher quality)",
+      modelId: "fal-ai/flux/dev",
+    }),
+    new FalImageGenProvider(cfg, {
+      id: "fal:fast-sdxl",
+      label: "Fast SDXL (SDXL, low cost)",
+      modelId: "fal-ai/fast-sdxl",
+    }),
+  ];
 }
 
 /** id → provider lookup over a provider list (satisfies createMesh's resolver dep). */

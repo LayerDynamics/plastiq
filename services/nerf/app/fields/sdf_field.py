@@ -21,7 +21,7 @@ import numpy as np
 
 from ..field_components.encodings import FrequencyEncoding
 from ..field_components.field_heads import RGBHead
-from ..field_components.mlp import MLP
+from ..field_components.mlp import MLP, WeightNormLinear
 from ..utils.config import FieldConfig
 
 
@@ -34,6 +34,7 @@ class SDFField(nn.Module):
         softplus_beta: float = 100.0,
         feature_dim: int = 64,
         seed: int = 0,
+        use_weight_norm: bool = False,
     ):
         super().__init__()
         self.softplus_beta = softplus_beta
@@ -43,10 +44,10 @@ class SDFField(nn.Module):
 
         # SDF trunk: raw 3D → (1 signed distance + feature_dim geometry feature), Softplus, geometric init.
         dims = [3] + [hidden] * n_layers + [1 + feature_dim]
-        self.trunk_layers = [nn.Linear(dims[i], dims[i + 1]) for i in range(len(dims) - 1)]
+        linears = [nn.Linear(dims[i], dims[i + 1]) for i in range(len(dims) - 1)]
         rng = np.random.default_rng(seed)
-        last = len(self.trunk_layers) - 1
-        for i, layer in enumerate(self.trunk_layers):
+        last = len(linears) - 1
+        for i, layer in enumerate(linears):
             out_dim, in_dim = layer.weight.shape
             if i == last:
                 # near-zero last layer EXCEPT the SDF row (row 0), which gets the geometric init so
@@ -61,6 +62,14 @@ class SDFField(nn.Module):
                 w = rng.normal(0.0, math.sqrt(2.0 / out_dim), size=(out_dim, in_dim))
                 layer.weight = mx.array(w.astype(np.float32))
                 layer.bias = mx.array(np.zeros(out_dim, dtype=np.float32))
+        # Optional weight-norm on hidden layers (T27). Default off — short VolSDF
+        # training tests regress under WN; enable via use_weight_norm for research runs.
+        if use_weight_norm:
+            self.trunk_layers = [
+                WeightNormLinear(lin) if i < last else lin for i, lin in enumerate(linears)
+            ]
+        else:
+            self.trunk_layers = linears
 
         # Colour head: (geometry feature + encoded view direction) → RGB in [0,1].
         self.dir_enc = FrequencyEncoding(4)

@@ -10,6 +10,7 @@ dependencies:
   - numpy
   - scipy
   - trimesh
+  - rtree          # trimesh containment queries (occupancy labels in app/train_completion.py)
   - scikit-image   # marching_cubes for the SDF zero level-set
   - fastapi
   - uvicorn

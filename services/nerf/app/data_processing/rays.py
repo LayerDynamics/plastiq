@@ -11,6 +11,8 @@ from __future__ import annotations
 import mlx.core as mx
 import numpy as np
 
+from ..utils.math import safe_normalize
+
 
 def generate_rays(c2w, fx: float, fy: float, cx: float, cy: float, height: int, width: int):
     """`c2w` (4×4 camera-to-world) + intrinsics → (origins `(H*W,3)`, unit directions `(H*W,3)`), MLX."""
@@ -18,6 +20,6 @@ def generate_rays(c2w, fx: float, fy: float, cx: float, cy: float, height: int, 
     uu, vv = mx.meshgrid(mx.arange(width).astype(mx.float32), mx.arange(height).astype(mx.float32))
     dirs_cam = mx.stack([(uu - cx) / fx, (vv - cy) / fy, mx.ones_like(uu)], axis=-1).reshape(-1, 3)
     dirs_world = dirs_cam @ c2w[:3, :3].T  # R · d per row
-    dirs_world = dirs_world / mx.sqrt(mx.sum(dirs_world**2, axis=-1, keepdims=True))
+    dirs_world = safe_normalize(dirs_world, axis=-1)  # eps-guarded (the helper that exists for this)
     origins = mx.broadcast_to(c2w[:3, 3][None, :], dirs_world.shape)
     return origins, dirs_world

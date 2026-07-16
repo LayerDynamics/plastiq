@@ -8,6 +8,13 @@ WORKDIR /srv
 COPY environment.yml /srv/environment.yml
 RUN mamba env create -f /srv/environment.yml && mamba clean -afy
 
+# Linux has no default MLX backend: environment.yml's bare `mlx` (kept as the macOS source of
+# truth, where mlx-metal comes with it) ships NO backend on Linux, and app/fidelity.py imports
+# mlx.core at import time — without this, uvicorn cannot start in the container. Install the
+# CPU backend into the env explicitly (same fix as CI's "Install the MLX Linux CPU backend"
+# step in .github/workflows/ci.yml).
+RUN /opt/conda/envs/plastiq-reconstruct/bin/pip install "mlx[cpu]"
+
 # Put the env first on PATH so uvicorn/python resolve to it without `conda activate`.
 ENV PATH=/opt/conda/envs/plastiq-reconstruct/bin:$PATH
 

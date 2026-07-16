@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildConstraints, canApply, hitTest } from "./hit.js";
+import { buildConstraints, canApply, distToSegment, hitTest } from "./hit.js";
 import type { SketchModel } from "./model.js";
 import { toScreen, type View2D } from "./transform2d.js";
 
@@ -128,5 +128,25 @@ describe("canApply / buildConstraints — concentric + tangent (D7)", () => {
     expect(buildConstraints("symmetric", m, ["a", "b", "l"], nextId)).toEqual([
       { id: "k5", kind: "symmetric", a: "a", b: "b", axis: "l" },
     ]);
+  });
+});
+
+describe("distToSegment — degenerate-segment epsilon guard", () => {
+  it("treats a 1e-12 px segment as a point instead of dividing by ~0", () => {
+    const a = { x: 400, y: 300 };
+    const b = { x: 400 + 1e-12, y: 300 }; // length 1e-12 px → len² = 1e-24
+    const d = distToSegment({ x: 402, y: 300 }, a, b);
+    expect(Number.isFinite(d)).toBe(true);
+    expect(d).toBeCloseTo(2, 9); // exactly the distance to the collapsed point
+  });
+
+  it("an exactly-zero-length segment still measures as a point", () => {
+    const a = { x: 100, y: 100 };
+    expect(distToSegment({ x: 103, y: 104 }, a, { ...a })).toBeCloseTo(5, 9);
+  });
+
+  it("a real segment still measures along its span (epsilon not over-eager)", () => {
+    const d = distToSegment({ x: 405, y: 303 }, { x: 400, y: 300 }, { x: 410, y: 300 });
+    expect(d).toBeCloseTo(3, 9);
   });
 });

@@ -45,3 +45,11 @@ class NerfConfig:
     field: FieldConfig = _field(default_factory=FieldConfig)
     sampler: SamplerConfig = _field(default_factory=SamplerConfig)
     train: TrainConfig = _field(default_factory=TrainConfig)
+    # Solid background colour composited behind the ray (RGB in [0,1]); None = no background (empty rays
+    # stay black). Synthetic scenes render the object over a constant white background — matching it here
+    # stops the model explaining the whole image as empty (→ SDF collapse). None preserves real-capture.
+    background: tuple[float, float, float] | None = None
+    # Silhouette-loss weight: when targets carry a 4th (alpha/mask) channel, add mask_weight·(ray
+    # accumulation − alpha)² to pin opacity to the object mask (a plain colour loss can otherwise delete
+    # the surface to explain the object as background). Ignored for RGB-only targets (real captures).
+    mask_weight: float = 0.5

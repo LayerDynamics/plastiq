@@ -16,14 +16,28 @@ import { importGltf } from "../mesh/importGltf.js";
 import type { AiSettings } from "./settings.js";
 import type { ImageGenProvider, MeshGenProvider } from "./meshgen/types.js";
 
+/** Default fal image-gen model for the text→image stage of text2img3d when
+ * settings.imageProviderId is unset — FLUX schnell, the cheapest (matches the prior
+ * hardwired behaviour). The UI (task #45) offers this as the default selection. Must be
+ * an id from falImageProviders. */
+export const DEFAULT_IMAGE_PROVIDER_ID = "fal:flux-schnell";
+
 /** The provider-side slice of CreateMeshDeps, derived from settings. */
 export interface MeshGenProviderDeps {
   resolveMeshProvider: (id: string) => MeshGenProvider | undefined;
-  imageProvider: ImageGenProvider;
+  /** Selected image-gen provider for the text→image stage of text2img3d — resolved from
+   * settings.imageProviderId (the default when unset). Undefined when a persisted id no
+   * longer resolves; createMesh then returns a structured error on the text2img3d branch,
+   * the same lazy behaviour as an unknown 3D-provider id. */
+  imageProvider?: ImageGenProvider;
   fetchGlb: (url: string, signal?: AbortSignal) => Promise<ArrayBuffer>;
   validateGlb: (glb: ArrayBuffer) => Promise<void>;
   /** The fal 3D-gen providers offered (for surfacing the selectable list in the UI). */
   providers: MeshGenProvider[];
+  /** The fal image-gen providers offered (for the selectable image-model list in the UI). */
+  imageProviders: ImageGenProvider[];
+  /** id → image provider lookup (mirrors resolveMeshProvider; the UI validates a pick). */
+  resolveImageProvider: (id: string) => ImageGenProvider | undefined;
 }
 
 /** Build the create_mesh provider deps from the active AI settings (fal key + proxy URL). */
@@ -33,14 +47,27 @@ export function buildMeshGenDeps(settings: AiSettings): MeshGenProviderDeps {
     ...(settings.meshGenBaseURL ? { baseURL: settings.meshGenBaseURL } : {}),
   };
   const providers = falMeshProviders(cfg);
+  const imageProviders = falImageProviders(cfg);
+  // id → image provider lookup, built inline (parallels meshProviderRegistry) so this
+  // module's fal.js import surface stays stable for the shared CommandPalette test mock.
+  const imageById = new Map(imageProviders.map((p) => [p.id, p] as const));
+  const resolveImageProvider = (id: string): ImageGenProvider | undefined => imageById.get(id);
+  // Selected image provider: the persisted id when set (unknown ⇒ undefined ⇒ a structured
+  // error on the text2img3d branch of createMesh, same as an unknown 3D-provider id); else
+  // the default (FLUX schnell — [0] is a safety net should the default id ever move).
+  const imageProvider = settings.imageProviderId
+    ? resolveImageProvider(settings.imageProviderId)
+    : (resolveImageProvider(DEFAULT_IMAGE_PROVIDER_ID) ?? imageProviders[0]!);
   return {
     resolveMeshProvider: meshProviderRegistry(providers),
-    imageProvider: falImageProviders(cfg)[0]!,
+    imageProvider,
     fetchGlb: async (url, signal) => (await fetch(url, signal ? { signal } : {})).arrayBuffer(),
     validateGlb: async (glb) => {
       await importGltf(glb); // throws on no geometry — gate before persisting
     },
     providers,
+    imageProviders,
+    resolveImageProvider,
   };
 }
 

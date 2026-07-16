@@ -8,6 +8,8 @@ from math import pi
 import numpy as np
 import trimesh
 
+import app.csg
+from app.closure import count_free_edges
 from app.csg import reconstruct_csg
 from app.pipeline import reconstruct
 
@@ -57,6 +59,30 @@ def test_auto_pipeline_classifies_box_with_hole_as_csg():
         assert res.report.method == "csg", fixture
         assert res.report.is_solid
         assert res.step.startswith("ISO-10303-21")
+
+
+def test_csg_route_reports_computed_zero_free_edges():
+    # 7-M2 follow-up: free_edges used to be hardcoded 0 here; it is now the real free-bounds
+    # count from the shared FR-7 closure helper — cross-checked against count_free_edges.
+    m = _load("box_with_hole.glb")
+    res = reconstruct_csg(np.asarray(m.vertices), np.asarray(m.faces, dtype=np.int64))
+    assert res is not None and res.is_solid
+    assert res.free_edges == count_free_edges(res.shape) == 0
+
+
+def test_csg_surfaces_swallowed_feature_fit_errors(monkeypatch):
+    # 7-L2: a crash inside the per-region cylinder fit is swallowed for fallback purposes
+    # (the route still returns None) but must be SURFACED via the errors collector so the
+    # pipeline can report "error" instead of a clean "no_match".
+    def boom(vertices, face_normals):
+        raise RuntimeError("feature fit blew up")
+
+    monkeypatch.setattr(app.csg, "fit_cylinder", boom)
+    m = _load("box_with_hole.glb")
+    errors: list[str] = []
+    res = reconstruct_csg(np.asarray(m.vertices), np.asarray(m.faces, dtype=np.int64), errors=errors)
+    assert res is None  # fallback behavior unchanged (FR-8)
+    assert errors and all("feature fit blew up" in e for e in errors)
 
 
 def test_csg_rejects_out_of_scope_parts():

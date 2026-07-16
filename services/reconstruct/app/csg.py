@@ -30,13 +30,12 @@ import numpy as np
 import trimesh
 from OCC.Core.BRepAlgoAPI import BRepAlgoAPI_Cut, BRepAlgoAPI_Fuse
 from OCC.Core.BRepCheck import BRepCheck_Analyzer
-from OCC.Core.BRepGProp import brepgprop
 from OCC.Core.BRepPrimAPI import BRepPrimAPI_MakeBox, BRepPrimAPI_MakeCylinder
 from OCC.Core.gp import gp_Ax2, gp_Dir, gp_Pnt
-from OCC.Core.GProp import GProp_GProps
 from OCC.Core.TopAbs import TopAbs_FACE
 from OCC.Core.TopExp import TopExp_Explorer
 
+from .closure import verify_closure
 from .curved_faces import SolidResult
 from .primitives import CylinderFit, fit_cylinder
 
@@ -187,10 +186,12 @@ def _apply_features(
     fn: np.ndarray,
     mesh_volume: float,
     vol_tol: float,
+    errors: Optional[list[str]] = None,
 ) -> Optional[SolidResult]:
     """Fit each connected curved region to a cylinder, classify hole vs boss by wall-normal
     direction, fuse bosses then cut holes via OCCT booleans, and volume-validate the result.
-    Shared by the axis-aligned and oriented base paths. None if out of scope / mismatched."""
+    Shared by the axis-aligned and oriented base paths. None if out of scope / mismatched.
+    `errors` (7-L2): optional collector for swallowed per-region fit crashes."""
     diag = float(np.linalg.norm(corners.max(axis=0) - corners.min(axis=0)))
     holes: list[CylinderFit] = []
     bosses: list[CylinderFit] = []
@@ -201,7 +202,9 @@ def _apply_features(
         cfn = fn[comp]
         try:
             cyl = fit_cylinder(cverts, cfn)
-        except Exception:  # noqa: BLE001
+        except Exception as e:  # noqa: BLE001 — this region isn't a usable cylinder feature…
+            if errors is not None:  # …but the crash is surfaced, not silently swallowed (7-L2)
+                errors.append(f"cylinder feature fit: {type(e).__name__}: {e}")
             continue
         if cyl.radius <= 0 or cyl.rms / cyl.radius > 0.05:
             continue  # not a clean cylinder
@@ -238,18 +241,26 @@ def _apply_features(
             return None
         solid = op.Shape()
 
-    props = GProp_GProps()
-    brepgprop.VolumeProperties(solid, props)
-    volume = float(props.Mass())
-    if not BRepCheck_Analyzer(solid).IsValid() or volume <= 0 or abs(volume - mesh_volume) / mesh_volume > vol_tol:
+    # FR-7 (shared closure helper): validity + COMPUTED free-edge count + positive volume —
+    # never hardcoded. Boolean results are born outward-oriented, so no re-orientation is
+    # needed (same orient semantics as the revolution / curved-primitive routes).
+    solid, rep = verify_closure(solid)
+    if not rep.is_solid or abs(rep.volume - mesh_volume) / mesh_volume > vol_tol:
         return None
-    return SolidResult(solid, True, True, 0, volume, _faces(solid), primitive="csg")
+    return SolidResult(solid, True, True, rep.free_edges, rep.volume, _faces(solid), primitive="csg")
 
 
-def reconstruct_csg(vertices: np.ndarray, faces: np.ndarray, vol_tol: float = 0.03) -> Optional[SolidResult]:
+def reconstruct_csg(
+    vertices: np.ndarray,
+    faces: np.ndarray,
+    vol_tol: float = 0.03,
+    errors: Optional[list[str]] = None,
+) -> Optional[SolidResult]:
     """Reconstruct a box (axis-aligned OR rotated) with cylindrical holes/bosses as
     box (∪ bosses) (− holes) via OCCT booleans. Returns a watertight, volume-validated solid,
-    or None if out of scope. Tries the world-aligned base first, then an oriented frame."""
+    or None if out of scope. Tries the world-aligned base first, then an oriented frame.
+    `errors` (7-L2): an optional collector for internally-swallowed exceptions, so the caller
+    can tell a clean non-match from a crashed feature fit. Fallback behavior is unchanged."""
     mesh = trimesh.Trimesh(vertices=np.asarray(vertices, dtype=float),
                            faces=np.asarray(faces, dtype=np.int64), process=False)
     if not mesh.is_watertight:
@@ -271,7 +282,7 @@ def reconstruct_csg(vertices: np.ndarray, faces: np.ndarray, vol_tol: float = 0.
                 gp_Pnt(*lo), float(hi[0] - lo[0]), float(hi[1] - lo[1]), float(hi[2] - lo[2])
             ).Shape()
             corners = np.array([[x, y, z] for x in (lo[0], hi[0]) for y in (lo[1], hi[1]) for z in (lo[2], hi[2])])
-            res = _apply_features(mesh, base, corners, ~aligned, fn, mesh_volume, vol_tol)
+            res = _apply_features(mesh, base, corners, ~aligned, fn, mesh_volume, vol_tol, errors)
             if res is not None:
                 return res
 
@@ -294,4 +305,4 @@ def reconstruct_csg(vertices: np.ndarray, faces: np.ndarray, vol_tol: float = 0.
         float(hi[0] - lo[0]), float(hi[1] - lo[1]), float(hi[2] - lo[2]),
     ).Shape()
     corners = _oriented_corners(lo, hi, frame)
-    return _apply_features(mesh, base, corners, curved, fn, mesh_volume, vol_tol)
+    return _apply_features(mesh, base, corners, curved, fn, mesh_volume, vol_tol, errors)

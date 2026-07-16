@@ -8,6 +8,7 @@ import glob
 import os
 
 import numpy as np
+import pytest
 import trimesh
 
 from app.cleanup import clean_mesh
@@ -39,8 +40,9 @@ def test_cylinder_has_one_curved_lateral_region_plus_two_caps():
 def test_domed_box_fixture_has_a_curved_region():
     fx = os.path.join(os.path.dirname(__file__), "fixtures", "domed_box.glb")
     if not os.path.exists(fx):
-        # the fixture set ships these; guard so the suite is robust if one is absent
-        return
+        # the fixture set ships these; a missing fixture must be VISIBLE (a skip in the run
+        # summary), never a silent green pass (8-L)
+        pytest.skip(reason=f"fixture missing: {fx}")
     scene = trimesh.load(fx, force="mesh")
     v, f = _arrays(scene)
     r = recognize(v, f)

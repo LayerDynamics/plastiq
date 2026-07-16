@@ -19,12 +19,16 @@ import Ammo from "ammojs-typed";
 import { AmmoEngine } from "./ammo.js";
 import type { SimManifest } from "../manifest.js";
 import {
+  ballManifest,
   boxHull,
   boxHullXYZ,
+  cylindricalManifest,
   fixedJointManifest,
   freeBodyManifest,
   hingeManifest,
   loopFixedManifest,
+  planarManifest,
+  sliderManifest,
 } from "./fixtures.js";
 
 type AmmoModule = Awaited<ReturnType<typeof Ammo>>;
@@ -70,6 +74,9 @@ const CTORS = [
   "btRigidBody",
   "btHingeConstraint",
   "btFixedConstraint",
+  "btPoint2PointConstraint",
+  "btSliderConstraint",
+  "btGeneric6DofConstraint",
 ] as const;
 
 interface CountingModule {
@@ -120,6 +127,10 @@ describe("AmmoEngine — wasm allocation balance (no per-spawn leak)", () => {
     ["a body with two hull colliders", multiColliderManifest],
     ["a hinge constraint", hingeManifest],
     ["a fixed constraint", fixedJointManifest],
+    ["a slider constraint", sliderManifest],
+    ["a cylindrical constraint", cylindricalManifest],
+    ["a ball constraint", ballManifest],
+    ["a planar constraint", planarManifest],
     ["a fixed loop (3 bodies, 3 constraints)", loopFixedManifest],
   ])("spawn()+dispose() frees every allocation for %s", (_label, build) => {
     const { module, live } = makeCountingModule(real);

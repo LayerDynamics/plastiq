@@ -29,6 +29,12 @@ import {
   type SelectionMode,
   type Workspace,
 } from "./types.js";
+import type { SectionAnalysis } from "../viewport/section.js";
+import {
+  DEFAULT_SIM_EXPERIMENT,
+  type SimExperimentConfig,
+  type SimTelemetry,
+} from "../sim/experiments.js";
 
 /** Persistent refs (SPEC-4 FR-16) for the current build's pickable entities,
  * keyed by the transient pick id — the bridge a dress-up feature stores. */
@@ -67,6 +73,12 @@ export interface CadStore {
    * and applied by the viewport's sim loop (step one frame / rewind to start). */
   simStepReq: number;
   simRewindReq: number;
+  /** Bump to rebuild the sim with the current experiment config (new run). */
+  simRestartReq: number;
+  /** Physics experiment recipe applied when the sim spawns (drop test, etc.). */
+  simExperiment: SimExperimentConfig;
+  /** Live telemetry from the running sim (null when not simulating). */
+  simTelemetry: SimTelemetry | null;
 
   // --- undo/redo history (M2.2): snapshots of the document only ---
   past: HistorySnapshot[];
@@ -95,9 +107,9 @@ export interface CadStore {
   /** Volume + centroid of the current build (mass-properties readout), or null
    *  when the document has no geometry. Density-free; mass needs a material. */
   massProps: { volume: number; com: [number, number, number] } | null;
-  /** Section view (FR-14): a clip plane cutting the model along an axis at
-   *  fraction `t` of its extent, or null when off. Transient view state. */
-  section: { axis: "x" | "y" | "z"; t: number } | null;
+  /** Section analysis (FR-14 / Fusion-style): clip plane cutting the model, or
+   *  null when off. Axis fraction or face-derived plane + optional flip. */
+  section: SectionAnalysis | null;
   /** Exploded-view factor (FR-33): instances are spread from the assembly centroid
    *  by this fraction of their offset (0 = assembled). Transient view state. */
   explodeFactor: number;
@@ -125,6 +137,8 @@ export interface CadStore {
     opts?: { history?: boolean },
   ) => void;
   setFeatureData: (id: FeatureId, data: Record<string, unknown>) => void;
+  /** Rebind feature deps (e.g. sketch binding for extrude/cut/revolve) — C10 Properties. */
+  setFeatureDeps: (id: FeatureId, deps: FeatureId[] | undefined) => void;
   renameFeature: (id: FeatureId, name: string) => void;
   removeFeature: (id: FeatureId) => void;
   toggleSuppress: (id: FeatureId) => void;
@@ -143,8 +157,8 @@ export interface CadStore {
   setSelectionRefs: (refs: SelectionRefs) => void;
   /** Publish the current build's volume + centroid (null when no geometry). */
   setMassProps: (props: { volume: number; com: [number, number, number] } | null) => void;
-  /** Enable/adjust the section clip plane, or disable it (null) (FR-14). */
-  setSection: (section: { axis: "x" | "y" | "z"; t: number } | null) => void;
+  /** Enable/adjust the section analysis plane, or disable it (null) (FR-14). */
+  setSection: (section: SectionAnalysis | null) => void;
   /** Set the exploded-view factor (0 = assembled) (FR-33). */
   setExplodeFactor: (factor: number) => void;
   /** Request an interference check (the viewport computes + publishes it) (FR-33). */
@@ -205,6 +219,12 @@ export interface CadStore {
   requestSimStep: () => void;
   /** Request a rewind to the start (applied by the viewport). */
   requestSimRewind: () => void;
+  /** Request a full sim rebuild with the current experiment config. */
+  requestSimRestart: () => void;
+  /** Patch the physics experiment recipe (drop height, gravity, …). */
+  setSimExperiment: (patch: Partial<SimExperimentConfig>) => void;
+  /** Publish live experiment telemetry (viewport → UI). */
+  setSimTelemetry: (t: SimTelemetry | null) => void;
   /** Re-solve the mate network, writing solved poses back as the new seed. */
   solveAssembly: () => void;
 
@@ -272,40 +292,94 @@ function reconcileRollback(features: EditorFeature[], anchorId: string | null): 
   return idx >= 0 ? idx : null;
 }
 
+/** The store's data fields (everything in CadStore that isn't an action).
+ * Mapped by hand (not TS `Pick` — this module shadows that name with the
+ * selection Pick type). */
+type CadStateKey =
+  | "features"
+  | "params"
+  | "nextSeq"
+  | "assembly"
+  | "mateMode"
+  | "matePicks"
+  | "assemblyResult"
+  | "jointDrive"
+  | "simulating"
+  | "simPaused"
+  | "simTicks"
+  | "simStepReq"
+  | "simRewindReq"
+  | "simRestartReq"
+  | "simExperiment"
+  | "simTelemetry"
+  | "past"
+  | "future"
+  | "selectedFeatureId"
+  | "selMode"
+  | "picks"
+  | "status"
+  | "workspace"
+  | "activeFeatureEdit"
+  | "gizmoMode"
+  | "measuring"
+  | "measureResult"
+  | "errorFeatureId"
+  | "selectionRefs"
+  | "massProps"
+  | "section"
+  | "explodeFactor"
+  | "interferences"
+  | "interferenceReq"
+  | "rollbackIndex"
+  | "rollbackBeforeId";
+type CadState = { [K in CadStateKey]: CadStore[K] };
+
+/** One authority for the store's initial data state: `create` seeds from it and
+ * `reset()` restores it, so the two can never drift apart (Review #23). A fresh
+ * object per call — `assembly`/`selectionRefs` are mutable containers. */
+function initialCadState(): CadState {
+  return {
+    features: [],
+    params: {},
+    nextSeq: 1,
+    assembly: emptyAssembly(),
+    mateMode: false,
+    matePicks: [],
+    assemblyResult: null,
+    jointDrive: {},
+    simulating: false,
+    simPaused: false,
+    simTicks: 0,
+    simStepReq: 0,
+    simRewindReq: 0,
+    simRestartReq: 0,
+    simExperiment: { ...DEFAULT_SIM_EXPERIMENT },
+    simTelemetry: null,
+    past: [],
+    future: [],
+    selectedFeatureId: null,
+    selMode: "face",
+    picks: [],
+    status: "loading",
+    workspace: "design",
+    activeFeatureEdit: null,
+    gizmoMode: "translate",
+    measuring: false,
+    measureResult: null,
+    errorFeatureId: null,
+    selectionRefs: { faces: {}, edges: {} },
+    massProps: null,
+    section: null,
+    explodeFactor: 0,
+    interferences: null,
+    interferenceReq: 0,
+    rollbackIndex: null,
+    rollbackBeforeId: null,
+  };
+}
+
 export const useCadStore = create<CadStore>((set, get) => ({
-  features: [],
-  params: {},
-  nextSeq: 1,
-  assembly: emptyAssembly(),
-  mateMode: false,
-  matePicks: [],
-  assemblyResult: null,
-  jointDrive: {},
-  simulating: false,
-  simPaused: false,
-  simTicks: 0,
-  simStepReq: 0,
-  simRewindReq: 0,
-  past: [],
-  future: [],
-  selectedFeatureId: null,
-  selMode: "face",
-  picks: [],
-  status: "loading",
-  workspace: "design",
-  activeFeatureEdit: null,
-  gizmoMode: "translate",
-  measuring: false,
-  measureResult: null,
-  errorFeatureId: null,
-  selectionRefs: { faces: {}, edges: {} },
-  massProps: null,
-  section: null,
-  explodeFactor: 0,
-  interferences: null,
-  interferenceReq: 0,
-  rollbackIndex: null,
-  rollbackBeforeId: null,
+  ...initialCadState(),
 
   addFeature: (f) => {
     const seq = get().nextSeq;
@@ -332,6 +406,14 @@ export const useCadStore = create<CadStore>((set, get) => ({
     set((s) => ({
       ...pushHistory(s),
       features: s.features.map((f) => (f.id === id ? { ...f, data: { ...f.data, ...data } } : f)),
+    })),
+
+  setFeatureDeps: (id, deps) =>
+    set((s) => ({
+      ...pushHistory(s),
+      features: s.features.map((f) =>
+        f.id === id ? { ...f, deps: deps && deps.length > 0 ? deps : undefined } : f,
+      ),
     })),
 
   renameFeature: (id, name) =>
@@ -420,13 +502,19 @@ export const useCadStore = create<CadStore>((set, get) => ({
     })),
 
   selectFeature: (id) => set({ selectedFeatureId: id }),
-  setSelMode: (mode) => set({ selMode: mode, picks: [] }),
+  setSelMode: (mode) => set({ selMode: mode }),
 
   // The workspace is the single authority over sim mode: entering `simulate`
   // starts a fresh playing run, leaving stops it (mirrors setSimulating). Sketch
   // mode is a contextual env handled in the UI, not a workspace.
   setWorkspace: (w) =>
-    set({ workspace: w, simulating: w === "simulate", simPaused: false, simTicks: 0 }),
+    set({
+      workspace: w,
+      simulating: w === "simulate",
+      simPaused: false,
+      simTicks: 0,
+      simTelemetry: null,
+    }),
 
   setActiveFeatureEdit: (edit) => set({ activeFeatureEdit: edit }),
 
@@ -611,11 +699,20 @@ export const useCadStore = create<CadStore>((set, get) => ({
   setJointDrive: (id, value) => set((st) => ({ jointDrive: { ...st.jointDrive, [id]: value } })),
 
   // Entering or leaving Simulate always starts from a clean, playing, t=0 state.
-  setSimulating: (on) => set({ simulating: on, simPaused: false, simTicks: 0 }),
+  setSimulating: (on) =>
+    set({ simulating: on, simPaused: false, simTicks: 0, simTelemetry: on ? null : null }),
   setSimPaused: (on) => set({ simPaused: on }),
   setSimTicks: (ticks) => set({ simTicks: ticks }),
   requestSimStep: () => set((s) => ({ simStepReq: s.simStepReq + 1 })),
   requestSimRewind: () => set((s) => ({ simRewindReq: s.simRewindReq + 1 })),
+  requestSimRestart: () => set((s) => ({ simRestartReq: s.simRestartReq + 1 })),
+  setSimExperiment: (patch) =>
+    set((s) => ({
+      simExperiment: { ...s.simExperiment, ...patch },
+      // Changing the recipe while simulating rebuilds the world.
+      simRestartReq: s.simulating ? s.simRestartReq + 1 : s.simRestartReq,
+    })),
+  setSimTelemetry: (t) => set({ simTelemetry: t }),
 
   solveAssembly: () => {
     const { assembly } = get();
@@ -719,39 +816,8 @@ export const useCadStore = create<CadStore>((set, get) => ({
     });
   },
 
-  reset: () =>
-    set({
-      features: [],
-      params: {},
-      nextSeq: 1,
-      assembly: emptyAssembly(),
-      mateMode: false,
-      matePicks: [],
-      assemblyResult: null,
-      jointDrive: {},
-      simulating: false,
-      simPaused: false,
-      simTicks: 0,
-      simStepReq: 0,
-      simRewindReq: 0,
-      past: [],
-      future: [],
-      selectedFeatureId: null,
-      picks: [],
-      status: "loading",
-      workspace: "design",
-      activeFeatureEdit: null,
-      gizmoMode: "translate",
-      measuring: false,
-      measureResult: null,
-      errorFeatureId: null,
-      selectionRefs: { faces: {}, edges: {} },
-      massProps: null,
-      section: null,
-      explodeFactor: 0,
-      interferences: null,
-      interferenceReq: 0,
-      rollbackIndex: null,
-      rollbackBeforeId: null,
-    }),
+  // Restore the initial data state, keeping the user's selection-mode choice
+  // (reset() has always merged around selMode; face/edge/vertex is a UI
+  // preference, not document state).
+  reset: () => set({ ...initialCadState(), selMode: get().selMode }),
 }));

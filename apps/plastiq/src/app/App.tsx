@@ -9,15 +9,18 @@ import { WorkspacePanel } from "../ribbon/WorkspacePanel.js";
 import { StatusBar } from "./StatusBar.js";
 import { FeatureTree } from "./FeatureTree.js";
 import { AssemblyTree } from "./AssemblyTree.js";
+import { BomSection } from "./BomSection.js";
 import { PropertiesPanel } from "./PropertiesPanel.js";
 import { GenerationPanel } from "../ai/GenerationPanel.js";
 import { CommandPalette } from "../ai/CommandPalette.js";
-import { Viewport } from "../three/index.js";
+import { Viewport, CanvasDropZone } from "../three/index.js";
 import { Sketcher } from "../sketch/Sketcher.js";
 import { Welcome } from "./Welcome.js";
+import { SimExperimentPanel } from "../sim/SimExperimentPanel.js";
 import { useSketchStore } from "../sketch/sketchStore.js";
 import { useCadStore } from "../store/store.js";
 import { useProjectsStore } from "../persistence/projectsStore.js";
+import { handleSaveShortcut } from "./saveShortcut.js";
 import type { SelectionMode } from "../store/types.js";
 
 /** Crash-recovery prompt (FR-40): shown when a dirty autosave snapshot from a
@@ -82,6 +85,9 @@ function useEditorShortcuts(onCommandPalette: () => void): void {
         paletteRef.current();
         return;
       }
+      // ⌘/Ctrl-S (Review #17): save / save-as, universal like ⌘K (fires even while
+      // typing — preventDefault keeps the browser's own save dialog closed there too).
+      if (handleSaveShortcut(e)) return;
       const store = useCadStore.getState();
       // While a sketch is open it owns its own undo/redo, Esc and number keys —
       // these global viewport shortcuts must NOT also fire (else Esc double-acts,
@@ -219,6 +225,8 @@ export function App(): React.JSX.Element {
               </div>
               <div className="my-3 border-t border-[#222a36]" />
               <AssemblyTree />
+              {/* Rolled-up BOM for the live assembly (M4) — hidden with no instances. */}
+              <BomSection />
             </aside>
             <Splitter onResize={(dx) => setLeftW((w) => clamp(w + dx, 160, 520))} />
           </>
@@ -236,8 +244,12 @@ export function App(): React.JSX.Element {
         )}
 
         <main id="viewport-root" aria-label="3D viewport" className="relative min-h-0 min-w-0 flex-1">
-          <Viewport />
-          <Sketcher />
+          {/* Files dropped on the canvas route by type (SPEC-13): photos → photogrammetry cloud,
+              .ply/.xyz/.json → a point cloud — both open as a project on this same canvas. */}
+          <CanvasDropZone>
+            <Viewport />
+            <Sketcher />
+          </CanvasDropZone>
         </main>
 
         {rightOpen ? (
@@ -255,6 +267,8 @@ export function App(): React.JSX.Element {
               <div id="properties-root">
                 <PropertiesPanel />
               </div>
+              <div className="my-3 border-t border-[#222a36]" />
+              <SimExperimentPanel />
             </aside>
           </>
         ) : (

@@ -30,11 +30,12 @@ describe("SectionControl — unit (renders from state)", () => {
   });
 
   it("shows the axis + offset reflecting the active section", () => {
-    useCadStore.setState({ section: { axis: "y", t: 0.3 } });
+    useCadStore.setState({ section: { kind: "axis", axis: "y", t: 0.3, flip: false } });
     render(<SectionControl />);
     expect(screen.getByTestId("section-toggle").getAttribute("aria-pressed")).toBe("true");
     expect((screen.getByTestId("section-axis") as HTMLSelectElement).value).toBe("y");
     expect((screen.getByTestId("section-offset") as HTMLInputElement).value).toBe("0.3");
+    expect(screen.getByTestId("section-flip")).toBeTruthy();
   });
 });
 
@@ -42,15 +43,29 @@ describe("SectionControl — integration (drives the store)", () => {
   it("toggling on then off updates the real store's section", () => {
     render(<SectionControl />);
     fireEvent.click(screen.getByTestId("section-toggle"));
-    expect(useCadStore.getState().section).toEqual({ axis: "x", t: 0.5 });
+    expect(useCadStore.getState().section).toEqual({
+      kind: "axis",
+      axis: "x",
+      t: 0.5,
+      flip: false,
+    });
     fireEvent.click(screen.getByTestId("section-toggle"));
     expect(useCadStore.getState().section).toBeNull();
   });
 
   it("changing the axis select updates the store's section axis", () => {
-    useCadStore.setState({ section: { axis: "x", t: 0.5 } });
+    useCadStore.setState({ section: { kind: "axis", axis: "x", t: 0.5, flip: false } });
     render(<SectionControl />);
     fireEvent.change(screen.getByTestId("section-axis"), { target: { value: "z" } });
-    expect(useCadStore.getState().section).toEqual({ axis: "z", t: 0.5 });
+    expect(useCadStore.getState().section).toMatchObject({ axis: "z", t: 0.5 });
+  });
+
+  it("flip toggles the kept half-space (Fusion flip)", () => {
+    useCadStore.setState({ section: { kind: "axis", axis: "x", t: 0.5, flip: false } });
+    render(<SectionControl />);
+    fireEvent.click(screen.getByTestId("section-flip"));
+    expect(useCadStore.getState().section).toMatchObject({ flip: true });
+    fireEvent.click(screen.getByTestId("section-flip"));
+    expect(useCadStore.getState().section).toMatchObject({ flip: false });
   });
 });

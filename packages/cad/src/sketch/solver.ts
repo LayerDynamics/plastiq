@@ -68,7 +68,13 @@ export function initSketchSolver(opts?: { wasmUrl?: string }): Promise<void> {
         opts?.wasmUrl ? { locateFile: () => opts.wasmUrl as string } : undefined,
       );
       wrapper = new GcsWrapper(new mod.GcsSystem());
-    })();
+    })().catch((err: unknown) => {
+      // Don't poison the memo: a transient wasm-load failure must not make every
+      // future call re-await the same rejected promise — clear it so a later
+      // call can retry. Same pattern as lower/decompose.ts initDecomposer.
+      initPromise = null;
+      throw err;
+    });
   }
   return initPromise;
 }

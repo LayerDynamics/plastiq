@@ -38,6 +38,37 @@ describe("buildMeshGenDeps", () => {
   });
 });
 
+describe("buildMeshGenDeps — selectable image-gen provider (decision 6)", () => {
+  it("defaults to FLUX schnell (the cheapest) when imageProviderId is unset", () => {
+    expect(buildMeshGenDeps(settings()).imageProvider?.id).toBe("fal:flux-schnell");
+  });
+
+  it("resolves every shipped image model by id (via resolveImageProvider and the selection)", () => {
+    const deps = buildMeshGenDeps(settings());
+    for (const id of ["fal:flux-schnell", "fal:flux-dev", "fal:fast-sdxl"]) {
+      expect(deps.resolveImageProvider(id)?.id).toBe(id);
+      expect(buildMeshGenDeps(settings({ imageProviderId: id })).imageProvider?.id).toBe(id);
+    }
+  });
+
+  it("selects the persisted image model, not the hardwired default", () => {
+    const deps = buildMeshGenDeps(settings({ imageProviderId: "fal:flux-dev" }));
+    expect(deps.imageProvider?.id).toBe("fal:flux-dev");
+  });
+
+  it("an unknown persisted id resolves to no provider (createMesh then errors — the 3D path)", () => {
+    const deps = buildMeshGenDeps(settings({ imageProviderId: "fal:does-not-exist" }));
+    expect(deps.imageProvider).toBeUndefined();
+    expect(deps.resolveImageProvider("fal:does-not-exist")).toBeUndefined();
+  });
+
+  it("exposes the selectable image-provider list for the UI (task #45 seam)", () => {
+    const ids = buildMeshGenDeps(settings()).imageProviders.map((p) => p.id);
+    expect(ids).toContain("fal:flux-dev");
+    expect(ids.length).toBeGreaterThan(1);
+  });
+});
+
 describe("meshGenConfigured", () => {
   it("is false with no fal key and no proxy (honest: the path can't authenticate)", () => {
     expect(meshGenConfigured(settings())).toBe(false);

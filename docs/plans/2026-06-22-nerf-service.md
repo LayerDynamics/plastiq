@@ -57,68 +57,68 @@ GLB→MeshDoc patterns the **capture service** (`services/capture/`, M7/M8) esta
 
 # Milestones (MLX core first, then service, then app wiring)
 
-## N0 — Scaffold + ADRs + SPEC + utils
-- [ ] **N0.1** Create the tree: `services/nerf/app/{data_processing,engine,exporters,field_components,
+## N0 — Scaffold + ADRs + SPEC + utils ✅
+- [x] **N0.1** Create the tree: `services/nerf/app/{data_processing,engine,exporters,field_components,
       fields,generators,model_components,models,utils}/__init__.py`, `tests/`, `.dockerignore`,
       `.gitignore` (mirror capture: `__pycache__/`, `.pytest_cache/`), `environment.yml` (conda-forge +
       `pip: mlx`; numpy/trimesh/scikit-image/fastapi/uvicorn/pydantic/httpx/pytest — mirror capture),
       `pyproject.toml`, `README.md`.
-- [ ] **N0.2 — ADR + SPEC.** `docs/adr/0011-nerf-service-architecture.md` (modular MLX NeRF; nerfstudio
+- [x] **N0.2 — ADR + SPEC.** `docs/adr/0011-nerf-service-architecture.md` (modular MLX NeRF; nerfstudio
       Apache-2.0 idea-only; SfM deferred to COLMAP; both models). `docs/specs/SPEC-11-nerf-service.md`.
-- [ ] **N0.3 — TDD utils.** `app/utils/`: `seeding.py` (deterministic MLX key derivation), `config.py`
+- [x] **N0.3 — TDD utils.** `app/utils/`: `seeding.py` (deterministic MLX key derivation), `config.py`
       (typed dataclass configs), `math.py` (safe-norm, etc.). Tests: same seed → identical keys/draws.
 
-## N1 — field_components (MLX nn building blocks)
-- [ ] **N1.1 — TDD FrequencyEncoding** (`field_components/encodings.py`): sinusoidal positional encoding
+## N1 — field_components (MLX nn building blocks) ✅
+- [x] **N1.1 — TDD FrequencyEncoding** (`field_components/encodings.py`): sinusoidal positional encoding
       `[x, sin(2^k x), cos(2^k x)…]`. Test: output dim = in·(1+2L); known values for L=1.
-- [ ] **N1.2 — TDD MLP + heads** (`mlp.py`, `field_heads.py`, `activations.py`): an MLX `nn.Module` MLP;
+- [x] **N1.2 — TDD MLP + heads** (`mlp.py`, `field_heads.py`, `activations.py`): an MLX `nn.Module` MLP;
       density head (softplus/relu → ≥0) + RGB head (sigmoid → [0,1]). Tests: forward shapes; density ≥ 0;
       rgb ∈ [0,1].
 
-## N2 — generators (ray samplers)
-- [ ] **N2.1 — TDD UniformSampler** (`generators/ray_samplers.py`): N samples along each ray between
+## N2 — generators (ray samplers) ✅
+- [x] **N2.1 — TDD UniformSampler** (`generators/ray_samplers.py`): N samples along each ray between
       near/far. Test: monotonically increasing t, within [near,far], correct shape.
-- [ ] **N2.2 — TDD PDFSampler** (importance/hierarchical): resample from a weight distribution. Test:
+- [x] **N2.2 — TDD PDFSampler** (importance/hierarchical): resample from a weight distribution. Test:
       samples concentrate where weights are high (deterministic key).
 
-## N3 — model_components (renderers + losses)
-- [ ] **N3.1 — TDD volumetric renderer** (`model_components/renderers.py`): densities+colors+deltas →
+## N3 — model_components (renderers + losses) ✅
+- [x] **N3.1 — TDD volumetric renderer** (`model_components/renderers.py`): densities+colors+deltas →
       RGB / accumulation / depth via the standard alpha-compositing. Test: a single opaque sample → its
       colour; empty densities → background; accumulation ∈ [0,1].
-- [ ] **N3.2 — TDD losses** (`losses.py`): MSE photometric; eikonal (`‖∇f‖→1`, for SDF). Test: zero loss
+- [x] **N3.2 — TDD losses** (`losses.py`): MSE photometric; eikonal (`‖∇f‖→1`, for SDF). Test: zero loss
       on equal images; eikonal zero on a unit-gradient field.
 
-## N4 — fields (the radiance field)
-- [ ] **N4.1 — TDD NeRFField** (`fields/vanilla_nerf_field.py`): encode position+direction → MLP →
+## N4 — fields (the radiance field) ✅
+- [x] **N4.1 — TDD NeRFField** (`fields/vanilla_nerf_field.py`): encode position+direction → MLP →
       (density, rgb), composed from N1. Test: forward shapes; density ≥ 0; deterministic.
 
-## N5 — data_processing (pose/ray ingestion + synthetic fixture)
-- [ ] **N5.1 — TDD transforms.json parser** (`data_processing/dataparser.py`): parse a nerfstudio/Blender
+## N5 — data_processing (pose/ray ingestion + synthetic fixture) ✅
+- [x] **N5.1 — TDD transforms.json parser** (`data_processing/dataparser.py`): parse a nerfstudio/Blender
       `transforms.json` → typed `DataparserOutputs` (intrinsics + per-image c2w poses + image paths).
       Test: a fixture transforms.json parses to the right cameras/poses.
-- [ ] **N5.2 — TDD ray generation** (`data_processing/rays.py`, reusing capture `geometry.py` MLX pinhole):
+- [x] **N5.2 — TDD ray generation** (`data_processing/rays.py`, reusing capture `geometry.py` MLX pinhole):
       per-pixel ray origins+directions in world space from a camera pose. Test: centre pixel ray points
       down the camera axis; corner rays diverge correctly.
-- [ ] **N5.3 — Synthetic scene fixture** (`tests/synthetic.py`): render a known textured sphere/cube from
+- [x] **N5.3 — Synthetic scene fixture** (`tests/synthetic.py`): render a known textured sphere/cube from
       N analytic camera poses → (images, poses, intrinsics). Pure geometry (analytic ray–sphere/box hit +
       shading), no training — the reproducible ground truth the training tests fit. Test: renders are
       non-trivial + deterministic.
 
-## N6 — engine + density NeRF model + TRAIN ON SYNTHETIC (real MLX training, M4 Max) ⭐
-- [ ] **N6.1 — TDD Trainer** (`engine/trainer.py`): MLX `optim.Adam`, `nn.value_and_grad`, ray-batch
+## N6 — engine + density NeRF model + TRAIN ON SYNTHETIC (real MLX training, M4 Max) ⭐ ✅
+- [x] **N6.1 — TDD Trainer** (`engine/trainer.py`): MLX `optim.Adam`, `nn.value_and_grad`, ray-batch
       training loop, deterministic. Test: one step decreases the loss on a fixed batch.
-- [ ] **N6.2 — TDD VanillaNeRF model** (`models/vanilla_nerf.py`): ties field (N4) + sampler (N2) +
+- [x] **N6.2 — TDD VanillaNeRF model** (`models/vanilla_nerf.py`): ties field (N4) + sampler (N2) +
       renderer (N3) + MSE loss → a render-rays-and-composite forward. Test: rendered shape matches; a
       forward runs.
-- [ ] **N6.3 — TDD train-on-synthetic (the headline).** Train the NeRF on the N5.3 synthetic scene for a
+- [x] **N6.3 — TDD train-on-synthetic (the headline).** Train the NeRF on the N5.3 synthetic scene for a
       few hundred iters → assert **PSNR(rendered, gt) improves by a real margin** vs init, on held-out
       pixels; deterministic by seed. **Real MLX training on the M4 Max** — no stub.
 
-## N7 — hash-grid encoding (instant-NGP upgrade)
-- [ ] **N7.1 — TDD multiresolution hash encoding** (`field_components/encodings.py::HashGridEncoding`):
+## N7 — hash-grid encoding (instant-NGP upgrade) ✅
+- [x] **N7.1 — TDD multiresolution hash encoding** (`field_components/encodings.py::HashGridEncoding`):
       MLX hashing + trilinear interp over L resolution levels. Test: output shape = L·F; deterministic;
       distinct inputs → distinct features.
-- [ ] **N7.2 — TDD NeRF-with-hashgrid converges.** Swap the encoding into the NeRF; train on the synthetic
+- [x] **N7.2 — TDD NeRF-with-hashgrid converges.** Swap the encoding into the NeRF; train on the synthetic
       scene → reaches a target PSNR in fewer iters than frequency (or at least trains). Real training.
 
 ## N8 — SDF / NeuS surface model ✅

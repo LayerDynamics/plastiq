@@ -1,0 +1,8 @@
+# Harness working state — never committed.
+runs/
+results/
+*.zip
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+*.egg-info/

@@ -28,16 +28,50 @@ class UniformSampler:
         return positions, t
 
 
+class ProposalSampler:
+    """Two-stage sampling schedule (T28 / ComparativeDeepDive §4.2 #3).
+
+    Coarse uniform samples act as a density *proposal*; a fine PDF pass
+    (`PDFSampler`) concentrates samples near the surface. This mirrors
+    nerfstudio's ProposalNetworkSampler shape without a separate density MLP —
+    the coarse field evaluation supplies the proposal weights (see
+    `BaseSurfaceModel._render`).
+    """
+
+    def __init__(self, n_coarse: int, n_fine: int, near: float, far: float, jitter: bool = True):
+        self.coarse = UniformSampler(n_coarse, near, far, jitter=jitter)
+        self.fine = PDFSampler(n_fine)
+        self.n_coarse = n_coarse
+        self.n_fine = n_fine
+
+    def sample_coarse(self, origins: mx.array, directions: mx.array, key: mx.array | None = None):
+        return self.coarse(origins, directions, key=key)
+
+    def sample_fine(self, t: mx.array, weights: mx.array, key: mx.array) -> mx.array:
+        return self.fine(t, weights, key)
+
+
 class PDFSampler:
     def __init__(self, n_samples: int):
         self.n_samples = n_samples
 
     def __call__(self, t: mx.array, weights: mx.array, key: mx.array) -> mx.array:
-        """Inverse-CDF resample `n_samples` t-values from the per-ray `weights` over bins `t` `(R,S)`.
-        MLX has no `searchsorted`, so the bin index is `count(cdf < u)`. Returns `(R, n_samples)`."""
-        s = weights.shape[-1]
+        """Inverse-CDF importance resampling (NeRF `sample_pdf`) over bins `t`/`weights` `(R,S)` →
+        `(R, n_samples)`. The bin is found from the CDF (MLX has no `searchsorted`, so it is
+        `count(cdf ≤ u)`), then the sample is **linearly interpolated WITHIN that bin** — so fine
+        samples land between the coarse `t`'s (concentrated where weight is high) instead of snapping
+        to coarse edges (which would just re-query existing points)."""
+        r, s = weights.shape
         pdf = weights / (mx.sum(weights, axis=-1, keepdims=True) + 1e-8)
-        cdf = mx.cumsum(pdf, axis=-1)  # (R, S)
-        u = mx.random.uniform(shape=(weights.shape[0], self.n_samples), key=key)  # (R, N)
-        idx = mx.clip(mx.sum((u[..., None] > cdf[:, None, :]).astype(mx.int32), axis=-1), 0, s - 1)  # (R, N)
-        return mx.take_along_axis(t, idx, axis=-1)
+        cdf = mx.cumsum(pdf, axis=-1)  # (R, S), cdf[...,-1] ≈ 1
+        cdf = mx.concatenate([mx.zeros((r, 1)), cdf], axis=-1)  # (R, S+1), lower edge 0
+        u = mx.random.uniform(shape=(r, self.n_samples), key=key)  # (R, N)
+        # interval index i ∈ [0, S-1]: (number of CDF edges ≤ u) − 1, clamped
+        i = mx.clip(mx.sum((cdf[:, None, :] <= u[:, :, None]).astype(mx.int32), axis=-1) - 1, 0, s - 1)
+        cdf_lo = mx.take_along_axis(cdf, i, axis=-1)  # (R, N)
+        cdf_hi = mx.take_along_axis(cdf, i + 1, axis=-1)
+        denom = cdf_hi - cdf_lo
+        frac = (u - cdf_lo) / mx.where(denom < 1e-8, mx.ones_like(denom), denom)  # bin-local fraction
+        t_lo = mx.take_along_axis(t, i, axis=-1)
+        t_hi = mx.take_along_axis(t, mx.clip(i + 1, 0, s - 1), axis=-1)
+        return t_lo + frac * (t_hi - t_lo)

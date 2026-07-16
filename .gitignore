@@ -18,6 +18,17 @@ playwright-report/
 test-results/
 *.tsbuildinfo
 
-# NOTE: packages/sim/src/pkg/ is NOT ignored — the @plastiq/sim WASM is a
-# frozen prebuilt artifact and MUST be committed (it is not rebuilt in this repo).
+# NOTE: packages/sim/vendor/mujoco/ is NOT ignored — the @plastiq/sim WASM is a
+# vendored prebuilt artifact and MUST be committed (it is not rebuilt in this repo).
 ref/
+benchmark/cadgenbench
+
+# hf-mount mountpoint for the CADGenBench data bucket (LayerDynamics/cadgenbench-data-bucket)
+local/
+.pnpm-store
+.pytest_cache
+.ruff_cache
+
+# carabiner (lore framework) local tooling state — SQLite DBs, chat/memory stores, traces
+.carabiner/
+Grok.md

@@ -94,12 +94,14 @@ export class Simulator {
     return this.ticksAdvanced / SIM_TICK_RATE_HZ;
   }
 
-  /** Current render poses for each spawned body (COM-frame → group origin). */
+  /** Current render poses for each CAD instance body (COM-frame → group origin).
+   * Experiment ground (if any) is a later body index and is not rendered as a part. */
   poses(): BodyRenderPose[] {
     const sim = this.sim;
     if (!sim) return [];
     const out: BodyRenderPose[] = [];
-    for (let i = 0; i < sim.bodyCount; i++) {
+    const n = Math.min(sim.bodyCount, this.instanceIds.length);
+    for (let i = 0; i < n; i++) {
       const id = this.instanceIds[i];
       if (id === undefined) continue;
       const p = sim.bodyPosition(i) as Vec3;
@@ -107,6 +109,39 @@ export class Simulator {
       out.push({ id, ...bodyPoseToGroup(p, o, this.localCom) });
     }
     return out;
+  }
+
+  /**
+   * Live body speeds from a full-state snapshot (m/s), all spawned bodies
+   * including experiment ground. Used for experiment telemetry.
+   */
+  speeds(): number[] {
+    const sim = this.sim;
+    if (!sim) return [];
+    const snap = sim.snapshot();
+    return snap.bodies.map((b) => {
+      const v = b.linearVelocity;
+      return Math.hypot(v[0], v[1], v[2]);
+    });
+  }
+
+  /** World COM positions (raw sim). All bodies including ground. */
+  comPositions(): Vec3[] {
+    const sim = this.sim;
+    if (!sim) return [];
+    const out: Vec3[] = [];
+    for (let i = 0; i < sim.bodyCount; i++) out.push(sim.bodyPosition(i) as Vec3);
+    return out;
+  }
+
+  /** Spawned body ids in index order (CAD instances + optional ground). */
+  bodyIds(): string[] {
+    const sim = this.sim;
+    if (!sim) return [];
+    const ids = [...this.instanceIds];
+    // Experiment ground is appended after CAD bodies by applyExperiment.
+    if (sim.bodyCount > ids.length) ids.push("__experiment_ground");
+    return ids.slice(0, sim.bodyCount);
   }
 
   /** Drop the sim (return-to-edit re-derives the render from the document). */

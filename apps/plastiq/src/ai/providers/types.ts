@@ -57,18 +57,30 @@ export type StreamEvent =
   | { type: "done"; finishReason: "stop" | "tool-calls" | "length" | "error" }
   | { type: "error"; error: string };
 
+/** How the model is allowed/forced to use tools this turn. `{ tool }` forces that
+ * specific function; `"required"` forces *some* tool; `"auto"` (default) lets the
+ * model choose; `"none"` forbids tools. Used to push weak models off prose-only
+ * answers onto `build_part` (FR-5b / CB6.2). */
+export type ToolChoice = "auto" | "required" | "none" | { tool: string };
+
 export interface ChatStreamRequest {
   /** System prompt (the parametric/creative prompt from R2.4). */
   system: string;
   messages: ChatMessage[];
   tools: ToolDef[];
+  /** Optional per-turn tool-use constraint (default: provider's auto). */
+  toolChoice?: ToolChoice;
   signal?: AbortSignal;
 }
 
 /** A streaming, tool-calling chat backend. Implementations: AnthropicAdapter (R1.3),
- * OpenAICompatAdapter (R1.2). `supportsVision`/`supportsTools` gate the UI (FR-10b/FR-5b). */
+ * OpenAICompatAdapter (R1.2), LlamaMlxAdapter (llama-mlx-server, reuses the OpenAI
+ * transport). `supportsVision`/`supportsTools` gate the UI (FR-10b/FR-5b). */
 export interface ChatProvider {
-  readonly id: "anthropic" | "openai-compatible";
+  /** Which adapter produced this provider: `anthropic` (AnthropicAdapter),
+   * `openai-compatible` (OpenAICompatAdapter — OpenAI/Ollama/proxy), or
+   * `llama-mlx` (LlamaMlxAdapter — llama-mlx-server on the OpenAI transport). */
+  readonly id: "anthropic" | "openai-compatible" | "llama-mlx";
   readonly model: string;
   readonly supportsVision: boolean;
   readonly supportsTools: boolean;

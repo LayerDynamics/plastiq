@@ -261,16 +261,16 @@ describe.each(BACKENDS)("physics backend: %s", (backend) => {
     sim.dispose();
   });
 
-  it("warns (does not silently drop) a constraint that references a missing body", async () => {
+  it("REJECTS (does not warn-and-drop) a constraint that references a missing body", async () => {
     await initSim({ backend });
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const sim = new PredictionSim(60, 1n);
 
-    // The bodies still spawn; the dangling hinge is dropped WITH a warning.
-    expect(sim.spawnManifest(JSON.stringify(badConstraintManifest()))).toBe(2);
-    expect(warn).toHaveBeenCalledTimes(1);
-    expect(warn.mock.calls[0]![0]).toContain("nonexistent");
-    expect(warn.mock.calls[0]![0]).toContain(backend);
+    // Dangling refs are a validation failure at parse time — spawnManifest throws
+    // before any backend sees the manifest (a dropped joint would silently
+    // simulate a different mechanism).
+    expect(() => sim.spawnManifest(JSON.stringify(badConstraintManifest()))).toThrow(
+      /SimManifest: hinge constraint references missing body 'nonexistent'/,
+    );
     sim.dispose();
   });
 

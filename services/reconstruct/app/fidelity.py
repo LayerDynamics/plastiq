@@ -140,21 +140,35 @@ def sample_mesh_surface(mesh: trimesh.Trimesh, n_points: int = DEFAULT_N_POINTS,
     return _sample_triangles(tris, areas, n_points, seed)
 
 
-def chamfer_distance(p, q, *, bidirectional: bool = True) -> float:
+def chamfer_distance(p, q, *, bidirectional: bool = True, block: int = 2048) -> float:
     """Bidirectional Chamfer (StepForge Eq. 1) in MLX: mean squared nearest-neighbour distance each
-    way, via a brute-force pairwise distance matrix (no kd-tree).
+    way, brute-force (no kd-tree).
 
-    CD(P,Q) = mean_{p∈P} min_{q∈Q} ||p-q||² + mean_{q∈Q} min_{p∈P} ||p-q||²."""
+    CD(P,Q) = mean_{p∈P} min_{q∈Q} ||p-q||² + mean_{q∈Q} min_{p∈P} ||p-q||²
+
+    The pairwise distances are computed in row-blocks of `p` so peak memory is O(block·|Q|), NOT the
+    full O(|P|·|Q|) matrix — a single block could otherwise OOM on large clouds (this is a public API).
+    Per P-block: the P→Q direction takes each row's min; the Q→P direction keeps a running per-q min
+    across blocks. The result is identical to the full-matrix computation."""
     p = p if isinstance(p, mx.array) else mx.array(np.asarray(p, dtype=np.float32))
     q = q if isinstance(q, mx.array) else mx.array(np.asarray(q, dtype=np.float32))
-    if p.shape[0] == 0 or q.shape[0] == 0:
+    n = p.shape[0]
+    if n == 0 or q.shape[0] == 0:
         return float("inf")
-    d2 = mx.sum((p[:, None, :] - q[None, :, :]) ** 2, axis=-1)  # (|P|, |Q|)
-    d_pq = mx.mean(mx.min(d2, axis=1))
+
+    pq_min_sum = 0.0  # Σ over P of min_q ||p-q||²
+    qp_min = None  # running min over P of ||p-q||², per q (for the reverse direction)
+    for i in range(0, n, block):
+        pb = p[i : i + block]
+        d2 = mx.sum((pb[:, None, :] - q[None, :, :]) ** 2, axis=-1)  # (block, |Q|)
+        pq_min_sum += float(mx.sum(mx.min(d2, axis=1)).item())
+        if bidirectional:
+            col_min = mx.min(d2, axis=0)  # (|Q|,) — best over this P-block
+            qp_min = col_min if qp_min is None else mx.minimum(qp_min, col_min)
+    d_pq = pq_min_sum / n
     if not bidirectional:
-        return float(d_pq.item())
-    d_qp = mx.mean(mx.min(d2, axis=0))
-    return float((d_pq + d_qp).item())
+        return float(d_pq)
+    return float(d_pq + float(mx.mean(qp_min).item()))
 
 
 def scaled_chamfer(pred, gt, *, bidirectional: bool = True) -> float:

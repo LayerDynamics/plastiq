@@ -18,10 +18,19 @@ export type ProfileSegment =
   | { kind: "arc"; through: [number, number]; to: [number, number] }
   | { kind: "spline"; through: [number, number][]; to: [number, number] };
 
+/** A circular hole inside a loop profile (plane UV). */
+export type ProfileHole = { kind: "circle"; center: [number, number]; radius: number };
+
 /** The derived, kernel-ready profile shape. */
 export type Profile =
   | { kind: "circle"; center: [number, number]; radius: number }
-  | { kind: "loop"; start: [number, number]; segments: ProfileSegment[] };
+  | {
+      kind: "loop";
+      start: [number, number];
+      segments: ProfileSegment[];
+      /** Interior circles treated as holes (T11 / C5). */
+      holes?: ProfileHole[];
+    };
 
 /** A profile edge with its endpoint point-ids and the source entity. */
 interface Edge {
@@ -101,7 +110,62 @@ function edgeLoop(model: SketchModel): Profile | null {
   // double-counted; here the last segment legitimately closes onto start, so keep
   // all segments (the kernel auto-closes if the last point ≠ start, but ours does
   // land on start — its `to` equals start, which the kernel treats as closing).
-  return { kind: "loop", start: startCoord, segments };
+  const holes = interiorCircles(model, startCoord, segments);
+  return holes.length > 0
+    ? { kind: "loop", start: startCoord, segments, holes }
+    : { kind: "loop", start: startCoord, segments };
+}
+
+/** Ray-cast point-in-polygon for the outer loop (C9 — true containment for holes). */
+function pointInOuterLoop(
+  u: number,
+  v: number,
+  start: [number, number],
+  segments: ProfileSegment[],
+): boolean {
+  // Build polyline ring of sample points along the outer path.
+  const ring: [number, number][] = [start];
+  let cur: [number, number] = start;
+  for (const seg of segments) {
+    if (seg.kind === "arc") {
+      // Sample the arc mid (through) plus endpoint — enough for containment of circle centres.
+      ring.push(seg.through, seg.to);
+    } else if (seg.kind === "spline") {
+      for (const p of seg.through) ring.push(p);
+      ring.push(seg.to);
+    } else {
+      ring.push(seg.to);
+    }
+    cur = seg.to;
+  }
+  if (ring.length < 3) return false;
+  // Standard even-odd ray cast in UV.
+  let inside = false;
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+    const [ui, vi] = ring[i]!;
+    const [uj, vj] = ring[j]!;
+    const intersect =
+      vi > v !== vj > v && u < ((uj - ui) * (v - vi)) / (vj - vi + 1e-30) + ui;
+    if (intersect) inside = !inside;
+  }
+  return inside;
+}
+
+/** Non-construction circles whose centres lie strictly inside the outer loop (C9). */
+function interiorCircles(
+  model: SketchModel,
+  start: [number, number],
+  segments: ProfileSegment[],
+): ProfileHole[] {
+  const holes: ProfileHole[] = [];
+  for (const e of model.entities) {
+    if (e.kind !== "circle" || e.construction) continue;
+    const centre = model.points.find((p) => p.id === e.center);
+    if (!centre || !(e.radius > 0)) continue;
+    if (!pointInOuterLoop(centre.u, centre.v, start, segments)) continue;
+    holes.push({ kind: "circle", center: [centre.u, centre.v], radius: e.radius });
+  }
+  return holes;
 }
 
 /** The single non-construction circle, as a circle profile (or null). */

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  FEATURE_SECONDARY_PARAMS,
   featureDragValue,
   fromDisplayUnit,
   MIN_SI,
@@ -39,6 +40,16 @@ describe("unit conversion — mm for lengths, degrees for angles", () => {
     expect(toDisplayUnit(Math.PI * 2, "deg")).toBeCloseTo(360, 9); // a full revolve
     expect(fromDisplayUnit(90, "deg")).toBeCloseTo(Math.PI / 2, 9);
     expect(fromDisplayUnit(toDisplayUnit(0.7, "deg"), "deg")).toBeCloseTo(0.7, 9);
+  });
+});
+
+describe("FEATURE_SECONDARY_PARAMS (T16)", () => {
+  it("lists back for extrude/cut and spacing/count for linear pattern", () => {
+    expect(FEATURE_SECONDARY_PARAMS.extrude).toContain("back");
+    expect(FEATURE_SECONDARY_PARAMS.cut).toContain("back");
+    expect(FEATURE_SECONDARY_PARAMS.linearPattern).toEqual(
+      expect.arrayContaining(["spacing", "count"]),
+    );
   });
 });
 

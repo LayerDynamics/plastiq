@@ -181,7 +181,9 @@ describe("CAD Studio rebuild (SPEC-5 M0.4)", () => {
             deps: ["f1"],
             data: { profile: rect, plane: { kind: "face", face: { normal: [0, 0, 1] }, offset: faceOffset } },
           },
-          { id: "f3", type: "extrude", deps: ["f2"], params: { height: m(20) } },
+          // op:"new" so COM measures the pad alone (plane resolution), not the
+          // joined box+pad mass which dilutes a 10 mm offset under join-by-default (C1).
+          { id: "f3", type: "extrude", deps: ["f2"], params: { height: m(20) }, data: { op: "new" } },
         ],
         params: {},
       };
@@ -192,6 +194,38 @@ describe("CAD Studio rebuild (SPEC-5 M0.4)", () => {
     expect(onFace).toBeLessThan(m(45));
     // A 10 mm face offset lifts the solid a further 10 mm along the face normal.
     expect(comZ(m(10)) - onFace).toBeCloseTo(m(10), 6);
+  });
+
+  it("cut with back produces a two-sided pocket tool (G5)", () => {
+    const m = (x: number): number => mm(x);
+    // Box 60×40×30; sketch on mid-height plane; two-sided cut depth 20 + back 20
+    // must punch a through-pocket (volume < original).
+    const doc: CadDocument = {
+      features: [
+        { id: "f1", type: "box", params: { dx: m(60), dy: m(40), dz: m(30) } },
+        {
+          id: "f2",
+          type: "sketch",
+          data: {
+            profile: loopProfile([
+              [m(20), m(10)],
+              [m(40), m(10)],
+              [m(40), m(30)],
+              [m(20), m(30)],
+            ]),
+            plane: { base: "XY", offset: m(15) },
+          },
+        },
+        { id: "f3", type: "cut", deps: ["f2"], params: { depth: m(20), back: m(20) } },
+      ],
+      params: {},
+    };
+    const built = rebuildTaggedWithProps(oc, doc, { linearDeflection: mm(0.5) });
+    expect(built).not.toBeNull();
+    const boxVol = m(60) * m(40) * m(30);
+    expect(built!.volume).toBeLessThan(boxVol);
+    // Through-pocket: removed ≈ 20×20×30 mm³.
+    expect(built!.volume).toBeCloseTo(boxVol - m(20) * m(20) * m(30), 7);
   });
 
   it("box → sketch → cut subtracts a pocket from the current solid (FR-29)", () => {
@@ -247,6 +281,147 @@ describe("CAD Studio rebuild (SPEC-5 M0.4)", () => {
     expect(mesh).not.toBeNull();
     expect(mesh!.faceGroups.length).toBeGreaterThan(0);
     expect(mesh!.indices.length).toBeGreaterThan(0);
+  });
+
+  it("revolve without data.op joins by default when a solid already exists (C2)", () => {
+    const m = (x: number): number => mm(x);
+    // Box + a rectangular profile offset on XY, full revolve about Y through origin.
+    // Join keeps the box; volume > revolve-only volume.
+    const revolveOnly: CadDocument = {
+      features: [
+        {
+          id: "f1",
+          type: "sketch",
+          data: {
+            profile: loopProfile([
+              [m(15), m(0)],
+              [m(25), m(0)],
+              [m(25), m(10)],
+              [m(15), m(10)],
+            ]),
+          },
+        },
+        { id: "f2", type: "revolve", deps: ["f1"], params: { angle: Math.PI * 2, ay: 1 } },
+      ],
+      params: {},
+    };
+    const joined: CadDocument = {
+      features: [
+        { id: "f0", type: "box", params: { dx: m(10), dy: m(10), dz: m(10) } },
+        {
+          id: "f1",
+          type: "sketch",
+          data: {
+            profile: loopProfile([
+              [m(15), m(0)],
+              [m(25), m(0)],
+              [m(25), m(10)],
+              [m(15), m(10)],
+            ]),
+          },
+        },
+        { id: "f2", type: "revolve", deps: ["f1"], params: { angle: Math.PI * 2, ay: 1 } },
+      ],
+      params: {},
+    };
+    const vOnly = rebuildTaggedWithProps(oc, revolveOnly, { linearDeflection: mm(0.5) })!.volume;
+    const vJoined = rebuildTaggedWithProps(oc, joined, { linearDeflection: mm(0.5) })!.volume;
+    const boxVol = m(10) * m(10) * m(10);
+    expect(vJoined).toBeGreaterThan(vOnly);
+    expect(vJoined).toBeGreaterThanOrEqual(vOnly + boxVol * 0.99);
+  });
+
+  it("revolve with data.axisEdge uses the picked edge as the axis (C2)", () => {
+    const m = (x: number): number => mm(x);
+    // Box 40×40×20. Sketch a 5×10 rect at x∈[5,10] on the top face plane z=20, revolve
+    // about a top +Y-running edge (faceNormals top+side) — different from world Y at origin.
+    // With op:new, the solid is only the revolve (axis on the edge).
+    const doc: CadDocument = {
+      features: [
+        { id: "f1", type: "box", params: { dx: m(40), dy: m(40), dz: m(20) } },
+        {
+          id: "f2",
+          type: "sketch",
+          data: {
+            profile: loopProfile([
+              [m(5), m(10)],
+              [m(10), m(10)],
+              [m(10), m(20)],
+              [m(5), m(20)],
+            ]),
+            plane: { base: "XY", offset: m(20) },
+          },
+        },
+        {
+          id: "f3",
+          type: "revolve",
+          deps: ["f2"],
+          params: { angle: Math.PI * 2 },
+          data: {
+            op: "new",
+            // +Z top and +X side → edge along +Y at x=40, z=20 (typical box edge).
+            axisEdge: { faceNormals: [[0, 0, 1], [1, 0, 0]] as [[number, number, number], [number, number, number]] },
+          },
+        },
+      ],
+      params: {},
+    };
+    const solid = rebuildDocument(oc, doc);
+    try {
+      expect(solid!.isValid()).toBe(true);
+      expect(solidVolume(oc, solid!)).toBeGreaterThan(0);
+    } finally {
+      solid!.delete();
+    }
+  });
+
+  it("revolve honours an offset axis origin (ox/oy/oz) (G2)", () => {
+    const m = (x: number): number => mm(x);
+    // Profile at x∈[10,20] mm on XY; revolve about Y through x=5 mm (not world origin).
+    // Volume = 2π · centroid_x · area  (Pappus) with centroid relative to the axis.
+    // Relative to x=5: strip spans [5,15] mm, area=10×10 mm², centroid at x_rel=10 mm →
+    // V = 2π · 0.01 · (0.01·0.01) = 2π · 1e-6.
+    const doc: CadDocument = {
+      features: [
+        {
+          id: "f1",
+          type: "sketch",
+          data: {
+            profile: loopProfile([
+              [m(10), m(0)],
+              [m(20), m(0)],
+              [m(20), m(10)],
+              [m(10), m(10)],
+            ]),
+          },
+        },
+        {
+          id: "f2",
+          type: "revolve",
+          deps: ["f1"],
+          params: { angle: Math.PI * 2, ay: 1, ox: m(5), oy: 0, oz: 0 },
+        },
+      ],
+      params: {},
+    };
+    const built = rebuildTaggedWithProps(oc, doc, { linearDeflection: mm(0.5) });
+    expect(built).not.toBeNull();
+    // Same profile revolved about x=0 has a different volume — prove ox was applied.
+    const aboutOrigin = rebuildTaggedWithProps(
+      oc,
+      {
+        features: [
+          doc.features[0]!,
+          { id: "f2", type: "revolve", deps: ["f1"], params: { angle: Math.PI * 2, ay: 1 } },
+        ],
+        params: {},
+      },
+      { linearDeflection: mm(0.5) },
+    )!;
+    expect(built!.volume).not.toBeCloseTo(aboutOrigin.volume, 6);
+    // Pappus: centroid distance from axis at x=5 is (15mm mean of 10..20) − 5 = 10 mm;
+    // area = 100 mm² → V = 2π · 0.01 · 1e-4 = 2π · 1e-6.
+    expect(built!.volume).toBeCloseTo(2 * Math.PI * m(10) * (m(10) * m(10)), 8);
   });
 
   it("cut with no solid to cut into throws", () => {
@@ -407,6 +582,52 @@ describe("CAD Studio rebuild (SPEC-5 M0.4)", () => {
     expect(() => rebuildDocument(oc, doc)).toThrow(/no edges selected/);
   });
 
+  it("linearPattern with toolFeatures unions N tool copies onto the base (T21)", () => {
+    const m = (x: number): number => mm(x);
+    // Base box; pattern a small boss (sketch+extrude tool) 3 times along X.
+    const doc: CadDocument = {
+      features: [
+        { id: "f1", type: "box", params: { dx: m(40), dy: m(40), dz: m(10) } },
+        {
+          id: "f2",
+          type: "linearPattern",
+          params: { dx: 1, spacing: m(15), count: 3 },
+          data: {
+            toolFeatures: [
+              {
+                id: "t0",
+                type: "sketch",
+                data: {
+                  profile: loopProfile([
+                    [m(0), m(15)],
+                    [m(8), m(15)],
+                    [m(8), m(23)],
+                    [m(0), m(23)],
+                  ]),
+                  plane: { base: "XY", offset: m(10) },
+                },
+              },
+              {
+                id: "t1",
+                type: "extrude",
+                deps: ["t0"],
+                params: { height: m(5) },
+                data: { op: "new" },
+              },
+            ],
+          },
+        },
+      ],
+      params: {},
+    };
+    const built = rebuildTaggedWithProps(oc, doc, { linearDeflection: mm(0.5) });
+    expect(built).not.toBeNull();
+    const baseVol = m(40) * m(40) * m(10);
+    const bossVol = m(8) * m(8) * m(5);
+    // Base + 3 bosses (non-overlapping along X).
+    expect(built!.volume).toBeCloseTo(baseVol + 3 * bossVol, 6);
+  });
+
   it("a linear pattern fuses N copies of the body (FR-31)", () => {
     const doc: CadDocument = {
       features: [
@@ -514,6 +735,70 @@ describe("CAD Studio rebuild (SPEC-5 M0.4)", () => {
     expect(mesh.faceGroups).toHaveLength(6);
     const xs = mesh.vertices.filter((_, i) => i % 3 === 0);
     expect(Math.min(...xs)).toBeGreaterThan(mm(45));
+  });
+
+  it("transform rotates about COM then translates (C7) — not world origin then translate", () => {
+    // Box [0..20]³ mm → COM at 10mm. 180° about Z through COM swaps the box onto itself
+    // then +50mm X → min x ≈ 50mm. If rotation were about world origin first, the
+    // box would flip to negative X before translate and min x would differ.
+    const s = mm(20);
+    const doc: CadDocument = {
+      features: [
+        { id: "f1", type: "box", params: { dx: s, dy: s, dz: s } },
+        {
+          id: "f2",
+          type: "transform",
+          deps: ["f1"],
+          params: { angle: Math.PI, az: 1, tx: mm(50) },
+        },
+      ],
+      params: {},
+    };
+    const mesh = rebuildTagged(oc, doc, { linearDeflection: mm(0.5) })!;
+    const xs = mesh.vertices.filter((_, i) => i % 3 === 0);
+    expect(Math.min(...xs)).toBeGreaterThan(mm(45));
+    expect(Math.max(...xs)).toBeLessThan(mm(75));
+  });
+
+  it("loft joins onto an existing body by default (C4)", () => {
+    const m = (x: number): number => mm(x);
+    const boxVol = m(40) * m(40) * m(10);
+    const doc: CadDocument = {
+      features: [
+        { id: "f0", type: "box", params: { dx: m(40), dy: m(40), dz: m(10) } },
+        {
+          id: "f1",
+          type: "loft",
+          data: {
+            sections: [
+              {
+                profile: loopProfile([
+                  [m(5), m(5)],
+                  [m(15), m(5)],
+                  [m(15), m(15)],
+                  [m(5), m(15)],
+                ]),
+                plane: { base: "XY", offset: m(10) },
+              },
+              {
+                profile: loopProfile([
+                  [m(6), m(6)],
+                  [m(14), m(6)],
+                  [m(14), m(14)],
+                  [m(6), m(14)],
+                ]),
+                plane: { base: "XY", offset: m(25) },
+              },
+            ],
+          },
+        },
+      ],
+      params: {},
+    };
+    const built = rebuildTaggedWithProps(oc, doc, { linearDeflection: mm(0.5) });
+    expect(built).not.toBeNull();
+    // Join: volume strictly larger than the base box alone (loft adds material).
+    expect(built!.volume).toBeGreaterThan(boxVol * 1.01);
   });
 
   it("a suppressed feature is skipped", () => {
@@ -794,6 +1079,153 @@ describe("CAD Studio rebuild (SPEC-5 M0.4)", () => {
     }
   });
 
+  it("extrude with data.op join fuses a second pad onto the existing body (G7)", () => {
+    const m = (x: number): number => mm(x);
+    // Base box, then a sketch→extrude join that adds a boss rather than replacing.
+    const doc: CadDocument = {
+      features: [
+        { id: "f1", type: "box", params: { dx: m(40), dy: m(40), dz: m(10) } },
+        {
+          id: "f2",
+          type: "sketch",
+          data: {
+            profile: loopProfile([
+              [m(10), m(10)],
+              [m(30), m(10)],
+              [m(30), m(30)],
+              [m(10), m(30)],
+            ]),
+            plane: { base: "XY", offset: m(10) },
+          },
+        },
+        {
+          id: "f3",
+          type: "extrude",
+          deps: ["f2"],
+          params: { height: m(15) },
+          data: { op: "join" },
+        },
+      ],
+      params: {},
+    };
+    const built = rebuildTaggedWithProps(oc, doc, { linearDeflection: mm(0.5) });
+    expect(built).not.toBeNull();
+    const baseVol = m(40) * m(40) * m(10);
+    const bossVol = m(20) * m(20) * m(15);
+    expect(built!.volume).toBeCloseTo(baseVol + bossVol, 7);
+  });
+
+  it("extrude without data.op joins by default when a solid already exists (C1)", () => {
+    const m = (x: number): number => mm(x);
+    // Same geometry as the explicit-join test, but op is unset — product default
+    // must fuse the boss onto the box, not replace the body with the pad alone.
+    const doc: CadDocument = {
+      features: [
+        { id: "f1", type: "box", params: { dx: m(40), dy: m(40), dz: m(10) } },
+        {
+          id: "f2",
+          type: "sketch",
+          data: {
+            profile: loopProfile([
+              [m(10), m(10)],
+              [m(30), m(10)],
+              [m(30), m(30)],
+              [m(10), m(30)],
+            ]),
+            plane: { base: "XY", offset: m(10) },
+          },
+        },
+        {
+          id: "f3",
+          type: "extrude",
+          deps: ["f2"],
+          params: { height: m(15) },
+        },
+      ],
+      params: {},
+    };
+    const built = rebuildTaggedWithProps(oc, doc, { linearDeflection: mm(0.5) });
+    expect(built).not.toBeNull();
+    const baseVol = m(40) * m(40) * m(10);
+    const bossVol = m(20) * m(20) * m(15);
+    expect(built!.volume).toBeCloseTo(baseVol + bossVol, 7);
+    expect(built!.volume).toBeGreaterThan(baseVol);
+  });
+
+  it("extrude with data.op new replaces the existing body (C1)", () => {
+    const m = (x: number): number => mm(x);
+    const doc: CadDocument = {
+      features: [
+        { id: "f1", type: "box", params: { dx: m(40), dy: m(40), dz: m(10) } },
+        {
+          id: "f2",
+          type: "sketch",
+          data: {
+            profile: loopProfile([
+              [m(10), m(10)],
+              [m(30), m(10)],
+              [m(30), m(30)],
+              [m(10), m(30)],
+            ]),
+            plane: { base: "XY", offset: m(10) },
+          },
+        },
+        {
+          id: "f3",
+          type: "extrude",
+          deps: ["f2"],
+          params: { height: m(15) },
+          data: { op: "new" },
+        },
+      ],
+      params: {},
+    };
+    const built = rebuildTaggedWithProps(oc, doc, { linearDeflection: mm(0.5) });
+    expect(built).not.toBeNull();
+    const bossVol = m(20) * m(20) * m(15);
+    // Pad only — the prior box is discarded.
+    expect(built!.volume).toBeCloseTo(bossVol, 7);
+  });
+
+  it("a loft with per-section planes (not only XY+z) builds a solid (G6)", () => {
+    const m = (x: number): number => mm(x);
+    const sq = (s: number) =>
+      loopProfile([
+        [m(-s), m(-s)],
+        [m(s), m(-s)],
+        [m(s), m(s)],
+        [m(-s), m(s)],
+      ]);
+    // Same frustum as the legacy z-stack test, but expressed via plane specs.
+    const doc: CadDocument = {
+      features: [
+        {
+          id: "f1",
+          type: "loft",
+          data: {
+            ruled: true,
+            sections: [
+              { profile: sq(20), plane: { base: "XY", offset: 0 } },
+              { profile: sq(10), plane: { base: "XY", offset: m(60) } },
+            ],
+          },
+        },
+      ],
+      params: {},
+    };
+    const solid = rebuildDocument(oc, doc);
+    try {
+      expect(solid!.isValid()).toBe(true);
+      const minV = m(20) * m(20) * m(60);
+      const maxV = m(40) * m(40) * m(60);
+      const v = solidVolume(oc, solid!);
+      expect(v).toBeGreaterThan(minV);
+      expect(v).toBeLessThan(maxV);
+    } finally {
+      solid!.delete();
+    }
+  });
+
   it("a loft blends two stacked sections into a solid (FR-32)", () => {
     const m = (x: number): number => mm(x);
     const doc: CadDocument = {
@@ -882,6 +1314,44 @@ describe("CAD Studio rebuild (SPEC-5 M0.4)", () => {
     }
   });
 
+  it("a sweep profile plane (data.plane) reorients the section off world-XY (G3)", () => {
+    const m = (x: number): number => mm(x);
+    // 10×10 mm square profile on XZ (normal = +Y), swept along +Y for 40 mm →
+    // a prism of volume 10·10·40 mm³. Without plane support the same profile on
+    // XY swept along +Y would still build, but its COM would sit differently;
+    // we assert volume + that the solid extends primarily along Y.
+    const doc: CadDocument = {
+      features: [
+        {
+          id: "f1",
+          type: "sweep",
+          data: {
+            plane: { base: "XZ", offset: 0 },
+            profile: loopProfile([
+              [m(-5), m(-5)],
+              [m(5), m(-5)],
+              [m(5), m(5)],
+              [m(-5), m(5)],
+            ]),
+            path: {
+              kind: "polyline",
+              points: [
+                [0, 0, 0],
+                [0, m(40), 0],
+              ],
+            },
+          },
+        },
+      ],
+      params: {},
+    };
+    const built = rebuildTaggedWithProps(oc, doc, { linearDeflection: mm(0.5) });
+    expect(built).not.toBeNull();
+    expect(built!.volume).toBeCloseTo(m(10) * m(10) * m(40), 8);
+    // Centroid should sit mid-spine along Y (~20 mm).
+    expect(built!.com[1]).toBeCloseTo(m(20), 5);
+  });
+
   it("a loft with fewer than two sections throws", () => {
     const doc: CadDocument = {
       features: [{ id: "f1", type: "loft", data: { sections: [] } }],
@@ -959,6 +1429,204 @@ describe("CAD Studio rebuild (SPEC-5 M0.4)", () => {
   it("an unsupported feature type throws a typed error", () => {
     const doc: CadDocument = { features: [{ id: "f1", type: "wormhole" }], params: {} };
     expect(() => rebuildDocument(oc, doc)).toThrow(/unsupported feature type/);
+  });
+
+  it("shell with data.direction outward expands the solid envelope (G13 rebuild)", () => {
+    const m = (x: number): number => mm(x);
+    // Capture the +Z face of a box, then shell outward.
+    const baseMesh = rebuildTagged(
+      oc,
+      {
+        features: [{ id: "f1", type: "box", params: { dx: m(40), dy: m(40), dz: m(20) } }],
+        params: {},
+      },
+      { linearDeflection: mm(0.5) },
+    )!;
+    const top = baseMesh.faceGroups.find((g) => Math.round(g.normal[2]) === 1)!;
+    const solidVol = m(40) * m(40) * m(20);
+    const built = rebuildTaggedWithProps(
+      oc,
+      {
+        features: [
+          { id: "f1", type: "box", params: { dx: m(40), dy: m(40), dz: m(20) } },
+          {
+            id: "f2",
+            type: "shell",
+            deps: ["f1"],
+            params: { thickness: m(2) },
+            data: { faces: [{ normal: top.normal }], direction: "outward" },
+          },
+        ],
+        params: {},
+      },
+      { linearDeflection: mm(0.5) },
+    );
+    expect(built).not.toBeNull();
+    // Hollowed shell (volume < solid) but with more faces than a box.
+    expect(built!.volume).toBeLessThan(solidVol);
+    expect(built!.volume).toBeGreaterThan(0);
+    expect(built!.mesh.faceGroups.length).toBeGreaterThan(6);
+  });
+
+  it("cut with reverse direction removes material along −Z (G5)", () => {
+    const m = (x: number): number => mm(x);
+    // Sketch on the top of a 30 mm tall box, cut 15 mm along −Z into the body.
+    const doc: CadDocument = {
+      features: [
+        { id: "f1", type: "box", params: { dx: m(40), dy: m(40), dz: m(30) } },
+        {
+          id: "f2",
+          type: "sketch",
+          data: {
+            profile: loopProfile([
+              [m(10), m(10)],
+              [m(30), m(10)],
+              [m(30), m(30)],
+              [m(10), m(30)],
+            ]),
+            plane: { base: "XY", offset: m(30) },
+          },
+        },
+        {
+          id: "f3",
+          type: "cut",
+          deps: ["f2"],
+          params: { depth: m(15) },
+          data: { direction: [0, 0, -1] },
+        },
+      ],
+      params: {},
+    };
+    const built = rebuildTaggedWithProps(oc, doc, { linearDeflection: mm(0.5) });
+    expect(built).not.toBeNull();
+    const full = m(40) * m(40) * m(30);
+    const pocket = m(20) * m(20) * m(15);
+    expect(built!.volume).toBeCloseTo(full - pocket, 7);
+  });
+
+  it("sweep with a mixed line+arc path builds a valid solid (G4 rebuild)", () => {
+    const m = (x: number): number => mm(x);
+    const doc: CadDocument = {
+      features: [
+        {
+          id: "f1",
+          type: "sweep",
+          data: {
+            profile: loopProfile([
+              [m(-3), m(-3)],
+              [m(3), m(-3)],
+              [m(3), m(3)],
+              [m(-3), m(3)],
+            ]),
+            path: {
+              kind: "path",
+              start: [0, 0, 0],
+              segments: [
+                { kind: "line", to: [0, 0, m(30)] },
+                { kind: "arc", through: [0, m(15), m(45)], to: [0, m(30), m(30)] },
+              ],
+            },
+          },
+        },
+      ],
+      params: {},
+    };
+    const solid = rebuildDocument(oc, doc);
+    try {
+      expect(solid).not.toBeNull();
+      expect(solid!.isValid()).toBe(true);
+      expect(solidVolume(oc, solid!)).toBeGreaterThan(m(6) * m(6) * m(30));
+    } finally {
+      solid?.delete();
+    }
+  });
+
+  it("extrude profile with a hole has less volume than the solid outer (C5 / T11)", () => {
+    const m = (x: number): number => mm(x);
+    const outer = loopProfile([
+      [0, 0],
+      [m(40), 0],
+      [m(40), m(30)],
+      [0, m(30)],
+    ]);
+    const withHole = {
+      ...outer,
+      holes: [{ kind: "circle" as const, center: [m(20), m(15)] as [number, number], radius: m(5) }],
+    };
+    const solidDoc = (profile: typeof outer | typeof withHole): CadDocument => ({
+      features: [
+        { id: "s1", type: "sketch", data: { profile } },
+        { id: "e1", type: "extrude", deps: ["s1"], params: { height: m(10) }, data: { op: "new" } },
+      ],
+      params: {},
+    });
+    const vOuter = rebuildTaggedWithProps(oc, solidDoc(outer), { linearDeflection: mm(0.5) })!.volume;
+    const vHole = rebuildTaggedWithProps(oc, solidDoc(withHole), { linearDeflection: mm(0.5) })!.volume;
+    expect(vOuter).toBeCloseTo(m(40) * m(30) * m(10), 7);
+    expect(vHole).toBeLessThan(vOuter);
+    // Cylinder hole ≈ π r² h
+    const holeVol = Math.PI * m(5) * m(5) * m(10);
+    expect(vOuter - vHole).toBeCloseTo(holeVol, 5);
+  });
+
+  it("extrude deps bind to a specific sketch, not only the last one (C3)", () => {
+    const m = (x: number): number => mm(x);
+    // Sketch A: 40×30 rect → height 20. Sketch B: 10×10 rect (later). Extrude deps→A
+    // must produce the large prism volume, not the small one from B.
+    const large: CadDocument = {
+      features: [
+        {
+          id: "sA",
+          type: "sketch",
+          data: {
+            profile: loopProfile([
+              [0, 0],
+              [m(40), 0],
+              [m(40), m(30)],
+              [0, m(30)],
+            ]),
+          },
+        },
+        {
+          id: "sB",
+          type: "sketch",
+          data: {
+            profile: loopProfile([
+              [0, 0],
+              [m(10), 0],
+              [m(10), m(10)],
+              [0, m(10)],
+            ]),
+          },
+        },
+        {
+          id: "e1",
+          type: "extrude",
+          deps: ["sA"],
+          params: { height: m(20) },
+          data: { op: "new" },
+        },
+      ],
+      params: {},
+    };
+    const lastWins: CadDocument = {
+      features: [
+        ...large.features.slice(0, 2),
+        {
+          id: "e1",
+          type: "extrude",
+          deps: ["sB"],
+          params: { height: m(20) },
+          data: { op: "new" },
+        },
+      ],
+      params: {},
+    };
+    const vA = rebuildTaggedWithProps(oc, large, { linearDeflection: mm(0.5) })!.volume;
+    const vB = rebuildTaggedWithProps(oc, lastWins, { linearDeflection: mm(0.5) })!.volume;
+    expect(vA).toBeCloseTo(m(40) * m(30) * m(20), 7);
+    expect(vB).toBeCloseTo(m(10) * m(10) * m(20), 7);
+    expect(vA).toBeGreaterThan(vB);
   });
 
   it("extrude with no upstream sketch throws", () => {

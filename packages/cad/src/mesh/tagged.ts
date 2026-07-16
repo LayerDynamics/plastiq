@@ -89,6 +89,24 @@ export interface TaggedMesh {
    * treat the shorter mesh as the full geometry.
    */
   readonly droppedFaces: number;
+  /**
+   * Number of B-rep edges OMITTED from `edges` because an adjacent face had no
+   * triangulation (each such face is already counted in `droppedFaces`, so
+   * `droppedEdges > 0` implies `droppedFaces > 0`). The emitted edges keep
+   * compact consecutive `edgeId`s (`edges[e.edgeId] === e`) — a skipped edge
+   * leaves no gap in the numbering.
+   */
+  readonly droppedEdges: number;
+  /**
+   * Number of edge-adjacent face-id lookups (two per emitted edge) that matched
+   * no face group — that slot of the edge's `faceIds` is `-1`, which the
+   * traversal layer (select/topology.ts) treats as missing data (the edge
+   * classifies as "smooth" and contributes no adjacency). `0` for a complete
+   * mesh. Distinct faces that merely SHARE an area centroid (a shelled tube's
+   * inner/outer lateral walls) are NOT counted here: those resolve exactly, by
+   * B-rep identity.
+   */
+  readonly unresolvedEdgeFaces: number;
 }
 
 /** Tessellation quality knobs. */

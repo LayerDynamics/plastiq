@@ -51,6 +51,13 @@ test("section view clips the model and restores on toggle off", async ({ page })
   expect(cut).not.toBe(before);
   await expect.poll(() => sectionGizmo()).toBe(true); // section-analysis quad shown
 
+  // Flip the kept half-space (Fusion flip) — render must change again.
+  await expect(page.getByTestId("section-flip")).toBeVisible();
+  await page.getByTestId("section-flip").click();
+  await settle();
+  const flipped = await shot();
+  expect(flipped).not.toBe(cut);
+
   // Disabling restores the full solid — identical render (static camera + geometry).
   await page.getByTestId("section-toggle").click();
   await settle();

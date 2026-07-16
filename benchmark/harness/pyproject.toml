@@ -1,0 +1,33 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "cadbench-harness"
+version = "0.1.0"
+description = "cad-studio integration harness for the CADGenBench scorer + our parametric generation model"
+requires-python = ">=3.12"
+# The runtime deps are all satisfied by installing the vendored cadgenbench
+# (`pip install -e benchmark/cadgenbench[baseline,dev]`) into the same env, which
+# is the documented setup. The `[baseline]` extra is REQUIRED: `cadbench-harness
+# package` delegates to `cadgenbench baseline package`, and the `baseline`
+# subcommand only registers when that extra (litellm + python-dotenv) is installed.
+dependencies = [
+    "cadgenbench[baseline]",
+]
+
+[project.scripts]
+cadbench-harness = "cadbench_harness.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["cadbench_harness"]
+
+[tool.hatch.metadata]
+# cadgenbench is installed editable from the sibling vendored checkout, not PyPI.
+allow-direct-references = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "slow: scores every bundled fixture with real OCCT+VTK (minutes); run explicitly",
+]

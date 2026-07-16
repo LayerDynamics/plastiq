@@ -44,7 +44,8 @@ for (const backend of ["rapier", "ammo", "cannon"] as const) {
 
     // The REAL selected backend is active (not silently the Rapier default).
     expect(start.active).toBe(backend);
-    expect(start.count).toBe(1); // bare part → one body
+    // Default drop-test experiment: CAD body + injected ground plane.
+    expect(start.count).toBeGreaterThanOrEqual(1);
     expect(start.z0).not.toBeNull();
 
     // Step a fixed number of ticks under gravity (deterministic).

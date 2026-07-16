@@ -4,7 +4,17 @@
 // leaves identity-oriented manifests — every existing test/E2E — unchanged).
 
 import { describe, expect, it } from "vitest";
-import { conjugate, localAnchor, localAxis, quatMul, type SimQuat } from "./frame.js";
+import {
+  axisBasis,
+  axisFrame,
+  conjugate,
+  localAnchor,
+  localAxis,
+  normalizeAxis,
+  quatMul,
+  quatRotate,
+  type SimQuat,
+} from "./frame.js";
 
 const IDENT: SimQuat = [0, 0, 0, 1];
 const S = Math.SQRT1_2; // sin/cos of 45° → a 90° rotation about Z is [0,0,S,S]
@@ -64,5 +74,54 @@ describe("frame — quatMul (quaternion composition)", () => {
 
   it("conjugate(q)·q == identity (the parent-relative child-orientation use)", () => {
     near(quatMul(conjugate(ROT_Z90), ROT_Z90), IDENT);
+  });
+});
+
+describe("frame — axisFrame / axisBasis / normalizeAxis (joint-frame construction)", () => {
+  const nearVec = (v: readonly number[], e: readonly number[]): void => {
+    for (let i = 0; i < 3; i++) expect(v[i]).toBeCloseTo(e[i]!, 9);
+  };
+
+  it("normalizeAxis scales to unit length and throws on a zero axis", () => {
+    nearVec(normalizeAxis([0, 0, 5]), [0, 0, 1]);
+    nearVec(normalizeAxis([3, 0, 4]), [0.6, 0, 0.8]);
+    expect(() => normalizeAxis([0, 0, 0])).toThrow(/non-zero/);
+  });
+
+  it("axisFrame rotates world +X exactly onto the (normalized) axis", () => {
+    for (const axis of [
+      [0, 0, 1],
+      [0, 1, 0],
+      [1, 0, 0],
+      [-1, 0, 0], // the antiparallel special case
+      [1, 1, 1],
+      [0.2, -0.7, 0.4],
+    ] as [number, number, number][]) {
+      const n = normalizeAxis(axis);
+      nearVec(quatRotate(axisFrame(axis), [1, 0, 0]), n);
+    }
+  });
+
+  it("axisFrame is a unit quaternion (a pure rotation, no scaling)", () => {
+    const q = axisFrame([0.3, -0.5, 0.9]);
+    expect(Math.hypot(q[0], q[1], q[2], q[3])).toBeCloseTo(1, 12);
+  });
+
+  it("axisBasis completes the axis to a right-handed orthonormal triad", () => {
+    const axis: [number, number, number] = [0.2, -0.7, 0.4];
+    const n = normalizeAxis(axis);
+    const [u, v] = axisBasis(axis);
+    // Unit length…
+    expect(Math.hypot(u[0], u[1], u[2])).toBeCloseTo(1, 9);
+    expect(Math.hypot(v[0], v[1], v[2])).toBeCloseTo(1, 9);
+    // …mutually orthogonal and orthogonal to the axis…
+    expect(u[0] * v[0] + u[1] * v[1] + u[2] * v[2]).toBeCloseTo(0, 9);
+    expect(u[0] * n[0] + u[1] * n[1] + u[2] * n[2]).toBeCloseTo(0, 9);
+    expect(v[0] * n[0] + v[1] * n[1] + v[2] * n[2]).toBeCloseTo(0, 9);
+    // …and right-handed: u × v == n.
+    nearVec(
+      [u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]],
+      n,
+    );
   });
 });

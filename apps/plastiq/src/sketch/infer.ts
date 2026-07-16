@@ -89,7 +89,9 @@ export type LineHint = "horizontal" | "vertical" | null;
 export function lineHint(start: Vec2, end: Vec2, angleTolDeg = 4): LineHint {
   const du = end.u - start.u;
   const dv = end.v - start.v;
-  if (du === 0 && dv === 0) return null;
+  // Near-zero-length segment (not just exactly zero): its direction is float
+  // noise, so no axis hint. Length guard follows model.ts (`len < 1e-9`).
+  if (Math.hypot(du, dv) < 1e-9) return null;
   const deg = (Math.atan2(Math.abs(dv), Math.abs(du)) * 180) / Math.PI;
   if (deg <= angleTolDeg) return "horizontal";
   if (deg >= 90 - angleTolDeg) return "vertical";
@@ -130,7 +132,10 @@ export function segmentHint(
 ): SegHint | null {
   const du = end.u - start.u;
   const dv = end.v - start.v;
-  if (du === 0 && dv === 0) return null;
+  // Near-zero-length segment: its orientation is float noise — no hint (this also
+  // keeps the tangent check's `/ len` well away from a ~0 division). Length guard
+  // follows model.ts (`len < 1e-9`).
+  if (Math.hypot(du, dv) < 1e-9) return null;
   const hv = lineHint(start, end, angleTolDeg);
   if (hv === "horizontal") return { glyph: "H", constraint: { kind: "horizontal" } };
   if (hv === "vertical") return { glyph: "V", constraint: { kind: "vertical" } };

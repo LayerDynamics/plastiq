@@ -10,6 +10,14 @@ import { authoringDocumentSchema } from "./schema.js";
 import { buildPart, type BuildPartDeps } from "./buildPart.js";
 import { inspectGeometry, type MeshProbe } from "./inspectGeometry.js";
 import { createMesh, type CreateMeshDeps } from "./createMesh.js";
+import { fitNurbs, reconstructBrep, type MeshToCadDeps } from "./meshToCad.js";
+import {
+  CLOUD_TO_MESH,
+  COMPLETE_SCAN,
+  cloudToMesh,
+  completeScan,
+  type CloudCaptureDeps,
+} from "./cloudCapture.js";
 import { planSchema, summarizePlan, validatePlan, type PlanGraph } from "../planning.js";
 import type { ToolDef, JsonSchema } from "../providers/types.js";
 import type { AgentTools, ToolHandler } from "../agentRunner.js";
@@ -17,6 +25,15 @@ import type { CadDocument } from "../../store/types.js";
 
 /** The tool whose call ends the agent loop (CADAM-style finalizer). */
 export const ANSWER_USER = "answer_user";
+
+/** The creative 3D-gen tool (the paid path). Named so the prompt assembly can derive the
+ * creative guidance from the actual tool surface (runGeneration) without string drift. */
+export const CREATE_MESH = "create_mesh";
+
+/** The mesh→CAD conversion tools (local services, free): reconstruct the open mesh to a B-rep,
+ * or fit smooth NURBS surfaces to it. Offered when a mesh document can be converted. */
+export const RECONSTRUCT_BREP = "reconstruct_brep";
+export const FIT_NURBS = "fit_nurbs";
 
 /** JSON Schema for the authoring document, derived from the single zod source so the
  * tool contract never drifts from the validator. Falls back to a permissive object
@@ -39,8 +56,13 @@ function planJsonSchema(): JsonSchema {
   }
 }
 
-/** The model-facing tool definitions. `creative` adds create_mesh (the paid 3D path). */
-export function toolDefs(opts: { creative: boolean }): ToolDef[] {
+/** The model-facing tool definitions. `creative` adds create_mesh (the paid 3D path); `meshToCad`
+ * adds the reconstruct_brep + fit_nurbs conversions (local services) for turning a mesh into CAD. */
+export function toolDefs(opts: {
+  creative: boolean;
+  meshToCad?: boolean;
+  cloudCapture?: boolean;
+}): ToolDef[] {
   const defs: ToolDef[] = [
     {
       name: "plan_part",
@@ -78,7 +100,7 @@ export function toolDefs(opts: { creative: boolean }): ToolDef[] {
   ];
   if (opts.creative) {
     defs.push({
-      name: "create_mesh",
+      name: CREATE_MESH,
       description:
         "Generate a 3D mesh (organic/sculpted geometry the parametric kernel cannot author) via a cloud provider, as a NEW mesh document. Modes: text2img3d (generate an image then 3D), img3d (an attached image), text3d (direct text→3D where supported). This is a PAID job; the user confirms before it runs.",
       parameters: {
@@ -95,6 +117,42 @@ export function toolDefs(opts: { creative: boolean }): ToolDef[] {
       },
     });
   }
+  if (opts.meshToCad) {
+    defs.push(
+      {
+        name: RECONSTRUCT_BREP,
+        description:
+          "Convert the currently OPEN generated mesh document into an editable parametric B-rep (STEP) using the local reconstruction service, then load it as the live CAD part. Use when the user wants to edit, dimension, or add features to a generated/scanned mesh. Best for mechanical/planar shapes. Optional 'method': auto (analytic routes → fitted fallback, the default), fitted (freeform surface fit), or faceted (per-triangle). Requires a mesh document to be open (e.g. right after create_mesh).",
+        parameters: {
+          type: "object",
+          additionalProperties: false,
+          properties: { method: { type: "string", enum: ["auto", "fitted", "faceted"] } },
+        },
+      },
+      {
+        name: FIT_NURBS,
+        description:
+          "Fit smooth NURBS surfaces to the currently OPEN generated mesh document (local NURBS service), producing an editable CAD solid/shell, then load it as the live CAD part. Prefer this over reconstruct_brep for ORGANIC / freeform meshes where smooth surfaces beat planar reconstruction. Requires a mesh document to be open.",
+        parameters: { type: "object", additionalProperties: false, properties: {} },
+      },
+    );
+  }
+  if (opts.cloudCapture) {
+    defs.push(
+      {
+        name: CLOUD_TO_MESH,
+        description:
+          "Convert the currently OPEN oriented point-cloud document into a watertight mesh via the local capture service (/capture), then open the mesh project. Requires normals on the cloud. After success, call reconstruct_brep or fit_nurbs to make editable CAD.",
+        parameters: { type: "object", additionalProperties: false, properties: {} },
+      },
+      {
+        name: COMPLETE_SCAN,
+        description:
+          "Complete a PARTIAL point-cloud document (holes allowed, normals optional) into a full mesh via the local capture /complete service, then open the mesh. May use demo weights unless CAPTURE_COMPLETION_CHECKPOINT is set. Then reconstruct_brep or fit_nurbs.",
+        parameters: { type: "object", additionalProperties: false, properties: {} },
+      },
+    );
+  }
   return defs;
 }
 
@@ -107,8 +165,56 @@ export interface AgentToolDeps {
   currentDoc: () => CadDocument;
   /** create_mesh deps — when present, the creative tool is offered + wired. */
   createMesh?: CreateMeshDeps;
-  /** M5: called when the agent commits a (validated) decomposition plan, so the trace/UX can show it. */
+  /** mesh→CAD deps — when present, reconstruct_brep + fit_nurbs are offered + wired. */
+  meshToCad?: MeshToCadDeps;
+  /** cloud→mesh deps — when present, cloud_to_mesh + complete_scan are offered + wired (T34). */
+  cloudCapture?: CloudCaptureDeps;
+  /** M5: called when the agent commits a (validated) decomposition plan, so the trace/UX
+   * can show it (9-M1). Both production runners inject it: buildTurnTools (agentTurn.ts)
+   * records the FULL plan into the conversation trace (kind "plan") and the panel renders
+   * it structured; the headless session (headless/nodeBuild.ts) reports it via plan(). */
   onPlan?: (plan: PlanGraph) => void;
+}
+
+/**
+ * Re-inject the original STEP text into any `importStep` feature the model
+ * re-emitted without it.
+ *
+ * Edit-mode shows the model the current document with each imported body's STEP
+ * **digested** (raw STEP omitted to keep the prompt small — see
+ * `ai/editContext.ts`). When the model then re-emits "the WHOLE updated document",
+ * its `importStep` features carry the digest, not the STEP text — which fails the
+ * `data.step` schema gate and is unrepairable (the model never had the bytes).
+ * Here we match each such feature to the live document by feature id and restore
+ * its real `data.step`, so an edit of an imported solid round-trips. A feature the
+ * model supplied with its own STEP, or one with no id match, is left untouched.
+ */
+export function reconcileImportSteps(document: unknown, currentDoc: CadDocument): unknown {
+  if (!document || typeof document !== "object") return document;
+  const doc = document as { features?: unknown };
+  if (!Array.isArray(doc.features)) return document;
+
+  const stepById = new Map<string, string>();
+  for (const f of currentDoc.features) {
+    if (f.type === "importStep") {
+      const s = f.data?.["step"];
+      if (typeof s === "string" && s.length > 0) stepById.set(f.id, s);
+    }
+  }
+  if (stepById.size === 0) return document;
+
+  const features = doc.features.map((f) => {
+    if (!f || typeof f !== "object") return f;
+    const feat = f as { id?: unknown; type?: unknown; data?: Record<string, unknown> };
+    if (feat.type !== "importStep") return f;
+    const supplied = feat.data?.["step"];
+    if (typeof supplied === "string" && supplied.length > 0) return f; // model gave a STEP
+    const id = typeof feat.id === "string" ? feat.id : undefined;
+    const original = id ? stepById.get(id) : undefined;
+    if (original === undefined) return f; // no match → let the schema reject it
+    return { ...feat, data: { ...feat.data, step: original } };
+  });
+  return { ...doc, features };
 }
 
 /** Wire the agent's tools (defs + handlers) from the injected dependencies. The
@@ -124,7 +230,9 @@ export function buildAgentTools(deps: AgentToolDeps): AgentTools {
       return { result: summarizePlan(v.plan), isError: false };
     },
     build_part: async (args) => {
-      const document = (args as { document?: unknown }).document;
+      // Restore the STEP bytes for any imported body the model re-emitted from its
+      // (digested) edit context, so an edit of an imported solid validates.
+      const document = reconcileImportSteps((args as { document?: unknown }).document, deps.currentDoc());
       const r = await buildPart(document, deps.buildPart);
       return {
         result: r.status === "ok" ? r.message : `${r.message}${r.errors ? ` Errors: ${r.errors}` : ""}`,
@@ -143,7 +251,7 @@ export function buildAgentTools(deps: AgentToolDeps): AgentTools {
 
   if (deps.createMesh) {
     const cm = deps.createMesh;
-    handlers["create_mesh"] = async (args) => {
+    handlers[CREATE_MESH] = async (args) => {
       const r = await createMesh(args, cm);
       const detail =
         r.status === "ok"
@@ -153,5 +261,32 @@ export function buildAgentTools(deps: AgentToolDeps): AgentTools {
     };
   }
 
-  return { defs: toolDefs({ creative: deps.createMesh != null }), handlers };
+  if (deps.meshToCad) {
+    const mc = deps.meshToCad;
+    const asResult = (r: { status: "ok" | "error"; message: string; errors?: string }): { result: string; isError: boolean } => ({
+      result: r.status === "ok" ? r.message : `${r.message}${r.errors ? ` Errors: ${r.errors}` : ""}`,
+      isError: r.status === "error",
+    });
+    handlers[RECONSTRUCT_BREP] = async (args) => asResult(await reconstructBrep(args, mc));
+    handlers[FIT_NURBS] = async (args) => asResult(await fitNurbs(args, mc));
+  }
+
+  if (deps.cloudCapture) {
+    const cc = deps.cloudCapture;
+    const asResult = (r: { status: "ok" | "error"; message: string; errors?: string }): { result: string; isError: boolean } => ({
+      result: r.status === "ok" ? r.message : `${r.message}${r.errors ? ` Errors: ${r.errors}` : ""}`,
+      isError: r.status === "error",
+    });
+    handlers[CLOUD_TO_MESH] = async (args) => asResult(await cloudToMesh(args, cc));
+    handlers[COMPLETE_SCAN] = async (args) => asResult(await completeScan(args, cc));
+  }
+
+  return {
+    defs: toolDefs({
+      creative: deps.createMesh != null,
+      meshToCad: deps.meshToCad != null,
+      cloudCapture: deps.cloudCapture != null,
+    }),
+    handlers,
+  };
 }

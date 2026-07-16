@@ -7,10 +7,10 @@ import { useEffect, useRef } from "react";
 import * as THREE from "three";
 import { useThree } from "@react-three/fiber";
 import { useCadStore } from "../store/store.js";
-import { Picker, boxSelect, ndcRect } from "../viewport/pick.js";
+import { boxSelect, ndcRect } from "../viewport/pick.js";
 import { applyHighlight } from "../viewport/highlight.js";
 import { nextMeasure } from "../viewport/measure.js";
-import { GpuPicker } from "./gpuPick.js";
+import { useSharedPickers } from "./sharedPickers.js";
 import type { BuiltPart } from "../viewport/buildMesh.js";
 import type { Pick, SelectionMode } from "../store/types.js";
 
@@ -119,6 +119,57 @@ interface ViewportGlobal {
 }
 
 const CLICK_TOL_PX = 4; // beyond this a press is an orbit/box drag, not a click
+const pickKey = (pick: Pick): string => `${pick.kind}:${pick.id}`;
+const samePickKey = (a: Pick, b: Pick): boolean => pickKey(a) === pickKey(b);
+
+function edgeEndpointVertexIds(part: BuiltPart, edge: THREE.LineSegments, tolerance = 1e-7): number[] {
+  if (!part.vertexPoints) return [];
+  const vertexIds = part.vertexPoints.userData["vertexIds"] as number[] | undefined;
+  if (!vertexIds) return [];
+  const edgePos = edge.geometry.getAttribute("position");
+  const vertexPos = part.vertexPoints.geometry.getAttribute("position");
+  const out = new Set<number>();
+  const edgePoint = new THREE.Vector3();
+  const vertexPoint = new THREE.Vector3();
+  const endpoints = [0, edgePos.count - 1].filter((index, i, all) => index >= 0 && all.indexOf(index) === i);
+  for (const endpoint of endpoints) {
+    edgePoint.fromBufferAttribute(edgePos, endpoint);
+    for (let i = 0; i < vertexPos.count; i++) {
+      vertexPoint.fromBufferAttribute(vertexPos, i);
+      if (edgePoint.distanceToSquared(vertexPoint) <= tolerance * tolerance) {
+        const id = vertexIds[i];
+        if (typeof id === "number") out.add(id);
+      }
+    }
+  }
+  return [...out];
+}
+
+export function completeBrepFacePicks(part: BuiltPart, picks: readonly Pick[]): Pick[] {
+  const selectedEdges = new Set(picks.filter((pick) => pick.kind === "edge").map((pick) => pick.id));
+  const selectedVertices = new Set(picks.filter((pick) => pick.kind === "vertex").map((pick) => pick.id));
+  if (selectedEdges.size === 0) return [];
+  const byFace = new Map<number, { edges: Set<number>; vertices: Set<number> }>();
+  for (const edge of part.edges) {
+    const edgeId = edge.userData["edgeId"];
+    const faceIds = edge.userData["faceIds"] as readonly [number, number] | undefined;
+    if (typeof edgeId !== "number" || !faceIds) continue;
+    for (const faceId of new Set(faceIds.filter((id) => id >= 0))) {
+      const entry = byFace.get(faceId) ?? { edges: new Set<number>(), vertices: new Set<number>() };
+      entry.edges.add(edgeId);
+      for (const vertexId of edgeEndpointVertexIds(part, edge)) entry.vertices.add(vertexId);
+      byFace.set(faceId, entry);
+    }
+  }
+  const out: Pick[] = [];
+  for (const [faceId, boundary] of byFace) {
+    if (boundary.edges.size === 0) continue;
+    const allEdges = [...boundary.edges].every((edgeId) => selectedEdges.has(edgeId));
+    const allVertices = [...boundary.vertices].every((vertexId) => selectedVertices.has(vertexId));
+    if (allEdges && allVertices) out.push({ kind: "face", id: faceId });
+  }
+  return out;
+}
 
 export function Picking({ part }: { part: BuiltPart | null }): null {
   const gl = useThree((s) => s.gl);
@@ -130,10 +181,13 @@ export function Picking({ part }: { part: BuiltPart | null }): null {
   const partRef = useRef<BuiltPart | null>(part);
   partRef.current = part;
   const hoverRef = useRef<Pick | null>(null);
+  const autoFaceKeysRef = useRef(new Set<string>());
+  const manualFaceKeysRef = useRef(new Set<string>());
   // The first world point banked by the measure tool, awaiting its second click.
   const measureFirstRef = useRef<THREE.Vector3 | null>(null);
-  const picker = useRef(new Picker());
-  const gpu = useRef(new GpuPicker());
+  // Picker + GpuPicker shared with the right-click context menu (one GPU-id
+  // render target / id-mesh build between them); ref-count-released on unmount.
+  const pickers = useSharedPickers();
 
   // Reapply highlight from the store picks + local hover (orange selection).
   const refreshHighlight = (): void => {
@@ -143,11 +197,35 @@ export function Picking({ part }: { part: BuiltPart | null }): null {
     invalidate();
   };
 
+  const normalizeFaceClosure = (): boolean => {
+    const p = partRef.current;
+    if (!p) return false;
+    const store = useCadStore.getState();
+    const current = store.picks;
+    const complete = completeBrepFacePicks(p, current);
+    const completeKeys = new Set(complete.map(pickKey));
+    const manualKeys = manualFaceKeysRef.current;
+    const next = current.filter((pick) => {
+      if (pick.kind !== "face") return true;
+      const key = pickKey(pick);
+      return !autoFaceKeysRef.current.has(key) || completeKeys.has(key) || manualKeys.has(key);
+    });
+    for (const face of complete) {
+      const key = pickKey(face);
+      if (!next.some((pick) => pickKey(pick) === key)) next.push(face);
+    }
+    autoFaceKeysRef.current = completeKeys;
+    const same =
+      current.length === next.length && current.every((pick, index) => pickKey(pick) === pickKey(next[index]!));
+    if (!same) store.setPicks(next);
+    return !same;
+  };
+
   // GPU-id pick seam (NFR-4) + the __plastiqGpuPick global the strict E2E drives.
   useEffect(() => {
     const gpuPickFace = (ndc: { x: number; y: number }): number | null => {
       const p = partRef.current;
-      return p ? gpu.current.pick(gl, camera, p, ndc) : null;
+      return p ? pickers.gpu.pick(gl, camera, p, ndc) : null;
     };
     (globalThis as { __plastiqGpuPick?: (x: number, y: number) => number | null }).__plastiqGpuPick =
       (x, y) => gpuPickFace({ x, y });
@@ -164,9 +242,15 @@ export function Picking({ part }: { part: BuiltPart | null }): null {
   // Re-highlight when the part swaps or the store picks change.
   useEffect(() => {
     measureFirstRef.current = null; // a rebuilt part invalidates any banked point
+    autoFaceKeysRef.current.clear();
+    manualFaceKeysRef.current.clear();
+    normalizeFaceClosure();
     refreshHighlight();
     return useCadStore.subscribe((s, prev) => {
-      if (s.picks !== prev.picks) refreshHighlight();
+      if (s.picks !== prev.picks) {
+        if (normalizeFaceClosure()) return;
+        refreshHighlight();
+      }
       // Turning the tool off drops a half-finished measurement (FR-13).
       if (s.measuring !== prev.measuring && !s.measuring) measureFirstRef.current = null;
     });
@@ -218,6 +302,37 @@ export function Picking({ part }: { part: BuiltPart | null }): null {
       }
       return best;
     };
+    const gpuFaceId = (pt: BuiltPart, ndc: { x: number; y: number }): number | null => {
+      try {
+        if (!pickers.gpu.rayHitsPart(pt, camera, ndc)) return null;
+        return pickers.gpu.pick(gl, camera, pt, ndc);
+      } catch {
+        return null;
+      }
+    };
+    const faceHit = (pt: BuiltPart, ndc: { x: number; y: number }): Pick | null => {
+      let hit = pickers.picker.pick(pt, new THREE.Vector2(ndc.x, ndc.y), camera, "face");
+      if (!hit) {
+        const id = gpuFaceId(pt, ndc);
+        if (id != null) hit = { kind: "face", id };
+      }
+      return hit;
+    };
+    const bodyHit = (pt: BuiltPart, ndc: { x: number; y: number }): Pick | null => {
+      return gpuFaceId(pt, ndc) != null ? { kind: "body", id: 0 } : null;
+    };
+    const entityHit = (
+      pt: BuiltPart,
+      mode: SelectionMode,
+      ndc: { x: number; y: number },
+    ): Pick | null => {
+      if (mode === "body") return bodyHit(pt, ndc);
+      const v = pickers.picker.pick(pt, new THREE.Vector2(ndc.x, ndc.y), camera, "vertex") ?? screenNearest(pt, "vertex", ndc);
+      if (v) return v;
+      const e = pickers.picker.pick(pt, new THREE.Vector2(ndc.x, ndc.y), camera, "edge") ?? screenNearest(pt, "edge", ndc);
+      if (e) return e;
+      return faceHit(pt, ndc);
+    };
     let downAt: { x: number; y: number } | null = null;
     let boxStart: { x: number; y: number } | null = null;
 
@@ -248,8 +363,7 @@ export function Picking({ part }: { part: BuiltPart | null }): null {
       }
       const ndc = ndcFrom(e.clientX, e.clientY);
       const mode = useCadStore.getState().selMode;
-      let next = picker.current.pick(p, new THREE.Vector2(ndc.x, ndc.y), camera, mode);
-      if (!next) next = screenNearest(p, mode, ndc); // edge/vertex near-miss → hover it
+      const next = entityHit(p, mode, ndc);
       if (
         (next?.id ?? null) !== (hoverRef.current?.id ?? null) ||
         (next?.kind ?? null) !== (hoverRef.current?.kind ?? null)
@@ -300,24 +414,31 @@ export function Picking({ part }: { part: BuiltPart | null }): null {
       // second click resolves the distance + axis deltas. This suppresses normal
       // selection while measuring is active.
       if (store.measuring) {
-        const wp = picker.current.pickPoint(p, new THREE.Vector2(ndc.x, ndc.y), camera);
+        const wp = pickers.picker.pickPoint(p, new THREE.Vector2(ndc.x, ndc.y), camera);
         if (!wp) return; // clicked empty space — keep waiting for a point on the part
         const step = nextMeasure(measureFirstRef.current, wp);
         measureFirstRef.current = step.first;
         store.setMeasureResult(step.result);
         return;
       }
-      const mode = store.selMode;
-      let hit = picker.current.pick(p, new THREE.Vector2(ndc.x, ndc.y), camera, mode);
-      // GPU-id fallback for face/body when the triangle raycast misses (NFR-4).
-      if (!hit && (mode === "face" || mode === "body") && gpu.current.rayHitsPart(p, camera, ndc)) {
-        const id = gpu.current.pick(gl, camera, p, ndc);
-        if (id != null) hit = { kind: mode, id };
+      const hit = entityHit(p, store.selMode, ndc);
+      if (hit) {
+        if (hit.kind === "face") {
+          const key = pickKey(hit);
+          const exists = store.picks.some((pick) => samePickKey(pick, hit));
+          if (additive && exists) manualFaceKeysRef.current.delete(key);
+          else {
+            if (!additive) manualFaceKeysRef.current = new Set([key]);
+            else manualFaceKeysRef.current.add(key);
+          }
+        } else if (!additive) {
+          manualFaceKeysRef.current.clear();
+        }
+        store.pick(hit, additive);
+      } else if (!additive) {
+        manualFaceKeysRef.current.clear();
+        store.clearPicks();
       }
-      // Screen-space fallback for thin edge/vertex targets (click near them).
-      if (!hit) hit = screenNearest(p, mode, ndc);
-      if (hit) store.pick(hit, additive);
-      else if (!additive) store.clearPicks();
     };
 
     // E2E seam: where the first selectable edge/vertex projects, in client px.
@@ -345,8 +466,8 @@ export function Picking({ part }: { part: BuiltPart | null }): null {
     };
   }, [gl, camera, controls]);
 
-  // Free the GPU-id render target when the picking layer unmounts.
-  useEffect(() => () => gpu.current.dispose(), []);
+  // The shared GPU-id render target is freed by useSharedPickers when the LAST
+  // consumer (this layer or the right-click menu) unmounts.
 
   return null;
 }

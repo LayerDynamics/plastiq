@@ -8,6 +8,9 @@ export default tseslint.config(
       "e2e/**",
       "**/vendor/**",
       "**/dist/**",
+      // Rust build output of the Tauri desktop shell (apps/desktop/src-tauri) —
+      // generated JS shims land under target/, never lintable source.
+      "**/src-tauri/target/**",
       "**/pkg/**",
       "**/generated/**",
       "**/node_modules/**",

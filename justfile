@@ -38,3 +38,56 @@ dev:
 cad-occt:
     docker run --rm -v "{{justfile_directory()}}/packages/cad:/src" -u "$(id -u):$(id -g)" \
         donalffons/opencascade.js:2.0.0-beta.b5ff984 occt.build.yml
+
+# --- CADGenBench harness (local/manual — NOT push-CI) -------------------------
+# Evaluates our parametric AI generation against the CADGenBench benchmark. Needs
+# the `cadgenbench` py3.12 env, the mounted inputs bucket, and a local model. Full
+# guide: benchmark/harness/README.md. Setup: see that README's "Setup (once)".
+
+# Mount the input fixtures bucket at ./local (once per session).
+bench-mount:
+    hf-mount start bucket LayerDynamics/cadgenbench-data-bucket ./local
+
+# Prove the upstream CAD-Score scorer runs + discriminates on the bundled GT fixtures.
+bench-fixtures:
+    mamba run -n cadgenbench python -m cadbench_harness score-fixtures
+
+# Serve a local OpenAI-compatible model. Usage: just bench-serve mlx-vlm <model> [port]
+bench-serve backend model port="8080":
+    ./benchmark/harness/serve-model.sh {{backend}} {{model}} {{port}}
+
+# Generate candidates over the fixtures + validate. Usage: just bench-run myrun <model>
+bench-run name model:
+    mamba run -n cadgenbench python -m cadbench_harness run {{name}} --model {{model}} --base-url http://localhost:8080/v1 --vision
+    mamba run -n cadgenbench python -m cadbench_harness validate {{name}}
+
+# Harness unit tests (offline).
+bench-test:
+    mamba run -n cadgenbench python -m pytest benchmark/harness/tests -q -m "not slow"
+
+# --- Self-host (Docker) --------------------------------------------------------
+# Build + serve the production app as a single static-nginx container. Full
+# guide (bare-metal path, headers/compression, optional services): docs/deploy.md.
+
+# Build the self-host image (repo-root context, multi-stage pnpm build → nginx).
+app-docker-build:
+    docker build -f deploy/plastiq-web/Dockerfile -t plastiq-web "{{justfile_directory()}}"
+
+# Run the self-host image on http://localhost:8080.
+app-docker-run:
+    docker run --rm -p 8080:80 plastiq-web
+
+# --- Python services (local) ---------------------------------------------------
+# The five self-hosted services: reconstruct :8000 (mesh→B-rep/STEP), capture :8001
+# (point cloud→mesh, MLX), nerf :8002 (posed images→mesh, MLX), nurbs :8003
+# (mesh→NURBS surfaces→STEP, MLX), and photogrammetry :8004 (photos→poses+point
+# cloud, MLX, SPEC-13 P10.2). Conda envs are created from each service's
+# environment.yml on first run. Ctrl-C stops them all.
+
+# Start the services with prefixed logs (creates missing envs first).
+services:
+    ./scripts/dev-services.sh
+
+# Kill any service still listening on :8000/:8001/:8002/:8003/:8004.
+services-stop:
+    ./scripts/dev-services.sh stop

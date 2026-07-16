@@ -160,12 +160,34 @@ describe("isSimManifest (unit)", () => {
   });
 
   it("rejects malformed constraints", () => {
+    const twoBodies = [validBody(), { ...validBody(), id: "b1" }];
     const con = { kind: "hinge", bodyA: "b0", bodyB: "b1", origin: [0, 0, 0], axis: [0, 0, 1] };
-    expect(isSimManifest(bad({ constraints: [{ ...con, kind: "weld" }] }))).toBe(false);
-    expect(isSimManifest(bad({ constraints: [{ ...con, bodyA: 1 }] }))).toBe(false);
-    expect(isSimManifest(bad({ constraints: [{ ...con, origin: [0, 0] }] }))).toBe(false);
-    expect(isSimManifest(bad({ constraints: [{ ...con, axis: [0, 0, NaN] }] }))).toBe(false);
+    const withCon = (c: Record<string, unknown>): unknown =>
+      bad({ bodies: twoBodies, constraints: [c] });
+    expect(isSimManifest(withCon({ ...con, kind: "weld" }))).toBe(false);
+    expect(isSimManifest(withCon({ ...con, bodyA: 1 }))).toBe(false);
+    expect(isSimManifest(withCon({ ...con, origin: [0, 0] }))).toBe(false);
+    expect(isSimManifest(withCon({ ...con, axis: [0, 0, NaN] }))).toBe(false);
     // A well-formed constraint is accepted.
-    expect(isSimManifest(bad({ constraints: [con] }))).toBe(true);
+    expect(isSimManifest(withCon(con))).toBe(true);
+  });
+
+  it("accepts every constraint kind in the vocabulary", () => {
+    const twoBodies = [validBody(), { ...validBody(), id: "b1" }];
+    for (const kind of ["hinge", "slider", "cylindrical", "ball", "planar", "fixed"]) {
+      const con = { kind, bodyA: "b0", bodyB: "b1", origin: [0, 0, 0], axis: [0, 0, 1] };
+      expect(isSimManifest(bad({ bodies: twoBodies, constraints: [con] }))).toBe(true);
+    }
+  });
+
+  it("rejects a constraint whose body ref names no declared body", () => {
+    const con = { kind: "hinge", bodyA: "b0", bodyB: "ghost", origin: [0, 0, 0], axis: [0, 0, 1] };
+    expect(isSimManifest(bad({ constraints: [con] }))).toBe(false);
+    const con2 = { ...con, bodyA: "ghost", bodyB: "b0" };
+    expect(isSimManifest(bad({ constraints: [con2] }))).toBe(false);
+  });
+
+  it("rejects duplicate body ids", () => {
+    expect(isSimManifest(bad({ bodies: [validBody(), validBody()] }))).toBe(false);
   });
 });

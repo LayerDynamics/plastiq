@@ -2,10 +2,12 @@
 (when watertight) a solid.
 
 This is the baseline reconstruction (R6.1): it always produces a valid B-rep STEP shape
-from any triangle soup, with no surface fitting. R6.3/R6.4 add RANSAC primitive detection
-to COLLAPSE fitted regions (planes, cylinders, …) into single analytic faces — a clean,
-editable reconstruction — replacing the per-triangle faces for those regions. Until then
-the faceted shape is the honest, complete result (a real B-rep, just dense).
+from any triangle soup, with no surface fitting. The R6.3/R6.4 routes COLLAPSE detected
+regions (planes, cylinders, spheres, cones) into single analytic faces via DETERMINISTIC
+detection + closed-form least-squares fits (planar facet segmentation, Gauss-map axis +
+Kåsa circle fit, algebraic sphere/cone fits — deliberately no randomized RANSAC, per
+NFR-2) — a clean, editable reconstruction that replaces the per-triangle faces for those
+regions. The faceted shape remains the honest, complete fallback (a real B-rep, just dense).
 """
 
 from __future__ import annotations
@@ -19,11 +21,12 @@ from OCC.Core.BRepBuilderAPI import (
     BRepBuilderAPI_MakeSolid,
     BRepBuilderAPI_Sewing,
 )
-from OCC.Core.BRepCheck import BRepCheck_Analyzer
 from OCC.Core.gp import gp_Pnt
 from OCC.Core.TopAbs import TopAbs_SHELL
 from OCC.Core.TopExp import TopExp_Explorer
 from OCC.Core.TopoDS import TopoDS_Shape, topods
+
+from .closure import verify_closure
 
 
 @dataclass
@@ -33,6 +36,7 @@ class FacetedResult:
     faces_built: int
     is_solid: bool
     is_valid: bool
+    free_edges: int = 0  # real naked-edge count (FR-7) — always computed, never assumed
 
 
 def _nondegenerate_mask(vertices: np.ndarray, faces: np.ndarray, area2_tol: float = 1e-20) -> np.ndarray:
@@ -81,8 +85,12 @@ def faceted_shape(vertices: np.ndarray, faces: np.ndarray, sew_tol: float = 1e-6
         exp.Next()
 
     if shells > 0 and solid_maker.IsDone():
-        solid = solid_maker.Solid()
-        if BRepCheck_Analyzer(solid).IsValid():
-            return FacetedResult(solid, len(faces), built, True, True)
+        # MakeSolid + IsValid alone do NOT prove closure (FR-7) — verify with the real
+        # free-edge count and a positive enclosed volume (orienting outward first so a
+        # winding artefact isn't misreported as "no volume").
+        solid, rep = verify_closure(solid_maker.Solid(), orient=True)
+        if rep.is_solid:
+            return FacetedResult(solid, len(faces), built, True, True, rep.free_edges)
 
-    return FacetedResult(sewn, len(faces), built, False, BRepCheck_Analyzer(sewn).IsValid())
+    _, rep = verify_closure(sewn)
+    return FacetedResult(sewn, len(faces), built, False, rep.is_valid, rep.free_edges)

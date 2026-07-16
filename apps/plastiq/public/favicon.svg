@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <!-- Plastiq mark: a "P" profile extruded backwards (back face offset +4,-4),
+       echoing the sketch->extrude workflow, on a dark rounded plate. -->
+  <rect x="2" y="2" width="60" height="60" rx="14" fill="#171a21"/>
+  <g fill-rule="evenodd">
+    <!-- back face of the extrusion -->
+    <path fill="#155e6b" d="M24 14h13a11 11 0 0 1 0 22h-7v8h-6Zm6 6v10h7a5 5 0 0 0 0-10Z"/>
+    <!-- front face (the sketch profile) -->
+    <path fill="#3ee6c4" d="M20 18h13a11 11 0 0 1 0 22h-7v8h-6Zm6 6v10h7a5 5 0 0 0 0-10Z"/>
+  </g>
+</svg>

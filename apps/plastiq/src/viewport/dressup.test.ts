@@ -13,9 +13,15 @@ import {
   faceRefsFromPicks,
   filletFeature,
   loftFeature,
+  loftFromSketchFeatures,
+  revolveAboutEdgeFeature,
+  cutAlongEdgeFeature,
+  cutTwoSidedFeature,
   shellFeature,
   sweepFeature,
+  sweepFromSketchFeature,
 } from "./dressup.js";
+import type { EditorFeature } from "../store/types.js";
 
 const refs: SelectionRefs = {
   faces: { 1: { normal: [0, 0, 1] }, 2: { normal: [1, 0, 0] } },
@@ -82,18 +88,35 @@ describe("dressup — picks + refs → persistent feature data (FR-30/FR-16)", (
     const f = draftFeature([{ kind: "face", id: 2 }], refs, 0.1);
     expect(f).toMatchObject({ type: "draft", params: { angle: 0.1 } });
     expect(f!.data!["face"]).toEqual({ normal: [1, 0, 0] });
-    expect(f!.data!["neutralNormal"]).toEqual([0, 0, 1]);
+    // Pull/neutral follow the picked face normal (T12), not hard-coded world +Z.
+    expect(f!.data!["neutralNormal"]).toEqual([1, 0, 0]);
+    expect(f!.data!["pull"]).toEqual([1, 0, 0]);
     expect(draftFeature([], refs, 0.1)).toBeNull();
+  });
+
+  it("draftFeature stores all picked faces for multi-face draft (G9)", () => {
+    const f = draftFeature(
+      [
+        { kind: "face", id: 1 },
+        { kind: "face", id: 2 },
+      ],
+      refs,
+      0.05,
+    );
+    expect(f).not.toBeNull();
+    expect(f!.data!["face"]).toEqual({ normal: [0, 0, 1] }); // first face back-compat
+    expect(f!.data!["faces"]).toEqual([{ normal: [0, 0, 1] }, { normal: [1, 0, 0] }]);
   });
 
   it("ignores picks whose id has no ref (stale selection)", () => {
     expect(edgeRefsFromPicks([{ kind: "edge", id: 99 }], refs)).toEqual([]);
   });
 
-  it("extrudeTwoSidedFeature carries the up + back distances (FR-29)", () => {
+  it("extrudeTwoSidedFeature carries the up + back distances and join (FR-29 / C1)", () => {
     expect(extrudeTwoSidedFeature(0.02, 0.01)).toEqual({
       type: "extrude",
       params: { height: 0.02, back: 0.01 },
+      data: { op: "join" },
     });
   });
 
@@ -104,7 +127,7 @@ describe("dressup — picks + refs → persistent feature data (FR-30/FR-16)", (
     expect(extrudeToFaceFeature([{ kind: "edge", id: 5 }], refs)).toBeNull();
   });
 
-  it("extrudeAlongEdgeFeature stores the direction EdgeRef + height; null with no edge", () => {
+  it("extrudeAlongEdgeFeature stores the direction EdgeRef + height + join; null with no edge", () => {
     const f = extrudeAlongEdgeFeature([{ kind: "edge", id: 5 }], refs, 0.02);
     expect(f).toMatchObject({ type: "extrude", params: { height: 0.02 } });
     expect(f!.data!["directionEdge"]).toEqual({
@@ -113,7 +136,85 @@ describe("dressup — picks + refs → persistent feature data (FR-30/FR-16)", (
         [1, 0, 0],
       ],
     });
+    expect(f!.data!["op"]).toBe("join");
     expect(extrudeAlongEdgeFeature([{ kind: "face", id: 1 }], refs, 0.02)).toBeNull();
+  });
+
+  it("revolveAboutEdgeFeature stores axisEdge + join; null with no edge (C2)", () => {
+    const f = revolveAboutEdgeFeature([{ kind: "edge", id: 5 }], refs, Math.PI * 2);
+    expect(f).toMatchObject({ type: "revolve", params: { angle: Math.PI * 2 } });
+    expect(f!.data!["axisEdge"]).toEqual({
+      faceNormals: [
+        [0, 0, 1],
+        [1, 0, 0],
+      ],
+    });
+    expect(f!.data!["op"]).toBe("join");
+    expect(revolveAboutEdgeFeature([{ kind: "face", id: 1 }], refs, Math.PI)).toBeNull();
+  });
+
+  it("cutTwoSidedFeature / cutAlongEdgeFeature emit back and directionEdge (T04)", () => {
+    expect(cutTwoSidedFeature(0.05, 0.02)).toEqual({
+      type: "cut",
+      params: { depth: 0.05, back: 0.02 },
+    });
+    const f = cutAlongEdgeFeature([{ kind: "edge", id: 5 }], refs, 0.05);
+    expect(f).toMatchObject({ type: "cut", params: { depth: 0.05 } });
+    expect(f!.data!["directionEdge"]).toBeDefined();
+    expect(cutAlongEdgeFeature([{ kind: "face", id: 1 }], refs, 0.05)).toBeNull();
+  });
+
+  it("loftFromSketchFeatures builds sections from sketch feature planes (T08)", () => {
+    const rect: Profile = {
+      kind: "loop",
+      start: [0, 0],
+      segments: [
+        { kind: "line", to: [0.04, 0] },
+        { kind: "line", to: [0.04, 0.03] },
+        { kind: "line", to: [0, 0.03] },
+        { kind: "line", to: [0, 0] },
+      ],
+    };
+    const feats: EditorFeature[] = [
+      {
+        id: "s1",
+        type: "sketch",
+        data: { profile: rect, plane: { base: "XY", offset: 0 } },
+      },
+      {
+        id: "s2",
+        type: "sketch",
+        data: { profile: rect, plane: { base: "XY", offset: 0.06 } },
+      },
+    ];
+    const f = loftFromSketchFeatures(feats, ["s1", "s2"]);
+    expect(f).not.toBeNull();
+    expect(f!.type).toBe("loft");
+    const secs = f!.data!["sections"] as { plane: { offset: number } }[];
+    expect(secs).toHaveLength(2);
+    expect(secs[1]!.plane.offset).toBe(0.06);
+    expect(loftFromSketchFeatures(feats, ["s1"])).toBeNull();
+  });
+
+  it("sweepFromSketchFeature uses sketch profile + plane (T09)", () => {
+    const rect: Profile = {
+      kind: "circle",
+      center: [0, 0],
+      radius: 0.01,
+    };
+    const feats: EditorFeature[] = [
+      {
+        id: "s1",
+        type: "sketch",
+        data: { profile: rect, plane: { base: "XZ", offset: 0 } },
+      },
+    ];
+    const path = { kind: "polyline" as const, points: [[0, 0, 0], [0, 0, 0.05]] as [number, number, number][] };
+    const f = sweepFromSketchFeature(feats, "s1", path, { transition: "round" });
+    expect(f).toMatchObject({ type: "sweep" });
+    expect(f!.data!["plane"]).toEqual({ base: "XZ", offset: 0 });
+    expect(f!.data!["transition"]).toBe("round");
+    expect(sweepFromSketchFeature(feats, "missing", path)).toBeNull();
   });
 
   it("loftFeature needs ≥2 sections; sweepFeature carries profile + path (FR-32)", () => {
@@ -153,6 +254,20 @@ describe("dressup — picks + refs → persistent feature data (FR-30/FR-16)", (
         [0, 0, 1],
       ],
     });
+
+    // Optional profile plane (G3).
+    const sfPlane = sweepFeature(
+      rect,
+      {
+        kind: "polyline",
+        points: [
+          [0, 0, 0],
+          [0, 1, 0],
+        ],
+      },
+      { base: "XZ", offset: 0.01 },
+    );
+    expect(sfPlane.data!["plane"]).toEqual({ base: "XZ", offset: 0.01 });
   });
 
   it("booleanBodyFeature stores the op + an id'd tool subtree (FR-31)", () => {

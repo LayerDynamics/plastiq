@@ -28,4 +28,24 @@ describe("buildSpineWire (unit)", () => {
     const path: SpinePath = { kind: "polyline", points: [[0, 0, 0], [0, 0, 0]] };
     expect(() => buildSpineWire(oc, path)).toThrow(/zero-length/);
   });
+
+  it("builds a wire from a mixed line + arc path (G4)", () => {
+    // Line along +X, then a quarter-circle in the XY plane through (1.1, 0.1, 0) to (1.1, 0.2, 0).
+    const path: SpinePath = {
+      kind: "path",
+      start: [0, 0, 0],
+      segments: [
+        { kind: "line", to: [0.1, 0, 0] },
+        { kind: "arc", through: [0.15, 0.05, 0], to: [0.1, 0.1, 0] },
+      ],
+    };
+    const wire = buildSpineWire(oc, path);
+    expect(wire.IsNull()).toBe(false);
+    wire.delete();
+  });
+
+  it("throws on an empty segmented path", () => {
+    const path: SpinePath = { kind: "path", start: [0, 0, 0], segments: [] };
+    expect(() => buildSpineWire(oc, path)).toThrow(/at least one segment/);
+  });
 });

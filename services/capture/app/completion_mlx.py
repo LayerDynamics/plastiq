@@ -6,8 +6,9 @@ that latent. Marching-cubes the predicted occupancy → completed mesh. Pure MLX
 Silicon (the M4 Max), no CUDA. The DLR-RM shape-completion repo is CUDA-only; this is a self-contained
 implementation, not a port. See docs/adr/0008.
 
-The demo trains on a synthetic family (hemisphere-masked sphere scans → the full ball); point it at a
-real dataset (ShapeNet-style partial/full pairs) for general objects.
+The demo trains on a synthetic family (hemisphere-masked sphere scans → the full ball); for general
+objects, train on real watertight meshes with `python -m app.train_completion` (app/train_completion.py)
+and serve the checkpoint via CAPTURE_COMPLETION_CHECKPOINT.
 """
 
 from __future__ import annotations
@@ -16,7 +17,8 @@ import mlx.core as mx
 import mlx.nn as nn
 import mlx.optimizers as optim
 import numpy as np
-from skimage import measure
+
+from .marching import marching_cubes_field
 
 LATENT = 128
 
@@ -111,14 +113,5 @@ def complete(net: CompletionNet, partial_points: np.ndarray, *, bound: float = 1
     """Complete a partial point cloud → (vertices, faces) of the inferred full shape. The decoder's
     occupancy logit is marching-cubed at 0 (logit 0 ↔ probability 0.5)."""
     latent = net.encode(mx.array(np.asarray(partial_points, dtype=np.float32)[None]))  # (1, L)
-    lin = np.linspace(-bound, bound, res, dtype=np.float32)
-    gx, gy, gz = np.meshgrid(lin, lin, lin, indexing="ij")
-    grid = np.stack([gx, gy, gz], axis=-1).reshape(-1, 3)
-    vals = []
-    for i in range(0, len(grid), 65536):
-        q = mx.array(grid[i : i + 65536][None])  # (1, m, 3)
-        vals.append(np.asarray(net.decode(q, latent)).reshape(-1))
-    field = np.concatenate(vals).reshape(res, res, res)
-    verts, faces, _, _ = measure.marching_cubes(field, level=0.0)
-    verts = verts / (res - 1) * (2.0 * bound) - bound
-    return verts.astype(np.float32), faces.astype(np.int64)
+    # decode expects a batched query (1, m, 3); the shared helper feeds (m, 3) grid chunks.
+    return marching_cubes_field(lambda q: net.decode(q[None], latent), bound=bound, res=res)

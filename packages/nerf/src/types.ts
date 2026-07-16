@@ -7,6 +7,10 @@
 /** Which MLX model the service trains to produce the surface (SPEC-11). */
 export type NerfMethod = "nerf" | "neus";
 
+/** Position encoding of the radiance NeRF field (`method: "nerf"`): classic sinusoidal frequency
+ * bands, or the instant-NGP multiresolution hash grid. */
+export type NerfEncoding = "frequency" | "hashgrid";
+
 /** The inputs to a training job: camera poses + the views they describe.
  *
  * `transformsJson` is the nerfstudio/instant-ngp `transforms.json` schema (camera intrinsics +
@@ -23,6 +27,16 @@ export interface NerfTrainInput {
   method?: NerfMethod;
   /** Marching-cubes grid resolution for the exported mesh. */
   gridRes?: number;
+  /** Position encoding for the radiance field — `method: "nerf"` only. `"frequency"` (classic NeRF
+   * sinusoidal, the service default) or `"hashgrid"` (instant-NGP multiresolution hash grid — fits
+   * sharp detail faster). The `"neus"` SDF trunk consumes raw coordinates by design (its geometric
+   * init requires them), so the service rejects `"hashgrid"` with `"neus"` (422) rather than
+   * silently ignoring it. Sent as `encoding` on the wire. */
+  encoding?: NerfEncoding;
+  /** Fine PDF (importance/hierarchical) samples per ray: a coarse pass seeds a second pass
+   * concentrated on the surface. Supported by both methods; 0/omitted ⇒ coarse-only (the service
+   * default). Sent as `importance_samples` on the wire (service cap: 128). */
+  importanceSamples?: number;
 }
 
 /** The training/extraction summary returned alongside the mesh. */
@@ -36,6 +50,11 @@ export interface NerfReport {
   /** Marching-cubes mesh size. */
   vertices: number;
   faces: number;
+  /** Position encoding the job actually trained with (additive — absent from older services). */
+  encoding?: NerfEncoding;
+  /** Fine PDF samples per ray the job actually trained with; 0 = coarse-only (additive — absent
+   * from older services). */
+  importanceSamples?: number;
 }
 
 /** A completed job: the reconstructed surface as a base64 GLB + its report. The GLB feeds the
@@ -50,6 +69,9 @@ export interface NerfResult {
 export interface NerfOptions {
   /** Base URL of the NeRF service. Default `http://localhost:8002` (the documented dev port). */
   baseURL?: string;
+  /** API key for a key-protected deployment (the service's `NERF_API_KEY`) — sent as
+   * `Authorization: Bearer <key>` on every request. Absent ⇒ no auth header (open dev default). */
+  apiKey?: string;
   /** Injectable fetch (tests pass a fake; defaults to the global `fetch`). */
   fetchImpl?: typeof fetch;
   signal?: AbortSignal;
@@ -57,8 +79,16 @@ export interface NerfOptions {
   pollIntervalMs?: number;
   /** Max poll attempts before timing out (default 600 ≈ 20 min at 2s — training is slow). */
   maxPolls?: number;
-  /** Poll backoff (tests inject an instant resolver). */
+  /** Per-poll delay (a constant `pollIntervalMs`, not a backoff; tests inject an instant resolver). */
   delay?: (ms: number) => Promise<void>;
   /** Job-state callback for UI progress (`"queued" | "running" | …`). */
   onState?: (state: string) => void;
+  /** Job-id callback, fired once (right after the submit returns, before the first poll) — the
+   * handle a caller needs to cancel the in-flight job server-side via {@link cancelJob} while
+   * this same call keeps polling. */
+  onJob?: (id: string) => void;
 }
+
+/** Knobs for {@link cancelJob}: the connection subset of {@link NerfOptions}. Cancel is a single
+ * `DELETE` — the polling knobs don't apply. */
+export type NerfCancelOptions = Pick<NerfOptions, "baseURL" | "apiKey" | "fetchImpl">;

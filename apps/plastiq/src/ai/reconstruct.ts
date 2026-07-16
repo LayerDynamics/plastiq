@@ -1,110 +1,61 @@
-// SPEC-6 R6.6 — client for the mesh→B-rep reconstruction service (services/reconstruct).
+// SPEC-7 R6.6 — app adapter for mesh→B-rep reconstruction (@plastiq/recon + CadDocument seam).
 //
-// Sends a mesh document's inline base64 GLB to the self-hosted reconstruction backend and
-// polls for the resulting STEP, which is wrapped as a parametric CadDocument (one
-// importStep feature) so it rebuilds through the existing kernel importStep path into an
-// editable B-rep part. The submit→poll shape mirrors the fal mesh-gen client. The backend
-// is reached by base URL (self-hosted; same BYO/self-host spirit as the AI proxy seam).
+// Heavy submit→poll client lives in `@plastiq/recon` (T32); this module re-exports it and wraps
+// STEP as a parametric CadDocument for loadDocument. Settings thread reconstructBaseURL +
+// reconstructApiKey (T36) unless the caller overrides opts.
 
+import {
+  cancelJob,
+  reconstructMesh as reconClient,
+  type ReconstructCancelOptions,
+  type ReconstructOptions,
+  type ReconstructReport,
+  type ReconstructResult,
+  type ReconstructRouteAttempt,
+} from "@plastiq/recon";
+
+import { useAiStore } from "./aiStore.js";
 import type { CadDocument } from "../store/types.js";
 
-export interface ReconstructReport {
-  triangles_in: number;
-  triangles_used: number;
-  faces_built: number;
-  planar_faces: number;
-  /** Analytic non-planar faces (cylinder/sphere/cone/revolution). Absent on older servers. */
-  curved_faces?: number;
-  /** Freeform (BSpline/MakeFilling) faces (R6.5). Absent on older servers. */
-  freeform_faces?: number;
-  /** Per-triangle fallback faces that survived (FR-8). Absent on older servers. */
-  faceted_faces?: number;
-  /** Scaled Chamfer Distance of the built B-rep vs the input mesh — a pose/scale-robust surface
-   * fidelity score (lower = closer). Advisory (M1; docs/adr/0001). Absent on older servers. */
-  surface_deviation?: number;
-  /** Advisory tolerance for `surface_deviation`. Absent on older servers. */
-  fidelity_tol?: number;
-  /** Tangent-connected regions recognised in the input mesh (box→6, cylinder→3, blob→many) — a
-   * structural fingerprint (M2c; docs/adr/0002). Absent on older servers. */
-  tangent_regions?: number;
-  is_solid: boolean;
-  is_valid: boolean;
-  method: string;
-  /** "cylinder" | "sphere" | "cone" | "revolution" | "csg" when method="auto" hit one. */
-  primitive?: string;
+export type {
+  ReconstructCancelOptions,
+  ReconstructOptions,
+  ReconstructReport,
+  ReconstructResult,
+  ReconstructRouteAttempt,
+};
+
+/** Resolve connection knobs from settings unless the caller overrides them. */
+function withReconstructSettings<T extends ReconstructCancelOptions>(opts: T): T {
+  const settings = useAiStore.getState().settings;
+  const baseURL = opts.baseURL ?? settings?.reconstructBaseURL;
+  const apiKey = opts.apiKey ?? settings?.reconstructApiKey;
+  return {
+    ...opts,
+    ...(baseURL ? { baseURL } : {}),
+    ...(apiKey ? { apiKey } : {}),
+  };
 }
 
-export interface ReconstructResult {
-  step: string;
-  report: ReconstructReport;
-}
-
-export interface ReconstructOptions {
-  /** Base URL of the reconstruction service. Default http://localhost:8000. */
-  baseURL?: string;
-  /** Injectable fetch (tests pass a fake; defaults to global fetch). */
-  fetchImpl?: typeof fetch;
-  signal?: AbortSignal;
-  /** Poll interval in ms (default 1500). */
-  pollIntervalMs?: number;
-  /** Max poll attempts before timing out (default 400 ≈ 10 min at 1.5s). */
-  maxPolls?: number;
-  /** Poll backoff (tests inject an instant resolver). */
-  delay?: (ms: number) => Promise<void>;
-  /** Job-state callback for UI progress ("queued" | "running" | …). */
-  onState?: (state: string) => void;
-}
-
-const DEFAULT_BASE_URL = "http://localhost:8000";
-
-async function httpError(res: Response, what: string): Promise<string> {
-  const detail = await res
-    .json()
-    .then((b: { detail?: string }) => b.detail ?? "")
-    .catch(() => "");
-  return `reconstruct ${what}: HTTP ${res.status}${detail ? ` — ${detail}` : ""}`;
-}
-
-/** Reconstruct a mesh (base64 GLB) into a B-rep STEP via the backend (submit → poll). */
+/** Reconstruct a mesh (base64 GLB) into a B-rep STEP. Caller opts override settings.
+ *
+ * `opts.onJob` yields the job id so the panel can cancel it mid-poll via {@link cancelReconstruct}. */
 export async function reconstructMesh(
   glbBase64: string,
   opts: ReconstructOptions = {},
 ): Promise<ReconstructResult> {
-  const base = (opts.baseURL ?? DEFAULT_BASE_URL).replace(/\/+$/, "");
-  const f = opts.fetchImpl ?? globalThis.fetch;
-  if (!f) throw new Error("reconstruct: no fetch implementation available");
-  const delay = opts.delay ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
-  const interval = opts.pollIntervalMs ?? 1500;
-  const maxPolls = opts.maxPolls ?? 400;
+  return reconClient(glbBase64, withReconstructSettings(opts));
+}
 
-  const submitRes = await f(`${base}/reconstruct`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ glb_base64: glbBase64 }),
-    ...(opts.signal ? { signal: opts.signal } : {}),
-  });
-  if (!submitRes.ok) throw new Error(await httpError(submitRes, "submit"));
-  const submitted = (await submitRes.json()) as { id?: string };
-  if (!submitted.id) throw new Error("reconstruct: submit returned no job id");
-  const id = submitted.id;
-
-  for (let i = 0; i < maxPolls; i++) {
-    if (opts.signal?.aborted) throw new DOMException("aborted", "AbortError");
-    const statusRes = await f(`${base}/jobs/${id}/status`, opts.signal ? { signal: opts.signal } : {});
-    if (!statusRes.ok) throw new Error(await httpError(statusRes, "status"));
-    const status = (await statusRes.json()) as { state?: string; error?: string };
-    opts.onState?.(status.state ?? "?");
-    if (status.state === "completed") {
-      const resultRes = await f(`${base}/jobs/${id}/result`, opts.signal ? { signal: opts.signal } : {});
-      if (!resultRes.ok) throw new Error(await httpError(resultRes, "result"));
-      return (await resultRes.json()) as ReconstructResult;
-    }
-    if (status.state === "failed") {
-      throw new Error(`reconstruction failed: ${status.error ?? "unknown error"}`);
-    }
-    await delay(interval);
-  }
-  throw new Error(`reconstruction timed out after ${maxPolls} polls`);
+/** Cancel a reconstruction job server-side (`DELETE /jobs/{id}`, M4b) — the counterpart to
+ * {@link reconstructMesh} for the panel's Cancel: aborting the client-side polling alone would
+ * leave the server reconstructing for nobody. The job id comes from `opts.onJob`. Resolves on
+ * 204 and on 404 (already gone). Auth/base URL are threaded exactly like the reconstruct path. */
+export async function cancelReconstruct(
+  jobId: string,
+  opts: ReconstructCancelOptions = {},
+): Promise<void> {
+  await cancelJob(jobId, withReconstructSettings(opts));
 }
 
 /** Wrap reconstructed STEP text as a parametric document (one importStep feature) so it

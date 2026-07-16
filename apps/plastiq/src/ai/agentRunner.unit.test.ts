@@ -69,6 +69,49 @@ describe("R2.3 agent loop", () => {
     expect(res.messages.some((m) => m.role === "tool" && /no sketch profile/.test(String(m.content)))).toBe(true);
   });
 
+  it("forces the configured tool on the first turn only (CB6.2)", async () => {
+    const seenToolChoice: unknown[] = [];
+    const scripts: StreamEvent[][] = [
+      [toolCall("c1", "build_part", { ok: true }), done()],
+      [toolCall("c2", "answer_user", { message: "done" }), done()],
+    ];
+    let i = 0;
+    const provider: ChatProvider = {
+      id: "openai-compatible",
+      model: "fake",
+      supportsVision: false,
+      supportsTools: true,
+      async *stream(req) {
+        seenToolChoice.push(req.toolChoice);
+        const script = scripts[Math.min(i, scripts.length - 1)] ?? [];
+        i += 1;
+        for (const ev of script) yield ev;
+      },
+    };
+    const tools: AgentTools = {
+      defs: [
+        { name: "build_part", description: "", parameters: { type: "object" } },
+        { name: "answer_user", description: "", parameters: { type: "object" } },
+      ],
+      handlers: {
+        build_part: async () => ({ result: "Built the part (1 feature)." }),
+        answer_user: async () => ({ result: "done" }),
+      },
+    };
+
+    const res = await runAgent({
+      provider,
+      system: "s",
+      messages: [{ role: "user", content: "make a box" }],
+      tools,
+      firstTool: "build_part",
+    });
+
+    expect(res.finish).toBe("answer");
+    expect(seenToolChoice[0]).toEqual({ tool: "build_part" }); // turn 1 forced
+    expect(seenToolChoice[1]).toBeUndefined(); // later turns auto
+  });
+
   it("halts at the step cap when the model never finishes", async () => {
     const provider = new ScriptedProvider([[toolCall("c", "build_part", {}), done()]]); // same script forever
     const tools: AgentTools = {

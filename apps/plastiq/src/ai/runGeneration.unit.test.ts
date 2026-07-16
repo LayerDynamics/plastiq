@@ -3,7 +3,7 @@
 // prompt + messages it was handed so we can assert the wiring.
 
 import { describe, expect, it } from "vitest";
-import { buildSystemPrompt, runGeneration } from "./runGeneration.js";
+import { buildSystemPrompt, offersCreateMesh, runGeneration } from "./runGeneration.js";
 import type { AgentTools } from "./agentRunner.js";
 import type { ChatMessage, ChatProvider, StreamEvent } from "./providers/types.js";
 import type { CadDocument } from "../store/types.js";
@@ -91,5 +91,36 @@ describe("runGeneration (SPEC-6 R2.4)", () => {
     ];
     await runGeneration({ provider, input: content, tools: noTools });
     expect(seen.messages![0]).toEqual({ role: "user", content });
+  });
+});
+
+describe("creative guidance tracks the tool surface (finding 6-M2)", () => {
+  /** Tools that offer the creative path — as buildTurnTools always wires it in the app. */
+  const creativeTools: AgentTools = {
+    defs: [{ name: "create_mesh", description: "3D gen", parameters: { type: "object" } }],
+    handlers: {},
+  };
+
+  it("offersCreateMesh reads the offered defs", () => {
+    expect(offersCreateMesh(creativeTools)).toBe(true);
+    expect(offersCreateMesh(noTools)).toBe(false);
+  });
+
+  it("ships the creative guidance when create_mesh is offered — no flag needed", async () => {
+    const { provider, seen } = recordingProvider();
+    await runGeneration({ provider, input: "a clay vase", tools: creativeTools });
+    expect(seen.system).toContain("create_mesh");
+  });
+
+  it("omits the creative guidance when create_mesh is not offered (headless parametric-only tools)", async () => {
+    const { provider, seen } = recordingProvider();
+    await runGeneration({ provider, input: "a cube", tools: noTools });
+    expect(seen.system).not.toContain("create_mesh");
+  });
+
+  it("an explicit `creative` override wins (the CADGenBench harness pins false)", async () => {
+    const { provider, seen } = recordingProvider();
+    await runGeneration({ provider, input: "a clay vase", tools: creativeTools, creative: false });
+    expect(seen.system).not.toContain("create_mesh");
   });
 });

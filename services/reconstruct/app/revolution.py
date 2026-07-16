@@ -19,14 +19,12 @@ from typing import Optional
 import numpy as np
 import trimesh
 from OCC.Core.BRepBuilderAPI import BRepBuilderAPI_MakeFace, BRepBuilderAPI_MakePolygon
-from OCC.Core.BRepCheck import BRepCheck_Analyzer
-from OCC.Core.BRepGProp import brepgprop
 from OCC.Core.BRepPrimAPI import BRepPrimAPI_MakeRevol
 from OCC.Core.gp import gp_Ax1, gp_Dir, gp_Pnt
-from OCC.Core.GProp import GProp_GProps
 from OCC.Core.TopAbs import TopAbs_FACE
 from OCC.Core.TopExp import TopExp_Explorer
 
+from .closure import verify_closure
 from .curved_faces import SolidResult
 from .detect import dominant_axis
 
@@ -79,18 +77,16 @@ def revolve_profile(profile_ab: np.ndarray, centroid: np.ndarray, axis: np.ndarr
     face = BRepBuilderAPI_MakeFace(poly.Wire(), True)
     if not face.IsDone():
         return SolidResult(face.Shape(), False, False, -1, 0.0, 0)
-    solid = BRepPrimAPI_MakeRevol(face.Face(), gp_Ax1(gp_Pnt(*centroid), gp_Dir(*axis))).Shape()
-    valid = BRepCheck_Analyzer(solid).IsValid()
-    props = GProp_GProps()
-    brepgprop.VolumeProperties(solid, props)
-    volume = float(props.Mass())
+    revolved = BRepPrimAPI_MakeRevol(face.Face(), gp_Ax1(gp_Pnt(*centroid), gp_Dir(*axis))).Shape()
+    # MakeRevol shapes are born closed, but closure is VERIFIED, never assumed (FR-7):
+    # real free-edge count + validity + positive volume.
+    solid, rep = verify_closure(revolved)
     n_faces = 0
     exp = TopExp_Explorer(solid, TopAbs_FACE)
     while exp.More():
         n_faces += 1
         exp.Next()
-    is_solid = bool(valid and volume > 0)
-    return SolidResult(solid, is_solid, valid, 0, volume, n_faces, primitive="revolution")
+    return SolidResult(solid, rep.is_solid, rep.is_valid, rep.free_edges, rep.volume, n_faces, primitive="revolution")
 
 
 def reconstruct_revolution(vertices: np.ndarray, faces: np.ndarray, vol_tol: float = 0.02) -> Optional[SolidResult]:

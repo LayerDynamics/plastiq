@@ -2,9 +2,10 @@
 //
 // Builds the current part and serializes its tagged mesh into a structured,
 // text-friendly enumeration of faces and edges (with normals, positions, real
-// computed area/length, and a planar/straight hint) — no rendered image needed
-// (spec §6.3). The model references faces/edges by INDEX; `faceRefs`/`edgeRefs`
-// are index-aligned so the client writes the concrete FaceRef/EdgeRef into a
+// computed area/length, a planar/cylindrical/curved face classification per
+// FR-11, and a straight hint per edge) — no rendered image needed (spec §6.3).
+// The model references faces/edges by INDEX; `faceRefs`/`edgeRefs` are
+// index-aligned so the client writes the concrete FaceRef/EdgeRef into a
 // dress-up feature's data (these resolve on rebuild via resolveFaceRef/Edge).
 
 import type { FaceRef, EdgeRef } from "@plastiq/cad";
@@ -28,7 +29,11 @@ export interface InspectedFace {
   centroid: V3;
   /** Face area in mm². */
   area: number;
-  kind: "planar" | "curved";
+  /** FR-11 classification: flat, a circular cylinder patch (a hole wall, a rod's
+   * lateral face, a fillet blend), or any other non-planar surface. */
+  kind: "planar" | "cylindrical" | "curved";
+  /** Cylinder radius in mm — present only for kind "cylindrical". */
+  radius?: number;
 }
 export interface InspectedEdge {
   index: number;
@@ -52,6 +57,9 @@ export interface Inspection {
 
 const PLANAR_DOT_TOL = Math.cos((5 * Math.PI) / 180); // within 5° ⇒ planar
 const STRAIGHT_TOL = 1e-4; // perpendicular deviation / length below this ⇒ straight
+const CYL_AXIS_DOT_TOL = Math.sin((5 * Math.PI) / 180); // triangle normals within 5° of ⊥ the axis
+const CYL_RADIUS_RTOL = 0.02; // vertex radial scatter ≤ 2% of the radius ⇒ constant radius
+const DEGENERATE_EPS = 1e-12; // below this a direction/determinant carries no information
 
 function v(vertices: ArrayLike<number>, i: number): V3 {
   return [vertices[i * 3]!, vertices[i * 3 + 1]!, vertices[i * 3 + 2]!];
@@ -65,20 +73,126 @@ const norm = (a: V3): V3 => {
   return [a[0] / l, a[1] / l, a[2] / l];
 };
 
-/** Sum the triangle areas of a face group (m²), and whether every triangle's normal
- * aligns with the face normal (planar) or not (curved, e.g. a cylinder). */
-function faceAreaAndKind(mesh: MeshView, g: { normal: V3; start: number; count: number }): { area: number; kind: "planar" | "curved" } {
+/** Estimate a cylinder axis from a curved face's triangle normals: on a circular
+ * cylinder every normal is perpendicular to the axis, so any non-parallel pair's cross
+ * product points along it. Accumulate sign-aligned pair crosses (robust against
+ * tessellation noise); null when the normals carry no rotational spread. */
+function cylinderAxis(normals: V3[]): V3 | null {
+  const n0 = normals[0];
+  if (!n0) return null;
+  let axis: V3 = [0, 0, 0];
+  for (let i = 1; i < normals.length; i++) {
+    const c = cross(n0, normals[i]!);
+    if (len(c) < 1e-6) continue; // (anti)parallel to n0 — no axis information
+    const aligned: V3 = dot(c, axis) < 0 ? [-c[0], -c[1], -c[2]] : c;
+    axis = [axis[0] + aligned[0], axis[1] + aligned[1], axis[2] + aligned[2]];
+  }
+  return len(axis) < 1e-6 ? null : norm(axis);
+}
+
+/** Least-squares (Kåsa) circle fit on mean-centred 2D points. Returns the centre (in
+ * the centred frame) + radius, or null for a degenerate (collinear) point set. */
+function fitCircle(us: number[], vs: number[]): { cu: number; cv: number; r: number } | null {
+  const n = us.length;
+  let suu = 0, suv = 0, svv = 0, suq = 0, svq = 0, sq = 0;
+  for (let i = 0; i < n; i++) {
+    const u = us[i]!;
+    const w = vs[i]!;
+    const q = u * u + w * w;
+    suu += u * u;
+    suv += u * w;
+    svv += w * w;
+    suq += u * q;
+    svq += w * q;
+    sq += q;
+  }
+  // Centred data ⇒ Σu = Σv = 0 and the 3×3 Kåsa system decouples: C = -Σq/n and a 2×2
+  // solve for [A, B] in (u² + v² + Au + Bv + C) ≈ 0.
+  const det = suu * svv - suv * suv;
+  if (Math.abs(det) < DEGENERATE_EPS * (suu + svv) * (suu + svv) || suu + svv < DEGENERATE_EPS) return null;
+  const a = (-suq * svv + svq * suv) / det;
+  const b = (-svq * suu + suq * suv) / det;
+  const c = -sq / n;
+  const cu = -a / 2;
+  const cv = -b / 2;
+  const r2 = cu * cu + cv * cv - c;
+  if (!(r2 > 0) || !Number.isFinite(r2)) return null;
+  return { cu, cv, r: Math.sqrt(r2) };
+}
+
+/** Test a non-planar face group for a circular cylinder: (1) its triangle normals share
+ * one axis they are all perpendicular to (rules out spheres/cones/freeform), and (2) its
+ * vertices sit at a constant radius from that axis — verified by a least-squares circle
+ * fit of the vertices projected along the axis (rules out non-circular extrusions).
+ * Returns the radius in SI metres, or null when the face is not cylindrical. */
+function cylinderRadius(mesh: MeshView, g: { start: number; count: number }, normals: V3[]): number | null {
+  const axis = cylinderAxis(normals);
+  if (!axis) return null;
+  for (const n of normals) {
+    if (Math.abs(dot(n, axis)) > CYL_AXIS_DOT_TOL) return null;
+  }
+
+  // Project the group's (unique) vertices onto the plane perpendicular to the axis.
+  const ref: V3 = Math.abs(axis[0]) < 0.9 ? [1, 0, 0] : [0, 1, 0];
+  const e1 = norm(cross(axis, ref));
+  const e2 = cross(axis, e1);
+  const seen = new Set<number>();
+  const us: number[] = [];
+  const vs: number[] = [];
+  for (let k = g.start; k < g.start + g.count; k++) {
+    const vi = mesh.indices[k]!;
+    if (seen.has(vi)) continue;
+    seen.add(vi);
+    const p = v(mesh.vertices, vi);
+    us.push(dot(p, e1));
+    vs.push(dot(p, e2));
+  }
+  if (us.length < 3) return null;
+  // Mean-centre for numerical conditioning (SI coordinates are small; 4th-power sums
+  // of raw values would be poorly scaled).
+  const mu = us.reduce((s, x) => s + x, 0) / us.length;
+  const mv = vs.reduce((s, x) => s + x, 0) / vs.length;
+  const cu = us.map((x) => x - mu);
+  const cv = vs.map((x) => x - mv);
+
+  const fit = fitCircle(cu, cv);
+  if (!fit) return null;
+  // Tessellation vertices lie ON the true surface, so a real cylinder's vertices sit at
+  // the fitted radius to within numerical noise; a blend/freeform surface scatters.
+  let maxDev = 0;
+  for (let i = 0; i < cu.length; i++) {
+    const d = Math.hypot(cu[i]! - fit.cu, cv[i]! - fit.cv);
+    maxDev = Math.max(maxDev, Math.abs(d - fit.r));
+  }
+  return maxDev <= CYL_RADIUS_RTOL * fit.r ? fit.r : null;
+}
+
+/** Sum the triangle areas of a face group (m²) and classify it (FR-11): planar when
+ * every triangle normal aligns with the face normal, cylindrical when the normals and
+ * vertices match a circular cylinder (see cylinderRadius), otherwise curved. */
+function faceAreaAndKind(
+  mesh: MeshView,
+  g: { normal: V3; start: number; count: number },
+): { area: number; kind: "planar" | "cylindrical" | "curved"; radius?: number } {
   let area = 0;
   let planar = true;
+  const groupN = norm(g.normal);
+  const normals: V3[] = [];
   for (let k = g.start; k < g.start + g.count; k += 3) {
     const a = v(mesh.vertices, mesh.indices[k]!);
     const b = v(mesh.vertices, mesh.indices[k + 1]!);
     const c = v(mesh.vertices, mesh.indices[k + 2]!);
     const triN = cross(sub(b, a), sub(c, a));
-    area += 0.5 * len(triN);
-    if (planar && dot(norm(triN), norm(g.normal)) < PLANAR_DOT_TOL) planar = false;
+    const l = len(triN);
+    area += 0.5 * l;
+    if (l < DEGENERATE_EPS) continue; // sliver triangle — no usable direction
+    const n: V3 = [triN[0] / l, triN[1] / l, triN[2] / l];
+    normals.push(n);
+    if (planar && dot(n, groupN) < PLANAR_DOT_TOL) planar = false;
   }
-  return { area, kind: planar ? "planar" : "curved" };
+  if (planar) return { area, kind: "planar" };
+  const radius = cylinderRadius(mesh, g, normals);
+  return radius != null ? { area, kind: "cylindrical", radius } : { area, kind: "curved" };
 }
 
 /** Polyline length (m) + straightness of a flat [x,y,z,…] edge. */
@@ -111,8 +225,15 @@ export function inspectMesh(mesh: MeshView): Inspection {
   const faces: InspectedFace[] = [];
   const faceRefs: FaceRef[] = [];
   mesh.faceGroups.forEach((g, index) => {
-    const { area, kind } = faceAreaAndKind(mesh, g);
-    faces.push({ index, normal: g.normal, centroid: g.centroid, area: area * 1e6, kind });
+    const { area, kind, radius } = faceAreaAndKind(mesh, g);
+    faces.push({
+      index,
+      normal: g.normal,
+      centroid: g.centroid,
+      area: area * 1e6,
+      kind,
+      ...(radius != null ? { radius: toMm(radius) } : {}),
+    });
     faceRefs.push({ normal: g.normal, centroid: g.centroid });
   });
 
@@ -125,7 +246,8 @@ export function inspectMesh(mesh: MeshView): Inspection {
   });
 
   const faceLines = faces.map(
-    (f) => `Face ${f.index}: ${f.kind}, normal ${dir3(f.normal)}, centroid ${mm3(f.centroid)} mm, area ${f.area.toFixed(1)} mm²`,
+    (f) =>
+      `Face ${f.index}: ${f.kind}${f.kind === "cylindrical" && f.radius != null ? ` (radius ${f.radius.toFixed(1)} mm)` : ""}, normal ${dir3(f.normal)}, centroid ${mm3(f.centroid)} mm, area ${f.area.toFixed(1)} mm²`,
   );
   const edgeLines = edges.map(
     (e) => `Edge ${e.index}: ${e.straight ? "straight" : "curved"}, midpoint ${mm3(e.midpoint)} mm, length ${e.length.toFixed(1)} mm, between faces ${dir3(e.faceNormals[0])}/${dir3(e.faceNormals[1])}`,

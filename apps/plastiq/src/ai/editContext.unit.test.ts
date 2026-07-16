@@ -32,4 +32,24 @@ describe("R2.2 edit context", () => {
     const json = ctx.slice(ctx.indexOf("{"), ctx.lastIndexOf("}") + 1);
     expect(JSON.parse(json)).toEqual(toAuthoringDoc(doc));
   });
+
+  it("digests an imported STEP instead of dumping its text (no prompt blow-up)", () => {
+    // A realistic-but-huge imported body: a 600 KB STEP-like blob with many faces.
+    const bigStep =
+      "ISO-10303-21;\nHEADER;\n" +
+      "#1=ADVANCED_FACE();\n".repeat(20000) +
+      "#2=MANIFOLD_SOLID_BREP();\nENDSEC;\n";
+    const doc: CadDocument = {
+      features: [{ id: "imp", type: "importStep", data: { step: bigStep } }],
+      params: {},
+    };
+    const ctx = editContext(doc)!;
+    // The raw STEP must NOT be in the prompt...
+    expect(ctx).not.toContain("ISO-10303");
+    expect(ctx.length).toBeLessThan(2000);
+    // ...but a digest of the imported body must be (face count + a note).
+    expect(ctx).toContain("importedSolid");
+    expect(ctx).toContain("\"faces\": 20000");
+    expect(ctx).toContain("edit by adding features");
+  });
 });

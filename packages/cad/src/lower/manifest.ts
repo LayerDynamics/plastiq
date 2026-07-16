@@ -2,8 +2,9 @@
 // the contract between @plastiq/cad (producer, via exportForSim) and @plastiq/sim
 // (consumer, via spawnManifest). It is plain JSON: each body is a compound of one
 // or more convex-hull colliders posed by its world centre of mass; constraints
-// are hinge/fixed joints. A convex part lowers to one collider; a concave part is
-// decomposed into several convex pieces (see lower/decompose.ts).
+// are hinge/slider/cylindrical/ball/planar/fixed joints. A convex part lowers to
+// one collider; a concave part is decomposed into several convex pieces (see
+// lower/decompose.ts).
 
 /** A convex-hull collider in the body's local frame (centred at the COM). */
 export interface HullCollider {
@@ -32,8 +33,33 @@ export interface ManifestBody {
   readonly fixed?: boolean;
 }
 
+/**
+ * The simulated-joint vocabulary. All frames are WORLD-space at spawn:
+ *   hinge       — rotation about `axis` through `origin` (1 DOF).
+ *   slider      — translation along `axis` only (1 DOF; rotation locked).
+ *   cylindrical — rotation about AND translation along `axis` (2 DOF).
+ *   ball        — free rotation about the point `origin` (3 DOF; `axis` unused).
+ *   planar      — translation in the plane through `origin` with normal `axis`,
+ *                 plus rotation about that normal (3 DOF).
+ *   fixed       — all 6 DOF locked in the bodies' CURRENT relative pose.
+ * The kind list is additive within manifest version 1: the per-constraint kind
+ * check below rejects unknown kinds loudly, so an older parser meeting a newer
+ * manifest fails at the offending constraint with a precise message — the
+ * version gate is reserved for STRUCTURAL breaks, not vocabulary growth.
+ */
+export type ManifestConstraintKind = "hinge" | "slider" | "cylindrical" | "ball" | "planar" | "fixed";
+
+export const MANIFEST_CONSTRAINT_KINDS: readonly ManifestConstraintKind[] = [
+  "hinge",
+  "slider",
+  "cylindrical",
+  "ball",
+  "planar",
+  "fixed",
+];
+
 export interface ManifestConstraint {
-  readonly kind: "hinge" | "fixed";
+  readonly kind: ManifestConstraintKind;
   readonly bodyA: string;
   readonly bodyB: string;
   readonly origin: readonly [number, number, number];
@@ -75,10 +101,13 @@ export function isSimManifest(x: unknown): x is SimManifest {
   if (typeof m["source"] !== "string") return false;
   if (!isVec(m["gravity"], 3)) return false;
   if (!Array.isArray(m["bodies"]) || !Array.isArray(m["constraints"])) return false;
+  const bodyIds = new Set<string>();
   for (const b of m["bodies"] as unknown[]) {
     if (typeof b !== "object" || b === null) return false;
     const body = b as Record<string, unknown>;
     if (typeof body["id"] !== "string" || body["id"] === "") return false;
+    if (bodyIds.has(body["id"])) return false; // duplicate body ids are ambiguous joint targets
+    bodyIds.add(body["id"]);
     if (typeof body["mass"] !== "number" || !Number.isFinite(body["mass"]) || body["mass"] < 0)
       return false;
     if (!isVec(body["com"], 3) || !isVec(body["orientation"], 4)) return false;
@@ -105,8 +134,11 @@ export function isSimManifest(x: unknown): x is SimManifest {
   for (const c of m["constraints"] as unknown[]) {
     if (typeof c !== "object" || c === null) return false;
     const con = c as Record<string, unknown>;
-    if (con["kind"] !== "hinge" && con["kind"] !== "fixed") return false;
+    if (!(MANIFEST_CONSTRAINT_KINDS as readonly unknown[]).includes(con["kind"])) return false;
     if (typeof con["bodyA"] !== "string" || typeof con["bodyB"] !== "string") return false;
+    // Referential integrity: every constraint must name declared bodies — the sim
+    // side rejects dangling refs too (a joint cannot attach to nothing).
+    if (!bodyIds.has(con["bodyA"]) || !bodyIds.has(con["bodyB"])) return false;
     if (!isVec(con["origin"], 3) || !isVec(con["axis"], 3)) return false;
   }
   return true;

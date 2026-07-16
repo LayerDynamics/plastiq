@@ -10,17 +10,22 @@ import type { InstanceBody } from "./Assembly.js";
 import type { DatumPlane } from "@plastiq/cad";
 import type { TransferMesh } from "../worker/protocol.js";
 import type { MeshBody } from "../mesh/meshBody.js";
+import type { PointCloudDoc } from "../store/types.js";
 
 export function Viewport3D({
   mesh,
   meshBodies,
+  pointCloud,
   sketchFrame,
   instances,
+  onMeshBodiesChange,
 }: {
   mesh: TransferMesh | null;
   meshBodies: MeshBody[] | null;
+  pointCloud: PointCloudDoc | null;
   sketchFrame: DatumPlane | null;
   instances: InstanceBody[] | null;
+  onMeshBodiesChange: (bodies: MeshBody[], persist?: boolean) => void;
 }): React.JSX.Element {
   return (
     <Canvas
@@ -31,11 +36,20 @@ export function Viewport3D({
         camera.up.set(0, 0, 1); // Z-up, matching the CAD/sim convention.
         camera.lookAt(0, 0, 0.02);
         gl.setClearColor(VIEWPORT_BG, 1);
+        // Required for section analysis (global + material clippingPlanes).
+        gl.localClippingEnabled = true;
       }}
       style={{ position: "absolute", inset: 0 }}
     >
       <color attach="background" args={[VIEWPORT_BG]} />
-      <Scene mesh={mesh} meshBodies={meshBodies} sketchFrame={sketchFrame} instances={instances} />
+      <Scene
+        mesh={mesh}
+        meshBodies={meshBodies}
+        pointCloud={pointCloud}
+        sketchFrame={sketchFrame}
+        instances={instances}
+        onMeshBodiesChange={onMeshBodiesChange}
+      />
     </Canvas>
   );
 }

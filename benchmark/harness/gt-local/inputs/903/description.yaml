@@ -1,0 +1,9 @@
+# Self-owned fixture (CB6.3 mini-GT): drilled plate, two through holes.
+task_type: generation
+input_type: text
+description: >-
+  A rectangular plate, 80 mm long (X), 50 mm wide (Y), 6 mm thick (Z).
+  Two 8 mm diameter holes pass straight through the plate's thickness,
+  both centred on the mid-width line y = 25 mm: one at x = 20 mm and one
+  at x = 60 mm.
+input_files: []

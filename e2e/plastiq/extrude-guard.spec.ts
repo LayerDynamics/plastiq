@@ -1,32 +1,29 @@
-// Regression (no mock): Extrude/Cut/Revolve are gated on an upstream sketch
-// profile. Before, clicking Extrude on the seeded box (no sketch) appended a
-// feature that hard-failed the whole rebuild ("no sketch profile upstream") and
-// poisoned every later rebuild — the app looked permanently broken. Now the
-// buttons are disabled until a profile exists, and enabled they build cleanly.
+// ADR-0014: Extrude/Cut/Revolve without a profile open a feature-driven sketch
+// (no longer hard-disabled). With a profile, Extrude still appends a solid feature.
 
 import { expect, test } from "@playwright/test";
 
-test("Extrude/Cut/Revolve are disabled with no sketch, enabled + working with one", async ({
-  page,
-}) => {
+test("Extrude without profile opens a feature-driven sketch session", async ({ page }) => {
   await page.goto("/");
   await expect(page.getByTestId("status")).toHaveText("ready", { timeout: 240_000 });
 
-  // Seeded box only → no sketch profile → the profile-consuming features are off.
-  await expect(page.getByTestId("add-extrude")).toBeDisabled();
-  await expect(page.getByTestId("add-cut")).toBeDisabled();
-  await expect(page.getByTestId("add-revolve")).toBeDisabled();
-
-  // Add a sketch profile (the quick-add Sketch uses a default rectangle).
-  await page.getByTestId("feature-menu").getByText("Sketch", { exact: true }).click();
-
-  // Now the buttons enable.
+  // No sketch yet — Extrude is still enabled (opens sketch), not hard-disabled.
   await expect(page.getByTestId("add-extrude")).toBeEnabled();
-  await expect(page.getByTestId("add-cut")).toBeEnabled();
-  await expect(page.getByTestId("add-revolve")).toBeEnabled();
+  await page.getByTestId("add-extrude").click();
+  await expect(page.getByTestId("sketcher")).toBeVisible({ timeout: 30_000 });
 
-  // Extruding the profile rebuilds cleanly — status returns to "ready", never the
-  // "rebuild failed: … no sketch profile upstream" that the old ungated click hit.
+  // Cancel leaves no poisoned rebuild.
+  await page.getByTestId("sketch-close").click();
+  await expect(page.getByTestId("sketcher")).toHaveCount(0);
+  await expect(page.getByTestId("status")).toHaveText("ready", { timeout: 240_000 });
+});
+
+test("Extrude with a profile rebuilds cleanly", async ({ page }) => {
+  await page.goto("/");
+  await expect(page.getByTestId("status")).toHaveText("ready", { timeout: 240_000 });
+
+  // Quick-add Sketch injects a default rectangle profile without the sketcher.
+  await page.getByTestId("feature-menu").getByText("Sketch", { exact: true }).click();
   await page.getByTestId("add-extrude").click();
   await expect(page.getByTestId("status")).toHaveText("ready", { timeout: 240_000 });
 });

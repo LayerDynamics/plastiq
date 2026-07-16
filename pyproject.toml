@@ -1,0 +1,87 @@
+# Repo-root Python tooling configuration for cad-studio.
+#
+# cad-studio is a pnpm / TypeScript monorepo whose Python lives in independent,
+# conda-managed FastAPI services (services/*) and benchmark harnesses (benchmark/*).
+# There is deliberately NO unified Python package or environment: each service pins
+# its own runtime deps in environment.yml (pythonocc-core is conda-forge-only and MLX
+# is Apple-Silicon-only, so neither is pip-installable as a plain wheel), and CI runs
+# each suite inside that service's own conda env (.github/workflows/ci.yml).
+#
+# This file therefore carries NO [project] or [build-system] table — the repo root is
+# not an installable distribution and must not masquerade as one. It exists solely to
+# centralize the shared developer-tooling config (ruff, pytest) so every first-party
+# Python tree is linted and tested the same way, and so the vendored / third-party
+# trees (ref/, benchmark/cadgenbench/ — both git-ignored) are never touched by a
+# repo-root tooling run.
+#
+# How this composes with the per-service files: ruff and pytest each read the CLOSEST
+# config to a given file, walking upward. The four services that ship their own
+# [tool.ruff] / [tool.pytest.ini_options] blocks (nerf, nurbs, photogrammetry, and —
+# for pytest — reconstruct) keep using those; their values intentionally match this
+# root, so the end state is uniform whichever way a suite is invoked. This root is the
+# effective config for the sub-projects that DON'T carry the relevant block —
+# services/capture (no pyproject at all), services/reconstruct (no [tool.ruff]),
+# benchmark/harness (no [tool.ruff]) — and for anything run from the repo root itself.
+
+[tool.ruff]
+# Matches every service's convention (line-length 110, py311 floor). py311 is the
+# minimum the services pin in environment.yml; harness targets 3.12 but the default
+# rule set below is version-agnostic, so a single floor is correct for the whole repo.
+line-length = 110
+target-version = "py311"
+# Belt-and-suspenders beyond .gitignore: never lint vendored or generated trees, even
+# under `--no-respect-gitignore`, a partial checkout, or an editor integration that
+# ignores VCS state. ref/ and benchmark/cadgenbench/ are third-party vendored code we
+# do not own; the rest are build / cache artifacts.
+extend-exclude = [
+  "ref",
+  "benchmark/cadgenbench",
+  "node_modules",
+  "dist",
+  "build",
+  "coverage",
+  ".venv",
+  "venv",
+  ".ruff_cache",
+  ".pytest_cache",
+]
+
+[tool.ruff.lint]
+# Ruff's default rule set (pycodestyle E4/E7/E9 + Pyflakes F) — the exact policy every
+# service pyproject already uses implicitly by setting only line-length / target-version.
+# Pinned explicitly here so the repo-wide baseline is documented in one place. No extra
+# rules and no per-file-ignores are added on top: the sibling service configs
+# (nerf/nurbs/photogrammetry) carry neither, so adding any here would make the effective
+# policy differ by directory — the opposite of this file's consistency goal. In
+# particular import sorting (I) is deliberately NOT enabled: the existing first-party
+# code was not written under it and turning it on would flag dozens of otherwise-clean
+# files, which is a style-policy change rather than the consistent-config intent here.
+select = ["E4", "E7", "E9", "F"]
+
+[tool.pytest.ini_options]
+# No `testpaths` or `pythonpath` here on purpose. The Python suites live under each
+# service (services/<svc>/tests) and are run from inside that service — CI cd's into
+# the service dir and calls `python -m pytest`, which puts the service on sys.path and
+# picks up the service's own closer config. Several suites also hard-require Apple-
+# Silicon MLX and abort the whole interpreter at import on a Metal-less host, so a
+# repo-root `pytest` must never auto-collect them. This block only registers the
+# shared marker and keeps a stray root run from descending into vendored trees.
+addopts = "-q"
+markers = [
+  "slow: long-running tests (deselect with -m 'not slow'); real-OCCT/VTK fixture scoring, minutes",
+]
+# Basenames, not paths: pytest matches each candidate directory's basename with
+# fnmatch, so a slash-form pattern is version-dependent and may silently never match.
+# Setting this key REPLACES pytest's built-in defaults, so the dotdir catch-all (.*)
+# and the standard build/dist/venv/node_modules entries are re-listed explicitly.
+norecursedirs = [
+  ".*",
+  "*.egg",
+  "*.egg-info",
+  "build",
+  "dist",
+  "node_modules",
+  "venv",
+  "ref",
+  "cadgenbench",
+]

@@ -2,9 +2,13 @@
 // path. Plastiq loads in a real browser, the worker builds the seeded box with
 // real OCCT, then the test dispatches a genuine `contextmenu` event on the canvas.
 // That fires useCanvasRightClick → Picker raycast → resolveContextTarget →
-// buildMenuSections → the drei <Html> dropdown, exactly as a user right-click
-// would. We assert the menu's contents match the target and that clicking an item
-// runs the real store action (a feature is appended / state changes).
+// plastiqRecmManager → the @plastiq/recm ring menu (drei <Html>), exactly as a
+// user right-click would. The menu is a RADIAL RING: the root ring shows the
+// applicable categories (Create/Modify/View/…), the first category is auto-
+// expanded onto an outer ring, and opening another category swaps the outer ring
+// to its actions. Items expose `ctx-{action-id}` testids. We assert the menu's
+// contents match the target and that clicking an item runs the real store action
+// (a feature is appended / state changes).
 
 import { expect, test, type Page } from "@playwright/test";
 
@@ -33,6 +37,25 @@ const picks = (page: Page): Promise<{ kind: string; id: number }[]> =>
       (globalThis as { __cadStore?: { getState(): { picks: { kind: string; id: number }[] } } })
         .__cadStore?.getState()
         .picks ?? [],
+  );
+
+/** The RecmContext summary the live menu published on `__plastiqRecmContext`:
+ * the selection + rendered scene it carried, and the rings it resolved to. This
+ * is the proof the live context actually reaches the menu. */
+const recmSeam = (
+  page: Page,
+): Promise<{
+  source: string;
+  targetKind: string;
+  selection: { id: string; kind: string }[];
+  renderedObjects: { id: string; kind: string }[];
+  renderedMenus: { id: string; depth: number }[];
+  categories: string[];
+  activeChildren: string[];
+} | null> =>
+  page.evaluate(
+    () =>
+      (globalThis as { __plastiqRecmContext?: unknown }).__plastiqRecmContext as never ?? null,
   );
 
 /** Dispatch a real right-click at a client pixel on the canvas: the full RIGHT-button
@@ -72,7 +95,7 @@ async function bootAndFit(page: Page): Promise<{ x: number; y: number; w: number
   return { x: box.x, y: box.y, w: box.width, h: box.height };
 }
 
-test("right-clicking a face opens its menu, selects it, and Shell runs", async ({ page }) => {
+test("right-clicking a face opens its ring menu, selects it, and Shell runs", async ({ page }) => {
   const b = await bootAndFit(page);
 
   // Right-click the centre → a face is under the cursor.
@@ -85,8 +108,14 @@ test("right-clicking a face opens its menu, selects it, and Shell runs", async (
   // Select-then-menu (CAD-standard): the clicked face is now the selection.
   await expect.poll(async () => (await picks(page)).filter((p) => p.kind === "face").length).toBe(1);
 
-  // Face actions are present; edge-only actions are not.
+  // Root ring: the applicable categories. Create is auto-expanded, so its face
+  // action ("Sketch on face") is already on the outer ring.
+  await expect(page.getByTestId("ctx-create")).toBeVisible();
   await expect(page.getByTestId("ctx-sketch-on-face")).toBeVisible();
+
+  // Open Modify → its dress-up actions appear on the outer ring. Shell is a face
+  // action; Fillet is edge-only, so it is absent for a face context.
+  await page.getByTestId("ctx-modify").click();
   await expect(page.getByTestId("ctx-shell")).toBeVisible();
   await expect(page.getByTestId("ctx-fillet")).toHaveCount(0);
 
@@ -128,7 +157,9 @@ test("right-clicking in the sketcher offers the applicable constraints", async (
     st().setSelection([line.id]);
   });
 
-  // Right-click the sketch surface → sketch context menu with line constraints.
+  // Right-click the sketch surface → sketch context menu. In a sketch the only
+  // applicable category is Sketch, so it auto-expands and its constraint/finish
+  // actions are directly on the outer ring.
   const svg = page.getByTestId("sketch-svg");
   const box = (await svg.boundingBox())!;
   await page.evaluate(
@@ -197,6 +228,8 @@ test("right-clicking an assembly instance offers instance actions", async ({ pag
   const box = (await page.locator("#viewport-root canvas").boundingBox())!;
   await rightClick(page, box.x + box.width / 2, box.y + box.height / 2);
 
+  // Assembly is the first applicable category, so its instance actions are on the
+  // auto-expanded outer ring. Shell (a Modify/face action) has no place here.
   await expect(page.getByTestId("canvas-context-menu")).toBeVisible();
   await expect(page.getByTestId("ctx-instance-fixed")).toBeVisible();
   await expect(page.getByTestId("ctx-explode")).toBeVisible();
@@ -214,6 +247,38 @@ test("right-clicking an assembly instance offers instance actions", async ({ pag
   await expect.poll(fixedOf).toBe(!before);
 });
 
+test("the live context (selection + rendered scene) reaches the menu", async ({ page }) => {
+  const b = await bootAndFit(page);
+
+  // Right-click a face → the RecmContext the menu built carries the real 3D pick
+  // and the live scene inventory, and resolves the face-appropriate categories.
+  await rightClick(page, b.x + b.w / 2, b.y + b.h / 2);
+  await expect(page.getByTestId("canvas-context-menu")).toBeVisible();
+  const faceSeam = (await recmSeam(page))!;
+  expect(faceSeam.targetKind).toBe("face");
+  expect(faceSeam.selection).toHaveLength(1);
+  expect(faceSeam.selection[0]!.kind).toBe("face");
+  expect(faceSeam.renderedObjects.map((o) => o.id)).toContain("built-part");
+  expect(faceSeam.renderedMenus).toHaveLength(1);
+  expect(faceSeam.categories).toContain("create");
+  expect(faceSeam.categories).toContain("modify");
+
+  // Empty space → a DIFFERENT context reaches the menu: no selection, no Modify.
+  await page.keyboard.press("Escape");
+  await rightClick(page, b.x + 6, b.y + 6);
+  await expect(page.getByTestId("canvas-context-menu")).toBeVisible();
+  const emptySeam = (await recmSeam(page))!;
+  expect(emptySeam.targetKind).toBe("empty");
+  expect(emptySeam.selection).toEqual([]);
+  expect(emptySeam.categories).not.toContain("modify");
+  expect(emptySeam.activeChildren).toContain("new-sketch-xy");
+
+  // Closing the menu clears the seam.
+  await page.keyboard.press("Escape");
+  await expect(page.getByTestId("canvas-context-menu")).toBeHidden();
+  await expect.poll(() => recmSeam(page)).toBeNull();
+});
+
 test("right-clicking empty space shows the global menu and Escape dismisses it", async ({ page }) => {
   const b = await bootAndFit(page);
 
@@ -221,7 +286,8 @@ test("right-clicking empty space shows the global menu and Escape dismisses it",
   await rightClick(page, b.x + 6, b.y + 6);
 
   await expect(page.getByTestId("canvas-context-menu")).toBeVisible();
-  // Empty-space context: new-sketch entries, no face/edge dress-up.
+  // Empty-space context: Create is the first category (auto-expanded), so its
+  // new-sketch entries are on the outer ring; no face/edge dress-up anywhere.
   await expect(page.getByTestId("ctx-new-sketch-xy")).toBeVisible();
   await expect(page.getByTestId("ctx-shell")).toHaveCount(0);
   await expect(page.getByTestId("ctx-fillet")).toHaveCount(0);

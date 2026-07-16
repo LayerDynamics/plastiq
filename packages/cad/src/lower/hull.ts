@@ -48,10 +48,37 @@ function above(f: Face, p: Vec3): number {
  * (fewer than 4, or all coplanar) — a valid 3D solid's tessellation never is.
  */
 export function convexHull(input: readonly Vec3[]): ConvexHull {
-  // Dedup coincident points (the tessellation duplicates corners per face).
+  // Dedup coincident points (the tessellation duplicates corners per face) via a
+  // spatial hash on an EPS-sized grid — O(n) expected instead of the previous
+  // all-pairs scan, with the SAME tolerance predicate (each axis within EPS of a
+  // kept point) and the same first-seen-wins order, so the kept set (and thus
+  // the hull) is identical. A kept point within EPS of `p` on every axis must
+  // round into one of the 27 cells neighbouring p's, so only those are probed;
+  // and two kept points can never share a cell (same cell ⇒ within EPS on every
+  // axis ⇒ the later one would have been deduped), so each cell holds one index.
   const pts: Vec3[] = [];
+  const cells = new Map<string, number>();
+  const cellOf = (v: number): number => Math.round(v / EPS);
   for (const p of input) {
-    if (!pts.some((q) => Math.abs(q[0] - p[0]) < EPS && Math.abs(q[1] - p[1]) < EPS && Math.abs(q[2] - p[2]) < EPS)) {
+    const cx = cellOf(p[0]);
+    const cy = cellOf(p[1]);
+    const cz = cellOf(p[2]);
+    let dup = false;
+    for (let dx = -1; dx <= 1 && !dup; dx++) {
+      for (let dy = -1; dy <= 1 && !dup; dy++) {
+        for (let dz = -1; dz <= 1 && !dup; dz++) {
+          const idx = cells.get(`${cx + dx},${cy + dy},${cz + dz}`);
+          if (idx === undefined) continue;
+          const q = pts[idx]!;
+          dup =
+            Math.abs(q[0] - p[0]) < EPS &&
+            Math.abs(q[1] - p[1]) < EPS &&
+            Math.abs(q[2] - p[2]) < EPS;
+        }
+      }
+    }
+    if (!dup) {
+      cells.set(`${cx},${cy},${cz}`, pts.length);
       pts.push([p[0], p[1], p[2]]);
     }
   }

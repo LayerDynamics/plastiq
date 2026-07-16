@@ -12,12 +12,21 @@
 import * as THREE from "three";
 import type { TransferMesh } from "../worker/protocol.js";
 import type { MeshBody } from "../mesh/meshBody.js";
+import { meshSegments } from "../mesh/editMesh.js";
 
 /** Material slots shared by every face group / edge line; highlight = swap. */
 export const FACE_MATERIAL = { base: 0, hover: 1, selected: 2 } as const;
 
 /** Base/hover/selected colours, shared by edges and vertices. */
 export const ENTITY_COLOR = { base: 0x10141c, hover: 0x4ea1ff, selected: 0xffa23a } as const;
+
+function overlayLineMaterial(color: number, overlay = false): THREE.LineBasicMaterial {
+  return new THREE.LineBasicMaterial({
+    color,
+    depthTest: !overlay,
+    depthWrite: false,
+  });
+}
 
 export interface BuiltPart {
   /** The whole part (solid mesh + edge lines + corner points), added to the scene. */
@@ -65,9 +74,9 @@ export function buildPart(transfer: TransferMesh): BuiltPart {
 
   // Three shared line materials; a highlighted edge points at hover/selected.
   const edgeMaterials = [
-    new THREE.LineBasicMaterial({ color: ENTITY_COLOR.base }),
-    new THREE.LineBasicMaterial({ color: ENTITY_COLOR.hover }),
-    new THREE.LineBasicMaterial({ color: ENTITY_COLOR.selected }),
+    overlayLineMaterial(ENTITY_COLOR.base),
+    overlayLineMaterial(ENTITY_COLOR.hover, true),
+    overlayLineMaterial(ENTITY_COLOR.selected, true),
   ];
   const edges: THREE.LineSegments[] = [];
   for (const e of transfer.edges) {
@@ -83,6 +92,8 @@ export function buildPart(transfer: TransferMesh): BuiltPart {
     g.setAttribute("position", new THREE.BufferAttribute(seg, 3));
     const line = new THREE.LineSegments(g, edgeMaterials[FACE_MATERIAL.base]);
     line.userData["edgeId"] = e.edgeId;
+    line.userData["faceIds"] = e.faceIds;
+    line.renderOrder = 2;
     line.name = `edge-${e.edgeId}`;
     edges.push(line);
   }
@@ -98,9 +109,16 @@ export function buildPart(transfer: TransferMesh): BuiltPart {
     const base = new THREE.Color(ENTITY_COLOR.base);
     for (let i = 0; i < n; i++) base.toArray(colors, i * 3);
     vg.setAttribute("color", new THREE.BufferAttribute(colors, 3));
-    const vmat = new THREE.PointsMaterial({ size: 7, sizeAttenuation: false, vertexColors: true });
+    const vmat = new THREE.PointsMaterial({
+      size: 7,
+      sizeAttenuation: false,
+      vertexColors: true,
+      depthTest: false,
+      depthWrite: false,
+    });
     vertexPoints = new THREE.Points(vg, vmat);
     vertexPoints.userData["vertexIds"] = [...transfer.vertexIds];
+    vertexPoints.renderOrder = 3;
     vertexPoints.name = "part-vertices";
   }
 
@@ -116,6 +134,11 @@ export function buildPart(transfer: TransferMesh): BuiltPart {
 export interface BuiltMeshBody {
   /** The triangle-soup mesh, ready to add to the scene. */
   mesh: THREE.Mesh;
+  /** Selectable mesh edge/standalone segments, each tagged with local segment index. */
+  edges: THREE.LineSegments[];
+  /** Mesh vertices as independently selectable points. */
+  vertexPoints: THREE.Points;
+  edgeMaterials: THREE.LineBasicMaterial[];
   /** Free its geometry + material. */
   dispose(): void;
 }
@@ -123,12 +146,27 @@ export interface BuiltMeshBody {
 /** Fallback surface colour for a mesh body that carries no material. */
 const MESH_BODY_COLOR = 0xb8c0d0;
 
+function meshBodyMaterials(m: MeshBody["material"]): THREE.Material[] {
+  const opacity = m?.opacity ?? 1;
+  const common = {
+    metalness: m?.metalness ?? 0.1,
+    roughness: m?.roughness ?? 0.7,
+    opacity,
+    transparent: opacity < 1,
+  };
+  return [
+    new THREE.MeshStandardMaterial({ ...common, color: m?.color ?? MESH_BODY_COLOR }),
+    new THREE.MeshStandardMaterial({ ...common, color: ENTITY_COLOR.hover }),
+    new THREE.MeshStandardMaterial({ ...common, color: ENTITY_COLOR.selected }),
+  ];
+}
+
 /** Build a renderable THREE.Mesh from a MeshBody triangle soup (SPEC-6 R4.2).
  * A mesh document renders these directly on the main thread — no OCCT and no
  * worker round-trip (decision 24 / R4 refinement 2). Supplied per-vertex normals
  * are reused as-is; otherwise smooth vertex normals are computed for lighting.
- * Unlike {@link buildPart} there are no per-face groups or pickable B-rep
- * entities — a mesh body is opaque display geometry, not an editable B-rep. */
+ * Mesh documents are still non-B-rep, but their raw vertices and triangle/standalone
+ * segments are exposed as directly editable mesh entities. */
 export function buildMeshBody(body: MeshBody): BuiltMeshBody {
   const geom = new THREE.BufferGeometry();
   geom.setAttribute("position", new THREE.BufferAttribute(body.positions, 3));
@@ -139,23 +177,62 @@ export function buildMeshBody(body: MeshBody): BuiltMeshBody {
     geom.computeVertexNormals();
   }
 
-  const m = body.material;
-  const opacity = m?.opacity ?? 1;
-  const material = new THREE.MeshStandardMaterial({
-    color: m?.color ?? MESH_BODY_COLOR,
-    metalness: m?.metalness ?? 0.1,
-    roughness: m?.roughness ?? 0.7,
-    opacity,
-    transparent: opacity < 1,
-  });
+  for (let i = 0; i < body.indices.length; i += 3) geom.addGroup(i, 3, FACE_MATERIAL.base);
+  const material = meshBodyMaterials(body.material);
 
   const mesh = new THREE.Mesh(geom, material);
+  mesh.renderOrder = 0;
   mesh.name = "mesh-body";
+  mesh.userData["faceIds"] = Array.from({ length: Math.floor(body.indices.length / 3) }, (_, i) => i);
+  const edgeMaterials = [
+    overlayLineMaterial(ENTITY_COLOR.base),
+    overlayLineMaterial(ENTITY_COLOR.hover, true),
+    overlayLineMaterial(ENTITY_COLOR.selected, true),
+  ];
+  const edges = meshSegments(body).map((segment, index) => {
+    const points = new Float32Array(6);
+    points.set(body.positions.subarray(segment.a * 3, segment.a * 3 + 3), 0);
+    points.set(body.positions.subarray(segment.b * 3, segment.b * 3 + 3), 3);
+    const edgeGeom = new THREE.BufferGeometry();
+    edgeGeom.setAttribute("position", new THREE.BufferAttribute(points, 3));
+    const line = new THREE.LineSegments(edgeGeom, edgeMaterials[FACE_MATERIAL.base]);
+    line.userData["edgeId"] = index;
+    line.renderOrder = 2;
+    line.name = `mesh-edge-${index}`;
+    return line;
+  });
+
+  const pointGeom = new THREE.BufferGeometry();
+  pointGeom.setAttribute("position", new THREE.BufferAttribute(body.positions, 3));
+  const vertexCount = Math.floor(body.positions.length / 3);
+  const colors = new Float32Array(vertexCount * 3);
+  const base = new THREE.Color(ENTITY_COLOR.base);
+  for (let i = 0; i < vertexCount; i++) base.toArray(colors, i * 3);
+  pointGeom.setAttribute("color", new THREE.BufferAttribute(colors, 3));
+  const pointMat = new THREE.PointsMaterial({
+    size: 7,
+    sizeAttenuation: false,
+    vertexColors: true,
+    depthTest: false,
+    depthWrite: false,
+  });
+  const vertexPoints = new THREE.Points(pointGeom, pointMat);
+  vertexPoints.userData["vertexIds"] = Array.from({ length: vertexCount }, (_, i) => i);
+  vertexPoints.renderOrder = 3;
+  vertexPoints.name = "mesh-vertices";
+
   return {
     mesh,
+    edges,
+    vertexPoints,
+    edgeMaterials,
     dispose() {
       geom.dispose();
-      material.dispose();
+      for (const m of material) m.dispose();
+      for (const line of edges) line.geometry.dispose();
+      for (const m of edgeMaterials) m.dispose();
+      pointGeom.dispose();
+      pointMat.dispose();
     },
   };
 }

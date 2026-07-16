@@ -39,7 +39,12 @@ export {
   type TessellateOptions,
 } from "./mesh/tagged.js";
 export { tessellateTagged } from "./mesh/tessellate.js";
-export { resolveFaceRef, resolveEdgeRef, resolveEdgeDirection } from "./mesh/resolve.js";
+export {
+  resolveFaceRef,
+  resolveEdgeRef,
+  resolveEdgeDirection,
+  resolveEdgeAxis,
+} from "./mesh/resolve.js";
 export { resolveSelector, isSelector, type Selector, type SelectorResult } from "./select/predicates.js";
 export { faceDatumPlane } from "./mesh/faceFrame.js";
 export { exportStep, importStep, exportIges, exportGltf } from "./io/index.js";
@@ -59,6 +64,9 @@ export {
   extrude,
   revolve,
   type DraftOptions,
+  type ShellOptions,
+  type FilletOptions,
+  type ChamferOptions,
   fillet,
   chamfer,
   shell,
@@ -66,12 +74,20 @@ export {
   type ExtrudeToFaceOptions,
   extrudeToFace,
   type LoftOptions,
+  type SweepOptions,
+  type SweepTransition,
   loft,
   sweep,
   linearPattern,
   circularPattern,
 } from "./action/index.js";
-export { type SpinePath, buildSpineWire } from "./sketch/spine.js";
+export {
+  type SpinePath,
+  type SpinePolyline,
+  type SpineSegmented,
+  type SpineSegment,
+  buildSpineWire,
+} from "./sketch/spine.js";
 
 // R5 — sketch constraint solver (planegcs) + 3D assembly mate solver.
 export {

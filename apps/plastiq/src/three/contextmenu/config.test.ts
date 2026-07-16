@@ -35,6 +35,8 @@ function makeTarget(over: Partial<ContextTarget> = {}): ContextTarget {
     explodeFactor: 0,
     gizmoMode: "translate",
     instanceId: null,
+    activeMeshDoc: null,
+    activePointCloudDoc: null,
     worldPoint: [0, 0, 0],
     ...over,
   };
@@ -106,8 +108,15 @@ describe("config — run() invokes the real store/dressup action", () => {
 
   it("section toggles on then off (driven by ctx.section)", () => {
     byId("section").run(makeTarget({ section: null }));
-    expect(useCadStore.getState().section).toEqual({ axis: "x", t: 0.5 });
-    byId("section").run(makeTarget({ section: { axis: "x", t: 0.5 } }));
+    expect(useCadStore.getState().section).toEqual({
+      kind: "axis",
+      axis: "x",
+      t: 0.5,
+      flip: false,
+    });
+    byId("section").run(
+      makeTarget({ section: { kind: "axis", axis: "x", t: 0.5, flip: false } }),
+    );
     expect(useCadStore.getState().section).toBeNull();
   });
 

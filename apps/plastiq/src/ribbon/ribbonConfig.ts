@@ -64,7 +64,6 @@ export const RIBBON: Record<Workspace, RibbonTab[]> = {
             a("mirror"),
             a("linearPattern"),
             a("circularPattern"),
-            a("boolean"),
             a("booleanBody"),
             a("transform"),
           ],
@@ -72,6 +71,20 @@ export const RIBBON: Record<Workspace, RibbonTab[]> = {
         {
           title: "Inspect",
           items: [a("measure"), w("sectionControl"), a("fit-view"), w("viewControl")],
+        },
+        // Mesh → CAD conversions (SPEC-7/12): turn an open generated MeshDoc into an
+        // editable B-rep — reconstruct or fit NURBS surfaces. Enabled only while a mesh
+        // document is open (registry gateForDocMode + each action's `enabled`); greyed
+        // in ordinary parametric mode, consistent with the FR-18 disabled-not-hidden rule.
+        {
+          title: "Mesh → CAD",
+          items: [a("ml-reconstruct-brep"), a("ml-fit-nurbs")],
+        },
+        // Point-cloud hand-offs (SPEC-13): turn an open dense cloud into a mesh (capture) or
+        // complete a partial scan. Enabled only while a cloud document is open; greyed otherwise.
+        {
+          title: "Point Cloud",
+          items: [a("cloud-to-mesh"), a("cloud-complete")],
         },
       ],
     },
@@ -128,6 +141,20 @@ export const RIBBON: Record<Workspace, RibbonTab[]> = {
       ],
     },
   ],
+  // Voxel sculpting (ADR-0010): New Sculpt opens a default grid; Add/Erase are the
+  // click tools; Output hands the surface mesh off (Convert-to-CAD via the mesh
+  // reconstruct path, or a GLB download). Undo/redo route to the sculpt history.
+  sculpt: [
+    {
+      id: "sculpt",
+      title: "Sculpt",
+      panels: [
+        { title: "Sculpt", items: [a("voxel-new"), a("voxel-add"), a("voxel-erase")] },
+        { title: "Output", items: [a("voxel-convert-cad"), a("voxel-export-glb")] },
+        { title: "Edit", items: [a("undo"), a("redo")] },
+      ],
+    },
+  ],
 };
 
 /** Short display labels for the ribbon (the catalog labels are sentence-style for
@@ -141,6 +168,10 @@ export const RIBBON_LABELS: Record<string, string> = {
   "extrude-to-face": "To Face",
   "extrude-along-edge": "Along Edge",
   "fit-view": "Fit",
+  "ml-reconstruct-brep": "Reconstruct",
+  "ml-fit-nurbs": "Fit NURBS",
+  "cloud-to-mesh": "To Mesh",
+  "cloud-complete": "Complete",
 };
 
 /** Carry-forward data-testids so the existing E2E suite keeps targeting the same
@@ -173,4 +204,8 @@ export const RIBBON_ICONS: Record<string, string> = {
   "sim-step": "⏭",
   "sim-rewind": "⏮",
   "sk-finish": "✔",
+  "ml-reconstruct-brep": "⧉",
+  "ml-fit-nurbs": "◠",
+  "cloud-to-mesh": "⁙",
+  "cloud-complete": "⊛",
 };

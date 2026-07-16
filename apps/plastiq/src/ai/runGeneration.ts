@@ -6,12 +6,20 @@
 import { runAgent, type AgentEvent, type AgentTools, type RunAgentResult } from "./agentRunner.js";
 import { parametricSystemPrompt, creativeSystemPrompt } from "./prompt.js";
 import { editContext } from "./editContext.js";
+import { CREATE_MESH } from "./tools/toolDefs.js";
 import type { ChatMessage, ChatProvider, ContentPart } from "./providers/types.js";
 import type { CadDocument } from "../store/types.js";
 
+/** True when the offered tool surface includes create_mesh — the single condition that
+ * gates the creative-path guidance, so the prompt surface can never drift from the tool
+ * surface (finding 6-M2). */
+export function offersCreateMesh(tools: AgentTools): boolean {
+  return tools.defs.some((d) => d.name === CREATE_MESH);
+}
+
 /** Build the system prompt: the parametric prompt, plus the current document as mm/deg
  * edit context (FR-6a) when a part is open, plus the creative-path guidance when the
- * 3D-gen tool is offered. */
+ * 3D-gen tool is offered (`creative` — runGeneration derives it from the tool surface). */
 export function buildSystemPrompt(currentDoc: CadDocument | null | undefined, creative: boolean): string {
   let system = parametricSystemPrompt();
   const ctx = editContext(currentDoc);
@@ -30,16 +38,24 @@ export interface RunGenerationOptions {
   currentDoc?: CadDocument | null;
   /** The wired tools (from buildAgentTools). */
   tools: AgentTools;
-  /** Offer the creative path (adds the create_mesh guidance + tool, already wired). */
+  /** Override the creative-path guidance. Defaults to whether `tools` offers create_mesh
+   * (offersCreateMesh), so the guidance ships exactly when the tool does: the panel and
+   * palette always wire create_mesh (agentTurn) ⇒ guidance always shipped; the headless
+   * parametric-only tools omit it ⇒ no guidance. Pass a boolean only to force one side
+   * (e.g. the CADGenBench harness pins `false`). */
   creative?: boolean;
   maxSteps?: number;
+  /** Force this tool on the first turn (CB6.2) — pushes weak models to build_part. */
+  firstTool?: string;
   signal?: AbortSignal;
   onEvent?: (e: AgentEvent) => void;
 }
 
-/** Run one generation turn: assemble the prompt + messages and drive the agent loop. */
+/** Run one generation turn: assemble the prompt + messages and drive the agent loop.
+ * The creative guidance is derived from the offered tool surface (create_mesh present ⇒
+ * guidance shipped) unless the caller overrides it. */
 export function runGeneration(opts: RunGenerationOptions): Promise<RunAgentResult> {
-  const system = buildSystemPrompt(opts.currentDoc, opts.creative ?? false);
+  const system = buildSystemPrompt(opts.currentDoc, opts.creative ?? offersCreateMesh(opts.tools));
   const messages: ChatMessage[] = [...(opts.history ?? []), { role: "user", content: opts.input }];
   return runAgent({
     provider: opts.provider,
@@ -47,6 +63,7 @@ export function runGeneration(opts: RunGenerationOptions): Promise<RunAgentResul
     messages,
     tools: opts.tools,
     ...(opts.maxSteps != null ? { maxSteps: opts.maxSteps } : {}),
+    ...(opts.firstTool ? { firstTool: opts.firstTool } : {}),
     ...(opts.signal ? { signal: opts.signal } : {}),
     ...(opts.onEvent ? { onEvent: opts.onEvent } : {}),
   });

@@ -22,6 +22,8 @@ export interface TransferMesh {
     edgeId: number;
     positions: Float32Array;
     faceNormals: EdgePolylineNormals;
+    /** Adjacent face ids in the current mesh, when topology data is available. */
+    faceIds?: readonly [number, number];
     midpoint: Vec3;
   }[];
   /** B-rep corner ids, parallel to `vertexPositions` (groups of 3). */

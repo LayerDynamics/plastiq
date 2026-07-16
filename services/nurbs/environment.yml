@@ -1,0 +1,23 @@
+# Conda env for the Plastiq NURBS surface-fitting service. MLX is Apple-Silicon-only (pip), the
+# rest are conda-forge. Mirrors services/nerf/environment.yml, plus pythonocc-core for the
+# in-service OCCT boundary (SPEC-12 D-6: JSON → Geom_BSplineSurface → STEP inside this one env).
+# geomdl (pip) is the MIT test oracle for the MLX core — test-only, never imported by app/ code.
+#   mamba env create -f environment.yml   # then: mamba run -n plastiq-nurbs ...
+name: plastiq-nurbs
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11
+  - numpy
+  - scipy          # sparse solve for the harmonic uv-parameterization
+  - trimesh        # GLB mesh ingestion (reconstruct precedent)
+  - pythonocc-core # OCCT: Geom_BSplineSurface → faces → sew → STEP (SPEC-12 D-6)
+  - fastapi
+  - uvicorn
+  - pydantic
+  - httpx
+  - pytest
+  - pip
+  - pip:
+      - mlx        # Apple Silicon array/NN framework (conda-forge has no mlx)
+      - geomdl     # NURBS-Python (MIT) — test oracle only, never imported by app/ code

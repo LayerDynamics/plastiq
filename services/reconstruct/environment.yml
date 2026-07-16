@@ -19,6 +19,9 @@ dependencies:
   - pytest
   - pip
   - pip:
-      # The fidelity (SCD) + recognition metric math runs in MLX on Apple Silicon (M1/M2c). MLX is
-      # pip-only; deterministic by seed, so NFR-2 holds. Geometry still comes from OCCT/trimesh.
+      # The fidelity (SCD) + recognition metric math runs in MLX on Apple Silicon. MLX is pip-only.
+      # Deterministic (NFR-2): recognition math is seedless; fidelity sampling seeds mx.random from
+      # a SHA-256 of the mesh geometry (fidelity.py:_seed_from_mesh), so the same mesh always
+      # scores the same. Bare `mlx` ships a backend only on macOS (mlx-metal); on Linux the
+      # Dockerfile and CI additionally `pip install "mlx[cpu]"`. Geometry is still OCCT/trimesh.
       - mlx

@@ -24,20 +24,18 @@ from OCC.Core.BRepBuilderAPI import (
     BRepBuilderAPI_MakeWire,
     BRepBuilderAPI_Sewing,
 )
-from OCC.Core.BRepCheck import BRepCheck_Analyzer
 from OCC.Core.GeomAbs import (
     GeomAbs_BezierSurface,
     GeomAbs_BSplineSurface,
     GeomAbs_Plane,
 )
-from OCC.Core.BRepGProp import brepgprop
 from OCC.Core.BRepPrimAPI import BRepPrimAPI_MakeCone, BRepPrimAPI_MakeSphere
 from OCC.Core.gp import gp_Ax2, gp_Ax3, gp_Circ, gp_Cylinder, gp_Dir, gp_Pln, gp_Pnt
-from OCC.Core.GProp import GProp_GProps
 from OCC.Core.TopAbs import TopAbs_FACE, TopAbs_SHELL
 from OCC.Core.TopExp import TopExp_Explorer
 from OCC.Core.TopoDS import TopoDS_Shape, topods
 
+from .closure import verify_closure
 from .primitives import ConeFit, CylinderFit, SphereFit
 
 
@@ -104,7 +102,6 @@ def cylinder_solid(fit: CylinderFit, sew_tol: float = 1e-6) -> SolidResult:
         sewing.Add(f)
     sewing.Perform()
     sewn = sewing.SewedShape()
-    free = sewing.NbFreeEdges()
 
     maker = BRepBuilderAPI_MakeSolid()
     shells = 0
@@ -115,32 +112,25 @@ def cylinder_solid(fit: CylinderFit, sew_tol: float = 1e-6) -> SolidResult:
         exp.Next()
 
     if shells == 0 or not maker.IsDone():
-        return SolidResult(sewn, False, BRepCheck_Analyzer(sewn).IsValid(), free, 0.0, 3)
+        _, rep = verify_closure(sewn)
+        return SolidResult(sewn, False, rep.is_valid, rep.free_edges, 0.0, 3)
 
-    solid = maker.Solid()
-    valid = BRepCheck_Analyzer(solid).IsValid()
-    props = GProp_GProps()
-    brepgprop.VolumeProperties(solid, props)
-    volume = float(props.Mass())
     # MakeSolid does NOT validate closure — require valid + no free edges + positive volume.
-    is_solid = bool(valid and free == 0 and volume > 0)
-    return SolidResult(solid if is_solid else sewn, is_solid, valid, free, volume, 3)
+    solid, rep = verify_closure(maker.Solid())
+    return SolidResult(solid if rep.is_solid else sewn, rep.is_solid, rep.is_valid, rep.free_edges, rep.volume, 3)
 
 
 def _solid_report(solid: TopoDS_Shape) -> SolidResult:
     """Validate + measure a BRepPrimAPI solid (sphere/cone) — no sewing needed (these are
-    born closed). Closure is still verified, never assumed."""
-    valid = BRepCheck_Analyzer(solid).IsValid()
-    props = GProp_GProps()
-    brepgprop.VolumeProperties(solid, props)
-    volume = float(props.Mass())
+    born closed). Closure is still verified, never assumed: the full FR-7 chain runs (real
+    free-edge count + validity + positive volume)."""
+    solid, rep = verify_closure(solid)
     n_faces = 0
     exp = TopExp_Explorer(solid, TopAbs_FACE)
     while exp.More():
         n_faces += 1
         exp.Next()
-    is_solid = bool(valid and volume > 0)
-    return SolidResult(solid, is_solid, valid, 0, volume, n_faces)
+    return SolidResult(solid, rep.is_solid, rep.is_valid, rep.free_edges, rep.volume, n_faces)
 
 
 def sphere_solid(fit: SphereFit) -> SolidResult:

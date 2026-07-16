@@ -1,6 +1,13 @@
 // cannon-es physics backend (pure JS — no wasm). Rigid bodies posed by world COM,
 // each carrying one or more convex-hull shapes (a compound collider for a
-// decomposed concave part); hinge/fixed constraints become Hinge/Lock constraints.
+// decomposed concave part). Constraint mapping (see engine.ts support matrix):
+//   hinge → HingeConstraint, ball → PointToPointConstraint, fixed → LockConstraint.
+//   slider / cylindrical / planar → THROW at spawn: cannon-es's public constraint
+//   set (PointToPoint / Hinge / Lock / Distance / ConeTwist — see the installed
+//   .d.ts) has no primitive that frees a translation DOF while locking rotation,
+//   and no composition of those primitives yields one (each pins at least one
+//   point, which kills the sliding DOF). Implemented-or-loud: an unsupported kind
+//   fails the spawn with a precise message instead of simulating a wrong joint.
 
 import * as CANNON from "cannon-es";
 
@@ -54,12 +61,19 @@ class CannonEngine implements PhysicsEngine {
       const a = byId.get(c.bodyA);
       const b = byId.get(c.bodyB);
       if (!a || !b) {
-        console.warn(
-          `cannon: dropping ${c.kind} constraint — missing body (bodyA='${c.bodyA}'${a ? "" : " [missing]"}, bodyB='${c.bodyB}'${b ? "" : " [missing]"})`,
+        // parseManifest rejects dangling refs before any backend runs — defensive.
+        throw new Error(
+          `cannon: ${c.kind} constraint references missing body '${!a ? c.bodyA : c.bodyB}'`,
         );
-        continue;
       }
-      // Hinge pivots/axes are body-LOCAL: inverse-rotate the world origin/axis by
+      if (c.kind === "slider" || c.kind === "cylindrical" || c.kind === "planar") {
+        // No cannon-es primitive (or sound composition of primitives) frees a
+        // translation DOF while locking rotation — see the header note.
+        throw new Error(
+          `cannon: the cannon-es backend does not support ${c.kind} constraints (between '${c.bodyA}' and '${c.bodyB}') — use the mujoco (default), rapier, or ammo backend for this mechanism`,
+        );
+      }
+      // Pivots/axes are body-LOCAL: inverse-rotate the world origin/axis by
       // each body's orientation (identity-safe). LockConstraint derives its frame
       // from the bodies' current poses, so it already locks a rotated body correctly.
       const qa = orientById.get(c.bodyA)!;
@@ -79,6 +93,9 @@ class CannonEngine implements PhysicsEngine {
             axisB: new CANNON.Vec3(axB[0], axB[1], axB[2]),
           }),
         );
+      } else if (c.kind === "ball") {
+        // A ball joint IS a pinned point — per-body local pivots, any orientation.
+        world.addConstraint(new CANNON.PointToPointConstraint(a, pivotA, b, pivotB));
       } else {
         world.addConstraint(new CANNON.LockConstraint(a, b));
       }

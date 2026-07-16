@@ -16,6 +16,7 @@ from OCC.Core.gp import gp_Pnt
 
 from app.fidelity import (
     FIDELITY_TOL,
+    chamfer_distance,
     sample_shape_surface,
     sample_mesh_surface,
     scaled_chamfer,
@@ -115,6 +116,20 @@ def test_scaled_chamfer_pure_arrays():
     assert scaled_chamfer(pts, pts) == 0.0  # identical clouds → exactly 0
     shifted = pts + np.array([10.0, 0, 0])  # far apart → large
     assert scaled_chamfer(shifted, pts) > 1.0
+
+
+def test_chamfer_chunking_matches_full_matrix():
+    # Regression for the memory-bounding block loop: the chunked result must equal the single-block
+    # (full-matrix) computation, both directions.
+    rng = np.random.default_rng(1)
+    p = rng.normal(size=(500, 3)).astype(np.float32)
+    q = rng.normal(size=(400, 3)).astype(np.float32)
+    assert np.isclose(chamfer_distance(p, q, block=10_000), chamfer_distance(p, q, block=37), rtol=1e-5)
+    assert np.isclose(
+        chamfer_distance(p, q, bidirectional=False, block=10_000),
+        chamfer_distance(p, q, bidirectional=False, block=16),
+        rtol=1e-5,
+    )
 
 
 # ── pipeline integration (M1.3) ──────────────────────────────────────────────

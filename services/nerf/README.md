@@ -31,6 +31,24 @@ app/utils              config, deterministic MLX seeding, math
   Laplace SDF→density transform + the eikonal loss; its watertight zero-level-set mesh is the cleanest
   input for reconstruct→B-rep. The **default** `/train` model.
 
+## Production defaults (`method=neus`, T26–T28)
+
+| Knob | Default | Notes |
+|------|---------|--------|
+| `learnable_beta` | on | Anneals Laplace surface sharpness |
+| `grad_clip` | 1.0 | Stabilizes early training |
+| `warmup_frac` / `lr_final_frac` | 0.05 / 0.1 | Linear warmup + cosine decay |
+| `background` | white `(1,1,1)` | Empty rays match common white backdrops |
+| `importance_samples` | **32** | Hierarchical **PDF fine pass** after uniform coarse samples (omit / null uses this; `0` = coarse-only) |
+| Weight-norm on SDF trunk | **off** | `SDFField(use_weight_norm=True)` opt-in — short-train tests regress under WN; **not** a production default |
+
+**Honest quality claims (M3):** the production neus path uses **hierarchical PDF sampling**, not a
+separate nerfstudio-style **proposal density MLP** (`ProposalNetworkSampler`). Code named
+`ProposalSampler` is a helper around uniform+PDF, not full sdfstudio proposal nets. Weight-norm
+defaults **off**. Do not claim research-stack parity.
+
+**Hardware:** Apple Silicon (MLX). Real photos do **not** need silhouette masks; masks help only when present (synthetic with alpha). Expect minutes–hours depending on `iters` and view count (cap 300 images).
+
 ## API (submit → poll, mirrors capture/reconstruct)
 
 The frozen wire contract is [SPEC-11 §5](../../docs/specs/SPEC-11-nerf-service.md); the `@plastiq/nerf`
@@ -43,6 +61,7 @@ reconstruct).
 | `POST` | `/train` | `{ transforms_json, images, iters?, method?, grid_res? }` → `{ id, state }` |
 | `GET` | `/jobs/{id}/status` | `{ id, state, error? }` — `state ∈ {queued, running, completed, failed}` |
 | `GET` | `/jobs/{id}/result` | `{ glb_base64, vertices, faces, psnr, method, iters }` when completed |
+| `DELETE` | `/jobs/{id}` | `204` — job record dropped (cancel/cleanup; an in-flight worker's eventual result is discarded); `404` unknown id |
 
 ## Browser client (`@plastiq/nerf`)
 
@@ -54,10 +73,24 @@ into the existing "Convert to CAD" (mesh → B-rep) path. Base URL configured by
 
 ## Run locally (Apple Silicon)
 
+One command (repo root) starts **all three** Plastiq services — reconstruct :8000, capture
+:8001, nerf :8002 — creating any missing conda env from its `environment.yml` first, with
+name-prefixed logs and clean Ctrl-C shutdown:
+
+```bash
+just services          # scripts/dev-services.sh; `just services-stop` frees stray listeners
+```
+
+Or run just this service manually:
+
 ```bash
 mamba env create -f environment.yml          # conda-forge + pip mlx
 mamba run -n plastiq-nerf uvicorn app.main:app --port 8002
 ```
+
+Job lifecycle (submit/start/complete/fail + duration) and rejected submits are logged via
+Python `logging` (INFO default — `NERF_LOG_LEVEL` overrides); the startup line summarizes the
+CORS/auth/cap config without ever printing the API key.
 
 ## Test (real MLX training on the M4 Max)
 

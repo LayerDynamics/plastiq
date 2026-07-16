@@ -35,6 +35,14 @@ describe("workspace — the editor mode that drives sim", () => {
     expect(s.simulating).toBe(false);
   });
 
+  it("sculpt is a non-sim workspace (ADR-0010 voxel mode)", () => {
+    useCadStore.getState().setWorkspace("simulate");
+    useCadStore.getState().setWorkspace("sculpt");
+    const s = useCadStore.getState();
+    expect(s.workspace).toBe("sculpt");
+    expect(s.simulating).toBe(false);
+  });
+
   it("reset returns to design", () => {
     useCadStore.getState().setWorkspace("assemble");
     useCadStore.getState().reset();

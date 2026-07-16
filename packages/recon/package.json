@@ -1,0 +1,13 @@
+{
+  "name": "@plastiq/recon",
+  "version": "0.1.0",
+  "private": true,
+  "license": "SEE LICENSE IN LICENSE",
+  "type": "module",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "description": "Browser client for Plastiq's mesh→B-rep reconstruction service (services/reconstruct): submit a base64 GLB, poll, and receive STEP + report.",
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  }
+}

@@ -1,8 +1,10 @@
 // SPEC-6 R2.4 — the tool surface (§7.1) defs + AgentTools dispatch wiring.
 
 import { describe, expect, it, vi } from "vitest";
-import { ANSWER_USER, buildAgentTools, toolDefs, type AgentToolDeps } from "./toolDefs.js";
+import { ANSWER_USER, buildAgentTools, reconcileImportSteps, toolDefs, type AgentToolDeps } from "./toolDefs.js";
 import { runAgent, type AgentTools } from "../agentRunner.js";
+import { authoringDocumentSchema } from "./schema.js";
+import { editContext } from "../editContext.js";
 import type { ChatProvider, StreamEvent } from "../providers/types.js";
 import type { CadDocument } from "../../store/types.js";
 import type { MeshView } from "./inspectGeometry.js";
@@ -49,6 +51,51 @@ describe("toolDefs (SPEC-6 §7.1)", () => {
     const params = buildPart.parameters as { required: string[]; properties: { document: object } };
     expect(params.required).toContain("document");
     expect(params.properties.document).toBeTypeOf("object");
+  });
+});
+
+describe("reconcileImportSteps (edit round-trip for imported solids)", () => {
+  const STEP_TEXT =
+    "ISO-10303-21;\nHEADER;\n#1=ADVANCED_FACE();\n#2=MANIFOLD_SOLID_BREP();\nENDSEC;\n";
+  const importDoc: CadDocument = {
+    features: [{ id: "import", type: "importStep", data: { step: STEP_TEXT } }],
+    params: {},
+  };
+
+  it("restores STEP bytes the digest dropped, matched by feature id", () => {
+    const digested = {
+      features: [{ id: "import", type: "importStep", data: { importedSolid: { bytes: 1, faces: 1, solids: 1 } } }],
+      params: {},
+    };
+    const out = reconcileImportSteps(digested, importDoc) as {
+      features: { data: { step?: string } }[];
+    };
+    expect(out.features[0]!.data.step).toBe(STEP_TEXT);
+    expect(authoringDocumentSchema.safeParse(out).success).toBe(true);
+  });
+
+  it("editContext's digested doc fails the schema, but round-trips after reconcile", () => {
+    // This is the exact failure the digest introduced: the model echoes back the
+    // digested importStep (no `step`), which the schema rejects — until reconcile.
+    const ctx = editContext(importDoc)!;
+    const json = ctx.slice(ctx.indexOf("{"), ctx.lastIndexOf("}") + 1);
+    const reemitted = JSON.parse(json);
+    expect(authoringDocumentSchema.safeParse(reemitted).success).toBe(false);
+    const reconciled = reconcileImportSteps(reemitted, importDoc);
+    expect(authoringDocumentSchema.safeParse(reconciled).success).toBe(true);
+  });
+
+  it("leaves a model-supplied STEP and unmatched ids untouched", () => {
+    const supplied = {
+      features: [{ id: "x", type: "importStep", data: { step: "ISO-10303-21;own" } }],
+      params: {},
+    };
+    expect(reconcileImportSteps(supplied, importDoc)).toEqual(supplied);
+  });
+
+  it("is a no-op when the current doc has no imported bodies", () => {
+    const same = { features: [{ id: "f1", type: "box", params: { dx: 10 } }], params: {} };
+    expect(reconcileImportSteps(same, emptyDoc)).toBe(same);
   });
 });
 
@@ -104,7 +151,12 @@ describe("buildAgentTools dispatch", () => {
     });
     expect(res.isError).toBe(false);
     expect(res.result).toMatch(/plan accepted/i);
+    // The FULL validated graph is delivered, not a summary/truncation (9-M1).
     expect(onPlan).toHaveBeenCalledOnce();
+    expect(onPlan).toHaveBeenCalledWith({
+      nodes: [{ id: "body", part: "housing" }, { id: "lid", part: "lid", parent: "body" }],
+      relations: [{ from: "lid", to: "body", kind: "attached" }],
+    });
   });
 
   it("plan_part returns isError on a malformed plan (so the model fixes it)", async () => {
@@ -136,6 +188,33 @@ describe("buildAgentTools dispatch", () => {
     // A declined/invalid job surfaces as a tool result, not a throw.
     const res = await withCreative.handlers["create_mesh"]!({ mode: "text3d", prompt: "x", providerId: "nope" });
     expect(res.isError).toBe(true);
+  });
+
+  it("reconstruct_brep + fit_nurbs are wired + offered only when meshToCad deps are supplied", async () => {
+    const without = buildAgentTools(deps());
+    expect(without.handlers["reconstruct_brep"]).toBeUndefined();
+    expect(without.handlers["fit_nurbs"]).toBeUndefined();
+    expect(without.defs.some((d) => d.name === "reconstruct_brep")).toBe(false);
+
+    const withMeshToCad = buildAgentTools(
+      deps({
+        meshToCad: {
+          mesh: () => null, // no mesh open → the handler returns a structured error, not a throw
+          reconstruct: async () => ({ step: "", report: { triangles_in: 0, triangles_used: 0, faces_built: 0, planar_faces: 0, is_solid: false, is_valid: false, method: "auto" } }),
+          fitNurbs: async () => { throw new Error("unused"); },
+          stepToDoc: (step, name) => ({ features: [{ id: "f1", type: "importStep", name: name ?? "x", data: { step } }], params: {} }),
+          load: () => {},
+        },
+      }),
+    );
+    expect(withMeshToCad.handlers["reconstruct_brep"]).toBeDefined();
+    expect(withMeshToCad.handlers["fit_nurbs"]).toBeDefined();
+    expect(withMeshToCad.defs.some((d) => d.name === "reconstruct_brep")).toBe(true);
+    expect(withMeshToCad.defs.some((d) => d.name === "fit_nurbs")).toBe(true);
+    // No mesh open ⇒ a structured error result, not a throw.
+    const res = await withMeshToCad.handlers["reconstruct_brep"]!({});
+    expect(res.isError).toBe(true);
+    expect(res.result).toMatch(/No mesh document is open/);
   });
 });
 
@@ -172,5 +251,40 @@ describe("plan-conditioned execution (M5.3)", () => {
     expect(onPlan).toHaveBeenCalledOnce(); // the agent committed a validated plan first
     expect(apply).toHaveBeenCalledOnce(); // then built the part
     expect(res.finish).toBe("answer");
+  });
+
+  it("a plan too big for the 200-char trace line reaches onPlan intact through runAgent (9-M1)", async () => {
+    // Long enough that the panel's generic tool-call line (args JSON sliced to 200
+    // chars) would cut it mid-graph — the onPlan seam must deliver it whole.
+    const bigPlan = {
+      nodes: [
+        { id: "chassis", part: "the main quadcopter chassis plate" },
+        { id: "arm-fl", part: "front-left motor arm", parent: "chassis" },
+        { id: "arm-fr", part: "front-right motor arm", parent: "chassis" },
+        { id: "arm-rl", part: "rear-left motor arm", parent: "chassis" },
+        { id: "arm-rr", part: "rear-right motor arm", parent: "chassis" },
+        { id: "canopy", part: "aerodynamic canopy shell over the electronics bay", parent: "chassis" },
+      ],
+      relations: [
+        { from: "arm-fl", to: "chassis", kind: "attached" },
+        { from: "arm-fr", to: "chassis", kind: "attached" },
+        { from: "arm-rl", to: "chassis", kind: "attached" },
+        { from: "arm-rr", to: "chassis", kind: "attached" },
+        { from: "canopy", to: "chassis", kind: "aligned" },
+        { from: "arm-fl", to: "arm-rr", kind: "symmetric" },
+      ],
+    };
+    expect(JSON.stringify(bigPlan).length).toBeGreaterThan(200);
+
+    const onPlan = vi.fn();
+    const tools: AgentTools = buildAgentTools(deps({ onPlan }));
+    const provider = new ScriptedProvider([
+      [call("p1", "plan_part", bigPlan), done()],
+      [call("a1", ANSWER_USER, { message: "planned" }), done()],
+    ]);
+    const res = await runAgent({ provider, system: "s", messages: [{ role: "user", content: "plan a quadcopter" }], tools });
+    expect(res.finish).toBe("answer");
+    expect(onPlan).toHaveBeenCalledOnce();
+    expect(onPlan).toHaveBeenCalledWith(bigPlan); // full graph, untruncated
   });
 });

@@ -1,0 +1,12 @@
+schema: 1
+name: web
+version: 0.1.0
+target: web
+build:
+  - name: Build TypeScript web application
+    program: pnpm
+    args: ["--filter", "@plastiq/app", "run", "build"]
+    working_directory: .
+bundle:
+  - source: apps/plastiq/dist
+    destination: web

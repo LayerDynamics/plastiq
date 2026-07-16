@@ -6,7 +6,7 @@
 // tool result, so the model self-corrects on the next turn — bounded by the cap (no
 // separate retry counter needed). An AbortSignal cancels at the next turn boundary.
 
-import type { ChatMessage, ChatProvider, ToolCall, ToolDef } from "./providers/types.js";
+import type { ChatMessage, ChatProvider, ToolCall, ToolChoice, ToolDef } from "./providers/types.js";
 
 export type AgentFinish = "answer" | "cap" | "cancelled" | "error";
 
@@ -36,6 +36,9 @@ export interface RunAgentOptions {
   maxSteps?: number;
   /** The tool whose call ends the loop after running (CADAM-style). Default "answer_user". */
   finalToolName?: string;
+  /** Force this tool on the FIRST turn (tool_choice), then auto. Pushes weak models
+   * to call build_part instead of answering in prose (CB6.2). */
+  firstTool?: string;
   signal?: AbortSignal;
   onEvent?: (e: AgentEvent) => void;
 }
@@ -64,8 +67,18 @@ export async function runAgent(opts: RunAgentOptions): Promise<RunAgentResult> {
 
     let text = "";
     const toolCalls: ToolCall[] = [];
+    // Force the configured tool on the first turn only (then let the model choose,
+    // so it can still reach the answer_user finalizer).
+    const toolChoice: ToolChoice | undefined =
+      steps === 1 && opts.firstTool ? { tool: opts.firstTool } : undefined;
     try {
-      for await (const ev of provider.stream({ system, messages, tools: tools.defs, signal })) {
+      for await (const ev of provider.stream({
+        system,
+        messages,
+        tools: tools.defs,
+        ...(toolChoice ? { toolChoice } : {}),
+        signal,
+      })) {
         if (ev.type === "text-delta") {
           text += ev.text;
           emit({ type: "text", text: ev.text });
