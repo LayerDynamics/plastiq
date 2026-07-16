@@ -377,19 +377,19 @@ These are **present in the working tree** and must not be marked product-complet
 
 ### High
 
-7. Boolean / mirror / pattern selection authoring.  
-8. Recon + nurbs `cancelJob`/`onJob` + panel DELETE.  
-9. Photo `sparseMaxDim` default in app.  
-10. Properties deps/refs/loft/pattern/boolean data editors.  
-11. Variable fillet / 2-dist chamfer UI + schema.
+1. Boolean / mirror / pattern selection authoring.  
+2. Recon + nurbs `cancelJob`/`onJob` + panel DELETE.  
+3. Photo `sparseMaxDim` default in app.  
+4. Properties deps/refs/loft/pattern/boolean data editors.  
+5. Variable fillet / 2-dist chamfer UI + schema.
 
 ### Medium
 
-12. Hole containment + revolve holes policy.  
-13. NeRF doc honesty (PDF vs proposal MLP; WN default).  
-14. Live closed-organic reconstruct↔nurbs gate when services up.  
-15. `packages/ml` implement or remove claim.  
-16. Seed/join E2E face-count honesty.
+1. Hole containment + revolve holes policy.  
+2. NeRF doc honesty (PDF vs proposal MLP; WN default).  
+3. Live closed-organic reconstruct↔nurbs gate when services up.  
+4. `packages/ml` implement or remove claim.  
+5. Seed/join E2E face-count honesty.
 
 ### Long-horizon (honest open engineering)
 

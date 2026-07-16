@@ -1,162 +1,374 @@
 # Plastiq
 
-**Plastiq** is an interactive, parametric, web based **CAD editor that runs
-entirely in the browser**. Sketch a 2D profile, build an ordered
-feature history (extrude / revolve / cut / loft / sweep / fillet / chamfer /
-shell / draft / pattern / mirror / boolean), select faces/edges/vertices in 3D,
-assemble component instances with mates and joints, persist projects to an
-in-browser SQLite store with crash recovery, and **simulate the result under
-gravity in a real physics engine** — all client-side. A separate **Sculpt**
-workspace edits dense voxel bodies whose surface can be converted back to an
-editable B-rep (see the reconstruction service below). It ships both in the
-browser and as a native **desktop app** ([`apps/desktop`](apps/desktop), a Tauri
-shell around the same editor).
+**Plastiq** is a browser-native parametric CAD studio: feature-based solid modeling on a real B-rep kernel, not a mesh sandbox with CAD branding. It ships in the browser and as a thin native desktop shell (Tauri) around the same app.
 
-It also has **AI generation** (SPEC-6): describe a part in natural language and a
-model authors it through a tool-using agent (`build_part` / `inspect_geometry`),
-can edit the open part, and runs from a side panel or a ⌘/Ctrl-K command palette.
-Providers are bring-your-own — **local Ollama** (no key, offline) or **Anthropic
-Claude** — so the editor itself stays serverless; only the model call leaves the
-browser, to the endpoint you choose. A creative path turns text/image prompts into
-mesh bodies via cloud 3D-gen, and those meshes can be reconstructed into editable
-B-rep STEP solids by an **optional, self-hosted** reconstruction service
-([`services/reconstruct`](services/reconstruct), Python + pythonOCC — see
-[SPEC-7](docs/specs/SPEC-7-mesh-reconstruction.md)). Two further optional,
-self-hosted **Apple-Silicon (MLX)** services feed the same "Convert to CAD" path
-from real-world capture: [`services/nerf`](services/nerf) (posed photos → a
-trained NeRF/VolSDF field → mesh, [SPEC-11](docs/specs/SPEC-11-nerf-service.md))
-and [`services/capture`](services/capture) (a point cloud → a watertight mesh, or
-a partial scan completed, [SPEC-10](docs/specs/SPEC-10-capture-and-completion.md)).
-Each has an in-editor panel; all three run entirely on your own machine.
+The intent is to own the full design loop on the client. Sketches, ordered feature history, assemblies, physics simulation, voxel sculpting, and project storage all run locally — Open CASCADE for solids, FreeCAD’s PlaneGCS for constraints, and interchangeable in-browser physics engines. No modeling server is required. The same serializable feature document the UI builds by hand is what AI generation authors and edits, so a prompt produces geometry you can still dimension, suppress, and rebuild — not a frozen blob you throw away. Organic form and the physical world enter through mesh and capture paths; optional self-hosted services (reconstruction, NURBS fitting, photogrammetry, NeRF, scan completion) turn those into STEP that re-enters the parametric history.
 
-## Architecture
+Local-first is the architecture, not a marketing line. Your geometry never leaves the machine for ordinary CAD work. Language models and paid cloud 3D generators are bring-your-own: they are called only when you configure them, and billable mesh jobs always require confirmation first.
 
-Plastiq is a pnpm workspace of two apps and four owned packages, plus three
-optional self-hosted services:
+---
+
+## Workspaces
+
+The top bar switches four workspaces. Each reconfigures the left tool ribbon.
+
+| Workspace | What you do |
+| --- | --- |
+| **Design** | Sketch profiles, build an ordered feature history, dress up solids, import/export, convert mesh/cloud → CAD |
+| **Assemble** | Insert instances, apply mates, explode, check interference, bill of materials |
+| **Simulate** | Drop the assembly into a real physics engine under gravity (or zero-g) |
+| **Sculpt** | Paint a dense voxel grid, export mesh, or hand off to Convert-to-CAD |
+
+---
+
+## Features & capabilities
+
+### Parametric solid modeling
+
+Plastiq is not a one-shot mesh editor. Parts are an **ordered feature tree** that rebuilds deterministically through Open CASCADE (OCCT) in a Web Worker.
+
+**Create from sketches**
+
+| Tool | What it does |
+| --- | --- |
+| **Extrude** | Pads a closed profile; *join* fuses onto an existing body or *new* replaces it. Without a profile, opens a sketch session first |
+| **Cut** | Pockets material; optional two-sided depth |
+| **Revolve** | Solids of revolution; optional axis from a selected edge or world axis; join/new |
+| **Loft** | Skin through two or more finished sketch profiles (ruled option) |
+| **Sweep** | Sweep a profile along a spine (polyline or line/arc path) |
+
+**Modify & dress-up**
+
+| Tool | What it does |
+| --- | --- |
+| **Fillet** | Edge rounds; supports variable end radius |
+| **Chamfer** | Edge breaks; supports two-distance chamfer with a face |
+| **Shell** | Hollow with open faces; **inward** or **outward** wall direction |
+| **Draft** | Taper faces relative to a pull direction / neutral plane |
+| **Extrude to face** | Pad until a target face |
+| **Extrude / cut along edge** | Direction from a selected edge |
+| **Pad (two-sided)** | Symmetric extrusion both ways |
+
+**Combine & pattern**
+
+- **Mirror** body across a plane (e.g. selected face)  
+- **Linear pattern** / **circular pattern** (count, spacing/angle, direction/axis from selection)  
+- **Boolean** tools (union / subtract / intersect), including “subtract last sketch” as a solid tool  
+- **Transform** with translate/rotate gizmos and placement write-back  
+
+**Feature tree**
+
+- Select, rename, reorder, **suppress / unsuppress**, **roll back** to a feature, delete  
+- Rebuild errors surface on the failing feature  
+- After Extrude/Cut/Fillet/etc., an **on-canvas gizmo** previews the real solid live — drag or type the value, confirm or cancel  
+- **Properties** panel: numeric params (mm/deg display), op (join/new), shell direction, loft/sweep options, attach edge/face refs from selection  
+- **Mass properties** (volume, centre of mass) after rebuild  
+
+**Selection & inspect**
+
+- Modes: **face / edge / vertex / body** (keys `1–4`)  
+- Multi-select and **Shift-drag box select**  
+- GPU colour-id picking for reliable face hits  
+- **Measure** two-click distance with ΔX/Y/Z  
+- **Section analysis** — clip with a draggable plane  
+- **View cube** + named views (top/front/iso/…)  
+- Orbit / pan / zoom; **fit to view**  
+- **Ring context menu** (right-click) — selection-aware actions for create, modify, sketch constraints, mates, sim, danger  
+
+---
+
+### Constrained 2D sketching
+
+Open a sketch on **XY / XZ / YZ**, an offset plane, or **on a picked face**. The FreeCAD **PlaneGCS** solver (WASM) runs on the main thread with live under- / well- / over-constrained feedback.
+
+**Draw tools**
+
+Select · Line · Rectangle · Center rectangle · Circle · 3-point circle · Arc · Center arc · Polygon · Slot · Spline · Point  
+
+- **Construction** geometry (toggle `X`) — excluded from the solid profile  
+- Drag-to-draw with live previews  
+- **Precise typed input** — length/angle for lines, width×height for rects, radius for circles, absolute coordinates  
+- Snap / inference (reuse points, horizontal/vertical)  
+- Letter-key tool shortcuts; **D** smart dimension  
+
+**Constraints**
+
+Horizontal · Vertical · Coincident · Parallel · Perpendicular · Equal length · Concentric · Tangent · Midpoint · Point on object · Symmetric · Fix / unfix point  
+
+**Dimensions**
+
+Distance · Horizontal distance · Vertical distance · Radius · Diameter · Angle  
+
+Finish only when a **closed profile** can be extracted. Sketch undo is local to the session and separate from the document history.
+
+---
+
+### Assemblies
+
+- **Insert instance** of the open part (multiple occurrences of the same feature tree)  
+- **Mate mode** — pick two instance faces and apply:  
+  **coincident · concentric · parallel · perpendicular · distance · angle**  
+- Ground an instance as **fixed**  
+- **Exploded view** (factor slider)  
+- **Interference check** (bounding-box broad phase — clearance for non-overlapping layouts)  
+- **Bill of materials** rolled up from a declarative assembly document  
+- Import / export **`.assy`** JSON (sub-assemblies; cycles rejected)  
+- Design-time **joints** (revolute, prismatic, cylindrical, fixed, ball, planar) lower into simulation  
+
+> Instances share the open part’s geometry (a multi-part component library is not shipped yet). Joint drives preview motion independently, not as full chained kinematics.
+
+---
+
+### Physics simulation
+
+Switch to **Simulate** — the assembly lowers to a `SimManifest` and steps under a real engine in the browser. Simulation is **view-only**; return to Design restores the untouched model.
+
+**Engines** (pick at runtime)
+
+| Backend | Notes |
+| --- | --- |
+| **MuJoCo** | Default — DeepMind WASM |
+| **Rapier** | `@dimforge/rapier3d-compat` |
+| **ammo.js** | Bullet |
+| **cannon-es** | Lightweight |
+
+- Bodies as **compounds of convex hulls**; concave parts split with **V-HACD** so colliders follow pockets  
+- Joints: hinge, slider, cylindrical, ball, planar, fixed — unsupported combinations **throw** rather than silently mis-simulate  
+- Playback: pause / resume, step one frame, rewind to spawn, stop  
+- **Experiments**: drop-test, free-fall, rest on ground, zero-g; gravity scale (Earth / Moon / Mars / 2g); drop height; optional ground slab  
+- Live telemetry (speeds, heights, settled)  
+- Fixed 120 Hz tick, deterministic seed  
+
+---
+
+### Voxel sculpting
+
+- New default **32³** grid (2 mm voxels) with a starter slab  
+- **Add** / **Erase** by click (Alt inverts per click)  
+- Sculpt-local undo / redo  
+- **Export GLB** of the surface mesh  
+- **Convert to CAD** stages a mesh document for reconstruct / NURBS (original voxels kept)  
+
+---
+
+### AI generation
+
+Describe a part (or attach a drawing). A tool-using agent authors a real **parametric feature document** (mm/deg) that becomes the live editable model.
+
+| Agent tool | Role |
+| --- | --- |
+| `plan_part` | Decompose complex objects into a part graph before building |
+| `build_part` | Validate and apply an authoring document → live CAD |
+| `inspect_geometry` | List faces/edges (normals, areas) so dress-ups target correctly |
+| `answer_user` | Finish with a short user-facing summary |
+| `create_mesh` | **Paid** cloud 3D gen (text/image → mesh) — confirm modal first |
+| `reconstruct_brep` / `fit_nurbs` | Local mesh → editable STEP (when services run) |
+| `cloud_to_mesh` / `complete_scan` | Local point cloud → mesh |
+
+**Providers (bring your own)**
+
+| Provider | Needs key | Notes |
+| --- | --- | --- |
+| **Ollama** (local) | No | Offline; first-run *detects* installed models |
+| **llama-mlx** (Apple Silicon) | Keychain-style key | Local MLX server |
+| **Anthropic Claude** | Yes | Opus / Sonnet / Haiku catalog |
+| **OpenAI-compatible** | Optional | Any `/v1` endpoint or hosted proxy |
+
+**Surfaces:** **Generate (AI)** side panel (streaming transcript, tool trace, usage meter, cancel) and **⌘/Ctrl-K** command palette (prompt + action search). Conversation history is **per project**.
+
+**Creative mesh (paid, fal.ai)** — after confirm:
+
+- 3D: Tripo v2.5, Meshy v6, Hunyuan3D v2  
+- Text→image stage: FLUX schnell (default), FLUX dev, Fast SDXL  
+
+Generated meshes open as mesh documents and can convert to B-rep when reconstruct or NURBS is running.
+
+**Headless:** `plastiq-gen` CLI — description (± drawing) → STEP against any OpenAI-compatible model (used by CADGenBench).
+
+---
+
+### Real-world capture → editable CAD
+
+Optional **self-hosted** services (primarily **Apple Silicon / MLX** for the ML paths; reconstruct/NURBS STEP use **pythonOCC**):
 
 ```text
-apps/plastiq           React + Zustand + Tailwind + three.js editor (the front end)
-apps/desktop           @plastiq/desktop — a Tauri shell hosting the editor natively
-packages/cad           @plastiq/cad — the parametric CAD kernel
-packages/sim           @plastiq/sim — the pluggable physics layer
-packages/nerf          @plastiq/nerf — browser client for the NeRF capture service
-packages/capture       @plastiq/capture — browser client for the point-cloud service
-services/reconstruct   optional Python + pythonOCC mesh→B-rep (STEP) service (SPEC-7)
-services/nerf          optional MLX NeRF/VolSDF photo-capture service (SPEC-11)
-services/capture       optional MLX point-cloud → mesh / scan-completion service (SPEC-10)
-services/nurbs         optional MLX NURBS surface-fitting service (SPEC-12)
-services/photogrammetry  optional SfM/MVS photos → poses + point-cloud service (SPEC-13)
-e2e/plastiq            no-mock Playwright end-to-end tests
+Unposed photos
+    → Photogrammetry (:8004)  poses + sparse/dense oriented clouds
+        ├→ NeRF / VolSDF (:8002)  posed images → mesh
+        └→ Capture (:8001)        cloud / depth / partial scan → mesh
+              └→ Reconstruct (:8000)  or  Fit NURBS (:8003)
+                    └→ STEP → import as editable parametric CAD
 ```
 
-(The `packages/{data,embed,recon,rl,segment}` directories are empty scaffolding
-reserved for future work — no code yet. `services/nurbs` is implemented per
-SPEC-12 — U0–U11 shipped, the U7 watertight-blob gate passed, and reconstruct
-delegation (U10) is live-verified. `services/photogrammetry` is implemented per
-SPEC-13 — the sparse SfM + MLX plane-sweep MVS core, the FastAPI service, and the
-`@plastiq/photogrammetry` client are in place; the real-photo P7 gate and browser
-E2E are verified on the local M4 Max, not in headless CI.)
+| Service | Port | You give it | You get |
+| --- | --- | --- | --- |
+| **Photogrammetry** | 8004 | ≥3 unposed photos | Camera poses (`transforms.json`), sparse + dense PLY |
+| **NeRF** | 8002 | Posed images + transforms | Mesh (VolSDF/NeuS default, or vanilla NeRF) |
+| **Capture** | 8001 | Oriented points, depth map, or partial scan | Watertight mesh; shape **completion** for incomplete scans |
+| **Reconstruct** | 8000 | Mesh (GLB) | Mechanical-friendly B-rep **STEP** (analytic primitives → CSG → fitted freeform → faceted fallback) |
+| **NURBS** | 8003 | Organic / freeform mesh | Smooth NURBS patches → **STEP** (open disk or closed genus-0) |
 
-- **`@plastiq/cad`** — a parametric B-rep kernel built directly on
-  [`opencascade.js`](https://ocjs.org) (full OCCT compiled to WebAssembly). It
-  owns geometry, ~18 feature operations, tagged tessellation with persistent
-  face/edge references, STEP import + export with IGES and glTF export (the app
-  additionally imports glTF/GLB meshes as non-parametric mesh bodies), a 2D sketch
-  constraint solver
-  backed by [`@salusoft89/planegcs`](https://www.npmjs.com/package/@salusoft89/planegcs)
-  (FreeCAD PlaneGCS, wasm), a first-party 3D assembly-mate solver, and
-  assembly→sim lowering. Runs in the browser (in a Web Worker) and headless under
-  Node.
-- **`@plastiq/sim`** — one `PhysicsEngine` interface with four interchangeable
-  backends, selectable at runtime:
-  [MuJoCo](https://mujoco.org/) (DeepMind, the default — vendored WASM, expresses
-  world-axis hinges between arbitrarily-oriented bodies natively),
-  [Rapier](https://rapier.rs/), [ammo.js](https://github.com/kripken/ammo.js)
-  (Bullet), and [cannon-es](https://pmndrs.github.io/cannon-es/). It spawns the
-  kernel's `SimManifest` and steps it under gravity. Each body is a **compound of
-  convex-hull colliders**: a convex part is one hull (exact); a concave part is
-  split into several convex pieces by [V-HACD](https://github.com/kmammou/v-hacd)
-  so the collider tracks the real concave shape instead of bulging across the
-  pocket — a multi-piece convex *approximation*, tunable by tolerance, not a
-  single bounding hull. Beyond `revolute`/`fixed`, the manifest expresses
-  `slider`/`cylindrical`/`ball`/`planar` joints; each backend implements every
-  kind it can and **fails loudly** on the few it genuinely cannot (documented in
-  the `PhysicsEngine` interface), never silently mis-simulating.
-- **`@plastiq/nerf`** — the browser client for `services/nerf`: submits posed
-  photos, polls the training job, and lands the resulting mesh as a document that
-  feeds "Convert to CAD". Optional bearer-token auth.
-- **`@plastiq/capture`** — the browser client for `services/capture`: parses a
-  point cloud (ASCII PLY / XYZ / JSON), submits it to the neural-SDF `/capture` or
-  scan-completion `/complete` endpoint, and lands the returned mesh the same way.
+In-app panels: Mesh convert, NeRF capture, Photo solve (handoff to NeRF or capture), Point-cloud scan. Ribbon actions **Reconstruct / Fit NURBS / To Mesh / Complete** when the right document kind is open.
 
-The editor uses React + Zustand + Tailwind + three.js, with `@plastiq/cad`
-running in a Web Worker (the OCCT wasm stays in the worker chunk) and the sketch
-solver on the main thread.
+**Canvas drop:** drop ≥3 photos → photogrammetry dense cloud; drop `.ply` / `.xyz` / `.json` → point-cloud project.
 
-## Scripts
+Start all five locally: `just services` (stop with `just services-stop`). Base URLs and optional API keys live in Settings.
 
-```sh
-pnpm install                              # install the workspace
-pnpm -C apps/plastiq run dev           # Vite dev server
-pnpm -C apps/plastiq run build         # tsc --noEmit + production build
-pnpm exec vitest run                      # unit/integration suite (real OCCT + wasm)
-pnpm exec playwright test                 # no-mock browser E2E (served on :4177)
-pnpm -r run typecheck                     # type-check every package + the app
+---
+
+### Mesh documents
+
+- Import **glTF/GLB** as non-parametric mesh bodies  
+- Select mesh entities; transform; clone selection  
+- Export mesh **GLB**; convert to CAD via reconstruct / NURBS  
+
+---
+
+### Import & export
+
+| Format | In | Out | Notes |
+| --- | --- | --- | --- |
+| **STEP** | ✓ | ✓ | B-rep exact via OCCT; large imports (≥8 MB) warn about recovery storage |
+| **IGES** | — | ✓ | OCCT writer |
+| **glTF** | mesh path | ✓ | Parametric export is glTF JSON from tessellation |
+| **GLB** | mesh path | mesh/voxel | Binary mesh handoff |
+| **`.assy`** | ✓ | ✓ | Declarative assembly + BOM |
+| **Point clouds** | ✓ | — | PLY (ASCII) / XYZ / JSON |
+| **Photos** | ✓ | — | Drop or panel → photogrammetry / NeRF |
+
+---
+
+### Projects, save, recovery
+
+- In-browser **SQLite** (sql.js) project list with thumbnails, rename, delete  
+- Document kinds: parametric CAD · mesh · voxel · point cloud (one project = one kind)  
+- **Autosave** (~1.5 s) for named projects; **crash-recovery** snapshots (~0.5 s) for unsaved work  
+- Recover / Discard banner after a hard reload  
+- **⌘/Ctrl-S** save  
+- Needs WebGL2, WebAssembly, writable localStorage, IndexedDB (friendly screen if missing)  
+
+---
+
+### Desktop app
+
+[`apps/desktop`](apps/desktop) — **Tauri 2** native window around the same web editor (no separate frontend). Platform installers via `pnpm -C apps/desktop build`. No custom native file APIs yet — the product is the web app hosted natively.
+
+---
+
+## Technology
+
+| Concern | Implementation |
+| --- | --- |
+| UI | React 19, Zustand, Tailwind CSS 4, three.js, React Three Fiber / Drei |
+| CAD kernel | `@plastiq/cad` — Open CASCADE via trimmed **opencascade.js** WASM (~5.6 MB gzip) |
+| Sketch | FreeCAD **PlaneGCS** (`@salusoft89/planegcs`) |
+| Assembly mates | First-party Levenberg–Marquardt 3D mate solver |
+| Physics | `@plastiq/sim` — MuJoCo, Rapier, ammo.js, cannon-es |
+| Convex hulls | V-HACD WASM for concave colliders |
+| Context UI | `@plastiq/recm` — ring-expanding radial menus in the 3D viewport |
+| Persistence | sql.js + IndexedDB + localStorage recovery |
+| AI | Tool-calling agents; Zod authoring schema; Anthropic / OpenAI-compatible / Ollama / llama-mlx |
+| Geometry thread | Web Worker: rebuild, tessellate (tagged face/edge refs), sim lower, STEP/IGES/glTF export |
+| Selectors | Named geometric predicates (`topFace`, `convexEdges`, `filletChain`, …) so AI dress-ups track rebuilds |
+| Optional ML | FastAPI + **MLX** (Apple Silicon) for capture / NeRF / NURBS / photogrammetry; **pythonOCC** for STEP solids |
+| Desktop | Tauri 2 |
+| Tooling | pnpm monorepo, Vite 8, TypeScript, Vitest, Playwright (no-mock E2E) |
+
+Single-threaded WASM only — **no COOP/COEP** headers required. Any static host can serve the app.
+
+```text
+Browser / Desktop (Tauri)
+├── React UI · ribbon · RECM menus · AI panel
+├── Main thread: sketch solver (planegcs), three.js, physics step
+└── Geometry worker: OCCT rebuild · tessellation · export · sim lower
+        │
+        │ optional HTTP (localhost)
+        ▼
+services/:  reconstruct:8000 · capture:8001 · nerf:8002 · nurbs:8003 · photogrammetry:8004
 ```
 
-A [`justfile`](justfile) wraps the common recipes (`just test`, `just e2e`,
-`just build`, …).
+---
 
-## Running it
+## Getting started
 
-The editor is a static, fully client-side bundle — `pnpm -C apps/plastiq run
-build` produces `apps/plastiq/dist`, which any static host can serve. A
-self-host image ([`deploy/plastiq-web/`](deploy/plastiq-web/), nginx with
-precompressed wasm and immutable-asset caching) is wrapped by `just
-app-docker-build` / `just app-docker-run`; `apps/desktop` packages the same
-editor as a native app via `pnpm -C apps/desktop tauri build`. The optional Python
-services run locally with `just services` (starts reconstruct/capture/nerf/nurbs/photogrammetry
-on :8000/:8001/:8002/:8003/:8004 with health checks; `just services-stop` tears them down). Full
-instructions, the single-threaded-wasm/no-COOP-COEP note, and bundle-size
-expectations are in [`docs/deploy.md`](docs/deploy.md).
+### Requirements
 
-## Benchmarking (CADGenBench)
+- Node.js ≥ 20, pnpm 10  
+- Current Chrome, Edge, Firefox, or Safari with WebGL2  
+- Optional: Rust (desktop), mamba/conda + Apple Silicon (ML services)  
 
-The AI generation path is evaluated against
-[**CADGenBench**](https://huggingface.co/spaces/HuggingAI4Engineering/CADGenBench)
-(*description → 3D STEP*) via a local harness in
-[`benchmark/harness/`](benchmark/harness/). It runs Plastiq's generation agent
-**headlessly** ([`apps/plastiq/src/headless/`](apps/plastiq/src/headless/),
-`plastiq-gen`: text/image → `CadDocument` → `exportStep`) against a local
-OpenAI-compatible model, validates the candidates with the benchmark's own
-CAD-validity gate, and packages a leaderboard submission. The scorer runs in a
-dedicated `cadgenbench` Python 3.12 env; ground-truth scoring is the leaderboard
-Space's (the GT is private). Local/manual — not part of push-CI. See
-[`benchmark/harness/README.md`](benchmark/harness/README.md) and the plan
-[`docs/plans/2026-06-22-cadgenbench-integration.md`](docs/plans/2026-06-22-cadgenbench-integration.md).
+### Run the editor
 
-## Bundle size / the OCCT trim
+```bash
+pnpm install
+pnpm dev                 # http://localhost:5173
+# or: just dev
+```
 
-The shipped OCCT wasm is a **custom trimmed build** of `opencascade.js` containing
-bindings for only the OCCT symbols the kernel uses — **~5.6 MB gzip, down from
-~13.7 MB gzip** for the full prebuilt build. It lives at
-[`packages/cad/vendor/occt/`](packages/cad/vendor/occt/) and is loaded by
-`src/oc/init.ts` in both Node and the browser. The symbol list
-([`packages/cad/occt.build.yml`](packages/cad/occt.build.yml)) is verified by
-running the full test suite against the trimmed wasm — a missing symbol fails loudly
-with an embind `UnboundTypeError`. To rebuild it (Docker, ≥12 GB memory):
-`just cad-occt` — see
-[`packages/cad/vendor/occt/PROVENANCE.md`](packages/cad/vendor/occt/PROVENANCE.md)
-and [`packages/cad/scripts/build-occt.md`](packages/cad/scripts/build-occt.md).
-The full `opencascade.js` package stays a dependency (API types + rebuild source).
+### Build & self-host
+
+```bash
+pnpm build               # apps/plastiq/dist
+just app-docker-build    # nginx image with wasm MIME + precompressed assets
+just app-docker-run      # http://localhost:8080
+```
+
+Details: [`docs/deploy.md`](docs/deploy.md).
+
+### Desktop
+
+```bash
+pnpm -C apps/desktop dev
+pnpm -C apps/desktop build
+```
+
+### Optional services
+
+```bash
+just services            # all five on :8000–:8004
+just services-stop
+```
+
+### Develop
+
+```bash
+just test                # Vitest (real OCCT + wasm)
+just e2e                 # Playwright, real browser, no mocks
+just typecheck
+just lint
+```
+
+---
+
+## Repository layout
+
+```text
+apps/plastiq              Web CAD studio (the product)
+apps/desktop              Tauri shell
+packages/cad              B-rep kernel, sketch, mates, sim lowering
+packages/sim              Physics backends
+packages/recm             Ring context menus
+packages/recon|capture|nerf|nurbs|photogrammetry
+                          Browser clients for optional services
+services/*                Python FastAPI services (ports above)
+e2e/plastiq               Playwright journeys (sketch→solid, sim backends, AI, services, …)
+benchmark/harness         CADGenBench evaluation (headless AI → STEP)
+deploy/plastiq-web        Static nginx Docker image
+docs/specs|adr|plans      Specs and architecture decisions
+```
+
+Empty scaffolds (not product surface): `packages/{data,embed,ml,rl,segment}`.
+
+---
+
+## Benchmarking
+
+AI generation is scored against [CADGenBench](https://huggingface.co/spaces/HuggingAI4Engineering/CADGenBench) via [`benchmark/harness/`](benchmark/harness/) (`plastiq-gen` headless). Local/manual — not push CI. See that README and `just bench-*`.
+
+---
 
 ## License
 
-Plastiq's first-party code is licensed under the **PolyForm Noncommercial
-License 1.0.0** (see [`LICENSE`](LICENSE)) — the source is available and free for
-noncommercial use, with commercial rights reserved by LayerDynamics. Bundled and
-vendored third-party components (OCCT/`opencascade.js` and planegcs under LGPL,
-MuJoCo under Apache-2.0, V-HACD under BSD-3-Clause, and the MIT/Apache runtime
-dependencies) remain under their own licenses; they are enumerated in
-[`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md), and the LGPL wasm artifacts
-carry their license text in their `vendor/` directories.
+First-party code: **PolyForm Noncommercial License 1.0.0** ([`LICENSE`](LICENSE)) — free for noncommercial use; commercial rights reserved by LayerDynamics.
+
+Third-party: OCCT / planegcs (LGPL), MuJoCo (Apache-2.0), V-HACD (BSD-3-Clause), and other MIT/Apache runtimes — see [`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md).
