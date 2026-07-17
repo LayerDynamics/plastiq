@@ -23,6 +23,7 @@ import {
   faceRefsFromPicks,
   loftFromSketchFeatures,
   sweepFromSketchFeature,
+  sweepFromSketchAlongPickedEdges,
 } from "../viewport/dressup.js";
 import type { Profile } from "../sketch/profile.js";
 import type { MeshDoc, SelectionMode } from "../store/types.js";
@@ -304,22 +305,26 @@ const RIBBON_ONLY: ActionDef[] = [
         cad().setStatus("Sweep: finish a sketch profile first (no demo sweep)");
         return;
       }
-      // Prefer a selected edge as path endpoints when available; else a simple vertical path
-      // in the sketch plane (still user-owned sketch profile, not a demo solid).
+      // Sweep along the PICKED edge chain when one is selected: the spine is
+      // stored as persistent EdgeRefs and re-resolved every rebuild, so the pipe
+      // follows those edges parametrically. With no edges picked, fall back to a
+      // straight path along the profile plane's normal — a real, editable spine
+      // (Properties → Path), not a canned elbow.
+      const fromEdges = sweepFromSketchAlongPickedEdges(feats, last.id, ctx.picks, ctx.refs);
+      if (fromEdges) {
+        const n = ctx.picks.filter((p) => p.kind === "edge").length;
+        cad().addFeature(fromEdges);
+        cad().setStatus(
+          `Sweep: profile from sketch ${last.id} along ${n} picked edge${n === 1 ? "" : "s"}`,
+        );
+        return;
+      }
       const path = {
         kind: "polyline" as const,
-        points: (
-          ctx.edge
-            ? [
-                [0, 0, 0],
-                [0, 0, 0.04],
-              ]
-            : [
-                [0, 0, 0],
-                [0, 0, 0.04],
-                [0.03, 0, 0.07],
-              ]
-        ) as [number, number, number][],
+        points: [
+          [0, 0, 0],
+          [0, 0, 0.04],
+        ] as [number, number, number][],
       };
       const f = sweepFromSketchFeature(feats, last.id, path);
       if (!f) {
@@ -328,9 +333,7 @@ const RIBBON_ONLY: ActionDef[] = [
       }
       cad().addFeature(f);
       cad().setStatus(
-        ctx.edge
-          ? `Sweep: profile from sketch ${last.id} (edge selected — use Properties path for custom spine)`
-          : `Sweep: profile from sketch ${last.id} along default Z path — edit data.path for custom spine`,
+        `Sweep: profile from sketch ${last.id} along a default 40 mm path — pick edges first, or edit Properties → Path`,
       );
     },
   },

@@ -19,6 +19,7 @@ import {
   faceNormal,
   shapeEnums,
 } from "./normals.js";
+import { faceSurfaceSignature, surfacesMatch, type SurfaceSignature } from "./surface.js";
 import type { EdgeRef, FaceRef } from "./tagged.js";
 
 // A face matches if its normal aligns to within ~2.6° (dot ≥ 0.999).
@@ -46,19 +47,34 @@ export function resolveFaceRef(oc: Occt, solid: Solid, ref: FaceRef): TopoDS_Fac
   ensureMeshed(oc, solid.shape);
   const S = shapeEnums(oc);
   const exp = new oc.TopExp_Explorer_2(solid.shape, S.TopAbs_FACE, S.TopAbs_SHAPE);
+  // Cap for the positional tie-break, scaled to the model (§2.1). Without it a
+  // ref whose face a boolean DELETED silently rebound to any same-signature face
+  // arbitrarily far away — a wrong result with no error.
+  const cap = centroidCap(oc, solid);
   let best: TopoDS_Face | null = null;
   let bestScore = -Infinity;
   for (; exp.More(); exp.Next()) {
     const face = oc.TopoDS.Face_1(exp.Current());
-    const aligned = dot(faceNormal(oc, face), ref.normal);
-    if (aligned < FACE_DOT_TOL) {
-      // Not a normal match — never a candidate (preserves the normal contract).
-      face.delete();
-      continue;
+    let score: number;
+    if (ref.surface) {
+      // PRIMARY path (§2.1): match the analytic surface. Exact and mesh-
+      // independent, and the only thing that works for a closed curved face.
+      if (!surfacesMatch(ref.surface, faceSurfaceSignature(oc, face))) {
+        face.delete();
+        continue;
+      }
+      // Same surface can still be several faces (coplanar fragments; the two
+      // walls of a through-hole are ONE cylinder). Closest centroid wins.
+      score = ref.centroid ? -sqDist(faceCentroid(oc, face), ref.centroid) : 0;
+    } else {
+      // LEGACY path: refs persisted before `surface` existed. Normal-first.
+      const aligned = dot(faceNormal(oc, face), ref.normal);
+      if (aligned < FACE_DOT_TOL) {
+        face.delete();
+        continue;
+      }
+      score = ref.centroid ? -sqDist(faceCentroid(oc, face), ref.centroid) : aligned;
     }
-    // Among normal-matches: closer centroid wins; without a ref centroid, the
-    // better normal alignment wins (the legacy behavior).
-    const score = ref.centroid ? -sqDist(faceCentroid(oc, face), ref.centroid) : aligned;
     if (score > bestScore) {
       bestScore = score;
       if (best) best.delete();
@@ -68,37 +84,73 @@ export function resolveFaceRef(oc: Occt, solid: Solid, ref: FaceRef): TopoDS_Fac
     }
   }
   exp.delete();
+  // Enforce the cap: a candidate whose centroid is implausibly far from the
+  // ref's is not the referenced face. Fail LOUDLY (null) rather than rebind.
+  if (best && ref.centroid && bestScore !== -Infinity && -bestScore > cap * cap) {
+    best.delete();
+    return null;
+  }
   return best;
+}
+
+/**
+ * Max distance a re-resolved face/edge's centroid may sit from the ref's, in
+ * SI metres — the diagonal of the solid's bounding box, so it scales with the
+ * model instead of hard-coding a length.
+ *
+ * The bound is deliberately generous: a legitimate face can travel a long way
+ * when an upstream parameter changes (that is the point of a parametric ref).
+ * It exists to reject the pathological case — the referenced face was DELETED
+ * and the nearest same-signature candidate is somewhere else entirely.
+ */
+function centroidCap(oc: Occt, solid: Solid): number {
+  void oc;
+  const { min, max } = solid.boundingBox();
+  return Math.hypot(max[0] - min[0], max[1] - min[1], max[2] - min[2]);
 }
 
 /**
  * The current solid's edge matching `ref`, or null (caller deletes).
  *
- * The adjacent-normal pair is the primary filter; when `ref.midpoint` is present
- * it disambiguates parallel edges sharing that pair by closest mid-point. Without
- * a midpoint it falls back to the best normal-pair score.
+ * When `ref.faceSurfaces` is present the adjacent faces' ANALYTIC surfaces are
+ * the filter (§2.1) — the only signature that works for an edge bordering a
+ * closed curved wall (a hole rim, a boss edge), whose averaged normal on that
+ * side is meaningless residue. Older refs fall back to the adjacent-normal pair.
+ * Either way `ref.midpoint` separates parallel edges sharing the same adjacent
+ * faces, and the same distance cap as {@link resolveFaceRef} applies.
  */
 export function resolveEdgeRef(oc: Occt, solid: Solid, ref: EdgeRef): TopoDS_Edge | null {
   ensureMeshed(oc, solid.shape);
   const S = shapeEnums(oc);
   const map = new oc.TopTools_IndexedDataMapOfShapeListOfShape_1();
   oc.TopExp.MapShapesAndAncestors(solid.shape, S.TopAbs_EDGE, S.TopAbs_FACE, map);
+  const cap = centroidCap(oc, solid);
   let best: TopoDS_Edge | null = null;
   let bestScore = -Infinity;
   const count = map.Extent();
   for (let i = 1; i <= count; i++) {
-    const [a, b] = adjacentFaceNormals(oc, map.FindFromIndex(i));
-    // Order-independent: the ref's two normals may be stored in either order.
-    const s1 = dot(a, ref.faceNormals[0]) + dot(b, ref.faceNormals[1]);
-    const s2 = dot(a, ref.faceNormals[1]) + dot(b, ref.faceNormals[0]);
-    const normalScore = Math.max(s1, s2);
+    const faceList = map.FindFromIndex(i);
     const edge = oc.TopoDS.Edge_1(map.FindKey(i));
-    if (normalScore < EDGE_SCORE_TOL) {
-      // Not a normal-pair match — never a candidate.
-      edge.delete();
-      continue;
+    let score: number;
+    if (ref.faceSurfaces) {
+      const pair = adjacentFaceSurfaces(oc, faceList);
+      if (!pair || !surfacePairMatches(pair, ref.faceSurfaces)) {
+        edge.delete();
+        continue;
+      }
+      score = ref.midpoint ? -sqDist(edgeMidpoint(oc, edge), ref.midpoint) : 0;
+    } else {
+      const [a, b] = adjacentFaceNormals(oc, faceList);
+      // Order-independent: the ref's two normals may be stored in either order.
+      const s1 = dot(a, ref.faceNormals[0]) + dot(b, ref.faceNormals[1]);
+      const s2 = dot(a, ref.faceNormals[1]) + dot(b, ref.faceNormals[0]);
+      const normalScore = Math.max(s1, s2);
+      if (normalScore < EDGE_SCORE_TOL) {
+        edge.delete();
+        continue;
+      }
+      score = ref.midpoint ? -sqDist(edgeMidpoint(oc, edge), ref.midpoint) : normalScore;
     }
-    const score = ref.midpoint ? -sqDist(edgeMidpoint(oc, edge), ref.midpoint) : normalScore;
     if (score > bestScore) {
       bestScore = score;
       if (best) best.delete();
@@ -108,7 +160,39 @@ export function resolveEdgeRef(oc: Occt, solid: Solid, ref: EdgeRef): TopoDS_Edg
     }
   }
   map.delete();
+  if (best && ref.midpoint && bestScore !== -Infinity && -bestScore > cap * cap) {
+    best.delete();
+    return null;
+  }
   return best;
+}
+
+/** The two adjacent faces' analytic surfaces for an edge, or null if it does
+ * not border exactly two faces (a seam/free edge). */
+function adjacentFaceSurfaces(
+  oc: Occt,
+  faceList: { Extent(): number; First_1(): { delete(): void }; Last_1(): { delete(): void } },
+): [SurfaceSignature, SurfaceSignature] | null {
+  if (faceList.Extent() < 2) return null;
+  const f1 = oc.TopoDS.Face_1(faceList.First_1() as never);
+  const f2 = oc.TopoDS.Face_1(faceList.Last_1() as never);
+  try {
+    return [faceSurfaceSignature(oc, f1), faceSurfaceSignature(oc, f2)];
+  } finally {
+    f1.delete();
+    f2.delete();
+  }
+}
+
+/** Order-independent match of an adjacent-surface pair. */
+function surfacePairMatches(
+  a: readonly [SurfaceSignature, SurfaceSignature],
+  b: readonly [SurfaceSignature, SurfaceSignature],
+): boolean {
+  return (
+    (surfacesMatch(a[0], b[0]) && surfacesMatch(a[1], b[1])) ||
+    (surfacesMatch(a[0], b[1]) && surfacesMatch(a[1], b[0]))
+  );
 }
 
 /** The unit tangent direction of the edge matching `ref` (start→end). */

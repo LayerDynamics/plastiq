@@ -18,6 +18,7 @@ import {
   normalFromTriangulation,
   shapeEnums,
 } from "./normals.js";
+import { faceSurfaceSignature, type SurfaceSignature } from "./surface.js";
 import type {
   FaceGroup,
   TaggedEdge,
@@ -143,6 +144,9 @@ export function tessellateTagged(
       faceId,
       normal: [normal[0], normal[1], normal[2]],
       centroid: [centroid[0], centroid[1], centroid[2]],
+      // Read off the B-rep surface, not the mesh — the only signature that
+      // identifies a closed curved face (§2.1).
+      surface: faceSurfaceSignature(oc, face),
     });
     faceId++;
 
@@ -211,16 +215,24 @@ export function tessellateTagged(
         // collision path compares it via IsSame) and is freed even if faceCentroid throws.
         const fA = oc.TopoDS.Face_1(faceList.First_1());
         let idA: number;
+        let surfA: SurfaceSignature;
         try {
           idA = resolveAdjacentFaceId(fA);
+          // Read the analytic surface off the FACE, not off `faceGroups[idA]`:
+          // an adjacent face that resolves to no group (id -1, counted in
+          // unresolvedEdgeFaces) has no group to read from. Deriving it from the
+          // B-rep is deterministic, so it is identical to the group's anyway.
+          surfA = faceSurfaceSignature(oc, fA);
         } finally {
           fA.delete();
         }
         let idB = idA;
+        let surfB = surfA;
         if (faceList.Size() >= 2) {
           const fB = oc.TopoDS.Face_1(faceList.Last_1());
           try {
             idB = resolveAdjacentFaceId(fB);
+            surfB = faceSurfaceSignature(oc, fB);
           } finally {
             fB.delete();
           }
@@ -239,6 +251,9 @@ export function tessellateTagged(
             [na[0], na[1], na[2]],
             [nb[0], nb[1], nb[2]],
           ],
+          // Same order as faceNormals/faceIds. A seam edge bordering one face
+          // repeats it, matching the faceIds contract above (§2.1).
+          faceSurfaces: [surfA, surfB],
           faceIds: [idA, idB],
           midpoint: [mid[0], mid[1], mid[2]],
         });

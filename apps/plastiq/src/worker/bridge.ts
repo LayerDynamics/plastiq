@@ -5,7 +5,23 @@
 import GeometryWorker from "./geometry.worker.js?worker";
 import type { FaceRef, SimManifest } from "@plastiq/cad";
 import type { CadDocument } from "../store/types.js";
-import type { ExportFormat, PlaneFrame, TransferMesh, WorkerResponse } from "./protocol.js";
+import type {
+  ExportFormat,
+  FeatureBuildStatus,
+  PlaneFrame,
+  TransferMesh,
+  WorkerResponse,
+} from "./protocol.js";
+
+/**
+ * Build result handed back to the UI: the geometry that survived plus every
+ * feature's fate. A null mesh with error statuses is a NORMAL outcome — the
+ * rebuild isolates per-feature failures instead of failing the whole pass.
+ */
+export interface BuildOutcome {
+  mesh: TransferMesh | null;
+  statuses: FeatureBuildStatus[];
+}
 
 /** Lowering result handed back to the UI (manifest + un-lowerable joints + COM). */
 export interface LowerOutcome {
@@ -69,9 +85,18 @@ export class GeometryClient {
   }
 
   /** Rebuild `doc` and return its tagged mesh (null if it has no geometry). */
-  async build(doc: CadDocument, deflection = 0.0005): Promise<TransferMesh | null> {
+  /**
+   * Rebuild the document. Per-feature failures are ISOLATED (FR-24): the mesh
+   * is whatever geometry survived (null if none) and `statuses` carries every
+   * feature's fate, so the caller badges features from structured data rather
+   * than parsing an error string.
+   */
+  async build(doc: CadDocument, deflection = 0.0005): Promise<BuildOutcome> {
     const res = await this.send({ op: "build", doc, deflection });
-    return res.ok && res.op === "build" ? res.mesh : null;
+    if (!res.ok || res.op !== "build") return { mesh: null, statuses: [] };
+    // `?? []` so callers can always iterate: a worker build predating the
+    // statuses field (or any malformed reply) must not crash the rebuild loop.
+    return { mesh: res.mesh, statuses: res.statuses ?? [] };
   }
 
   /** Lower the document's assembly to a SimManifest (M4.5). */

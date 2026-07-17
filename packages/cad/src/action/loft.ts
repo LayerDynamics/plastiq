@@ -75,6 +75,24 @@ export function loft(oc: Occt, sketches: readonly Sketch[], opts: LoftOptions): 
  */
 export function sweep(oc: Occt, sketch: Sketch, path: SpinePath, opts?: SweepOptions): Solid {
   const spine = buildSpineWire(oc, path);
+  // sweepAlongWire takes ownership of `spine` and frees it (including on throw).
+  return sweepAlongWire(oc, sketch, spine, opts);
+}
+
+/**
+ * Sweep a profile along an ALREADY-BUILT spine wire. Split out of {@link sweep}
+ * so a spine resolved from edges picked on the model (`buildWireFromEdges`) can
+ * be swept without first being flattened to points — the sweep stays parametric
+ * and arcs keep their exact curves.
+ *
+ * Takes ownership of `spine`: it is deleted here, on success and on throw.
+ */
+export function sweepAlongWire(
+  oc: Occt,
+  sketch: Sketch,
+  spine: TopoDS_Wire,
+  opts?: SweepOptions,
+): Solid {
   const profile = sketch.toWire(oc); // MakePipeShell sweeps a wire, then caps it
   const maker = new oc.BRepOffsetAPI_MakePipeShell(spine);
   const progress = new oc.Message_ProgressRange_1();

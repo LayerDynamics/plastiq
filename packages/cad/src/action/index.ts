@@ -25,5 +25,6 @@ export {
   type SweepTransition,
   loft,
   sweep,
+  sweepAlongWire,
 } from "./loft.js";
 export { linearPattern, circularPattern } from "./pattern.js";

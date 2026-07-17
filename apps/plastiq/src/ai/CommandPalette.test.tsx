@@ -138,6 +138,21 @@ afterEach(() => {
   delete (globalThis as { __plastiqBuild?: unknown }).__plastiqBuild;
 });
 
+/**
+ * Seed two finished sketches so the Loft action's predicate is satisfied. The
+ * palette lists only actions whose `enabled(ctx)` holds, and Loft is gated on
+ * ≥2 sketches carrying a profile (no demo geometry) — so a loft query matches
+ * nothing in an empty document.
+ */
+const seedTwoSketches = (): void => {
+  useCadStore.setState({
+    features: [
+      { id: "s1", type: "sketch", data: { profile: { kind: "circle", center: [0, 0], radius: 0.01 } } },
+      { id: "s2", type: "sketch", data: { profile: { kind: "circle", center: [0, 0], radius: 0.02 } } },
+    ],
+  });
+};
+
 /** Attach an image file through the palette's attach input (bytes [1,2,3] → base64 "AQID"). */
 const attachImage = async (name = "ref.png"): Promise<void> => {
   const file = new File([new Uint8Array([1, 2, 3])], name, { type: "image/png" });
@@ -166,6 +181,7 @@ describe("CommandPalette (FR-19)", () => {
   });
 
   it("filters the registry actions by query", async () => {
+    seedTwoSketches();
     render(<CommandPalette open onClose={() => {}} />);
     fireEvent.change(screen.getByTestId("command-palette-input"), { target: { value: "loft" } });
     await waitFor(() => expect(screen.getByTestId("palette-action-loft")).toBeTruthy());
@@ -188,6 +204,7 @@ describe("CommandPalette (FR-19)", () => {
 
   it("running an action executes it (adds the feature) and closes the palette", async () => {
     const onClose = vi.fn();
+    seedTwoSketches();
     const before = useCadStore.getState().features.length;
     render(<CommandPalette open onClose={onClose} />);
     fireEvent.change(screen.getByTestId("command-palette-input"), { target: { value: "loft" } });

@@ -223,6 +223,53 @@ export function sweepFromSketchFeature(
   return sweepFeature(prof, path, plane, opts);
 }
 
+/**
+ * A sweep of `profile` along a spine of edges PICKED ON THE MODEL (FR-32).
+ * Stores persistent EdgeRefs rather than baked points, so the rebuild
+ * re-resolves the spine against the current body — the pipe follows its edges
+ * when an upstream parameter moves them. Same contract as the `directionEdge` /
+ * `axisEdge` overrides on extrude/revolve.
+ */
+export function sweepAlongEdgesFeature(
+  profile: Profile,
+  pathEdges: readonly EdgeRef[],
+  plane?: SketchPlaneSpec,
+  opts?: { mode?: string; transition?: string },
+): NewFeature {
+  return {
+    type: "sweep",
+    data: {
+      profile,
+      pathEdges,
+      ...(plane ? { plane } : {}),
+      ...(opts?.mode ? { mode: opts.mode } : {}),
+      ...(opts?.transition ? { transition: opts.transition } : {}),
+    },
+  };
+}
+
+/**
+ * Sweep a sketch's profile along the currently picked edge chain, or null when
+ * the sketch has no profile / no edges are picked (the caller falls back to a
+ * typed path).
+ */
+export function sweepFromSketchAlongPickedEdges(
+  features: readonly EditorFeature[],
+  sketchId: string,
+  picks: readonly Pick[],
+  refs: SelectionRefs,
+  opts?: { mode?: string; transition?: string },
+): NewFeature | null {
+  const edges = edgeRefsFromPicks(picks, refs);
+  if (edges.length === 0) return null;
+  const sk = features.find((f) => f.id === sketchId && f.type === "sketch" && !f.suppressed);
+  if (!sk) return null;
+  const prof = sk.data?.["profile"] as Profile | undefined;
+  if (!isProfile(prof)) return null;
+  const plane = sk.data?.["plane"] as SketchPlaneSpec | undefined;
+  return sweepAlongEdgesFeature(prof, edges, plane, opts);
+}
+
 /** A draft feature tapering the picked face(s) about a neutral plane, or null.
  * Multi-face selection is stored as `data.faces` (G9); a single face also sets
  * `data.face` for back-compat with older documents.

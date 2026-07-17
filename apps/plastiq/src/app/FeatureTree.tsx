@@ -55,7 +55,7 @@ function FeatureRow({
   onContext: (e: React.MouseEvent) => void;
 }): React.JSX.Element {
   const selectedFeatureId = useCadStore((s) => s.selectedFeatureId);
-  const errorFeatureId = useCadStore((s) => s.errorFeatureId);
+  const featureError = useCadStore((s) => s.featureErrors[feature.id]);
   const rollbackIndex = useCadStore((s) => s.rollbackIndex);
   const selectFeature = useCadStore((s) => s.selectFeature);
   const renameFeature = useCadStore((s) => s.renameFeature);
@@ -65,7 +65,7 @@ function FeatureRow({
   const setRollback = useCadStore((s) => s.setRollback);
 
   const selected = selectedFeatureId === feature.id;
-  const errored = errorFeatureId === feature.id;
+  const errored = featureError !== undefined;
   const rolledBack = rollbackIndex !== null && index >= rollbackIndex;
 
   const commit = (value: string): void => {
@@ -117,7 +117,9 @@ function FeatureRow({
       )}
 
       {errored && (
-        <span data-testid="badge-error" title="Rebuild error" className="text-[#ff6b6b]">
+        // The message is per-feature, so the badge can say WHAT failed instead of
+        // just that something did.
+        <span data-testid="badge-error" title={featureError} className="text-[#ff6b6b]">
           ⚠
         </span>
       )}

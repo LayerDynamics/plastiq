@@ -20,6 +20,17 @@ test-results/
 
 # NOTE: packages/sim/vendor/mujoco/ is NOT ignored — the @plastiq/sim WASM is a
 # vendored prebuilt artifact and MUST be committed (it is not rebuilt in this repo).
+
+# `just cad-occt` staging dir. The OCCT builder writes plastiq-occt.{js,d.ts,wasm}
+# to its working directory; the recipe runs it here and copies the products into
+# packages/cad/vendor/occt/, which IS committed (it is the kernel the app loads).
+packages/cad/build/
+# Belt-and-braces: the recipe used to mount packages/cad itself, leaving these
+# generated artifacts in the package root, where they shadow the vendored copies
+# and get linted (a minified 260 KB bundle = ~345 lint errors). Never commit them.
+packages/cad/plastiq-occt.js
+packages/cad/plastiq-occt.d.ts
+packages/cad/plastiq-occt.wasm
 ref/
 benchmark/cadgenbench
 

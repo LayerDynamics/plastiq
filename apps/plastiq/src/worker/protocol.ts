@@ -4,6 +4,10 @@
 
 import type { FaceGroup, FaceRef, SimManifest } from "@plastiq/cad";
 import type { CadDocument } from "../store/types.js";
+// Type-only: rebuild.ts does not import this module, so there is no cycle.
+import type { FeatureBuildStatus } from "./rebuild.js";
+
+export type { FeatureBuildStatus };
 
 type Vec3 = [number, number, number];
 /** The two adjacent-face normals that form an edge's persistent EdgeRef. */
@@ -82,7 +86,19 @@ export interface PlaneFrame {
 export type WorkerRequest = BuildRequest | LowerRequest | ExportRequest | FacePlaneRequest;
 
 export type WorkerResponse =
-  | { id: number; ok: true; op: "build"; mesh: TransferMesh | null }
+  | {
+      id: number;
+      ok: true;
+      op: "build";
+      mesh: TransferMesh | null;
+      /**
+       * Every feature's fate this pass (FR-24). The build ISOLATES per-feature
+       * failures, so `ok: true` with a null/partial mesh plus error statuses is
+       * a normal outcome — the UI badges features from this list instead of
+       * regex-parsing an error string.
+       */
+      statuses: FeatureBuildStatus[];
+    }
   | {
       id: number;
       ok: true;

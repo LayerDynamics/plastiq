@@ -13,6 +13,10 @@ import { buildPart } from "../viewport/buildMesh.js";
 import { useCadStore } from "../store/store.js";
 import type { TransferMesh } from "../worker/protocol.js";
 
+// Both fixture faces lie in the z=0 plane, so they share its analytic signature
+// (§2.1) — the identity a FaceGroup carries alongside its averaged normal.
+const PLANE_Z0 = { kind: "plane", normal: [0, 0, 1], origin: [0, 0, 0] } as const;
+
 // A unit quad (two triangles, two faces, four corners, one edge) — enough for a
 // real BuiltPart so the component mounts and runs its highlight pass.
 function quad(): TransferMesh {
@@ -20,8 +24,8 @@ function quad(): TransferMesh {
     vertices: new Float32Array([0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0]),
     indices: new Uint32Array([0, 1, 2, 0, 2, 3]),
     faceGroups: [
-      { faceId: 7, start: 0, count: 3, normal: [0, 0, 1], centroid: [0.667, 0.333, 0] },
-      { faceId: 9, start: 3, count: 3, normal: [0, 0, 1], centroid: [0.333, 0.667, 0] },
+      { faceId: 7, start: 0, count: 3, normal: [0, 0, 1], centroid: [0.667, 0.333, 0], surface: PLANE_Z0 },
+      { faceId: 9, start: 3, count: 3, normal: [0, 0, 1], centroid: [0.333, 0.667, 0], surface: PLANE_Z0 },
     ],
     edges: [
       {
@@ -62,8 +66,8 @@ function multiEdgeQuad(): TransferMesh {
     vertices: new Float32Array([0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0]),
     indices: new Uint32Array([0, 1, 2, 0, 2, 3]),
     faceGroups: [
-      { faceId: 7, start: 0, count: 3, normal: [0, 0, 1], centroid: [0.667, 0.333, 0] },
-      { faceId: 9, start: 3, count: 3, normal: [0, 0, 1], centroid: [0.333, 0.667, 0] },
+      { faceId: 7, start: 0, count: 3, normal: [0, 0, 1], centroid: [0.667, 0.333, 0], surface: PLANE_Z0 },
+      { faceId: 9, start: 3, count: 3, normal: [0, 0, 1], centroid: [0.333, 0.667, 0], surface: PLANE_Z0 },
     ],
     edges: [
       edge(1, [0, 0, 0, 1, 0, 0], [0.5, 0, 0]),

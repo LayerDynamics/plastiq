@@ -5,12 +5,26 @@
 # ONLY the OCCT symbols @plastiq/cad actually calls (enumerated from src/), so the
 # shipped kernel wasm can be a fraction of the full build.
 #
-# STATUS: development + tests run against the FULL prebuilt `opencascade.js` npm
-# package (the proven, complete OCCT). This trim is the build MECHANISM; running
-# it is a deferred, optional step (see scripts/build-occt.md). The symbol list
-# below is grown as the kernel's OCCT surface changes.
+# STATUS (corrected 2026-07-17): this trim is NOT optional and NOT hypothetical —
+# the build products vendored at vendor/occt/ are what `src/oc/init.ts` loads in
+# BOTH the browser and Node/CI, so every test runs against THIS symbol list, not
+# against the full prebuilt `opencascade.js` npm package. (That package remains a
+# dependency for two reasons only: it supplies the API *types*, and it is the
+# source the Docker builder trims.) An earlier STATUS note here claimed the
+# opposite; it was stale and is the reason a missing class could look harmless.
 #
-# Build:  just cad-occt   (Docker — see scripts/build-occt.md)
+# CONSEQUENCE — under-listing a symbol is a RUNTIME defect, not a compile error:
+# an unlisted class still typechecks, then throws "oc.X is not a constructor" or
+# an embind UnboundTypeError the first time its code path runs. `src/oc/
+# bindings.test.ts` pins the classes that are used on rare paths (§2.1/§2.2/I1/
+# §2.5) so a future re-trim that drops them fails loudly in CI instead of in a
+# user's session. Grow this list as the kernel's OCCT surface grows, and add a
+# binding assertion there for anything not exercised by the normal suite.
+#
+# Build:  just cad-occt   (Docker — see scripts/build-occt.md). The recipe runs
+#         the builder in a gitignored staging dir and copies the products into
+#         vendor/occt/ (committed): the builder writes to its working directory,
+#         so mounting packages/cad directly drops artifacts in the package root.
 # Format: https://ocjs.org/docs/app-dev-workflow/custom-builds
 
 mainBuild:
@@ -58,6 +72,20 @@ mainBuild:
     - symbol: BRepAlgoAPI_Fuse
     - symbol: BRepAlgoAPI_Cut
     - symbol: BRepAlgoAPI_Common
+    # Boolean robustness (§2.2). A raw BRepAlgoAPI result never unifies coplanar
+    # faces, so a union of two flush boxes keeps TWO coplanar +Z "top" faces and
+    # every downstream selector/dress-up silently acts on half a face.
+    #   ShapeUpgrade_UnifySameDomain — merge same-surface faces after a boolean.
+    #   BOPAlgo_ArgumentAnalyzer     — pre-flight the operands (self-intersection…).
+    #   BRepTools_History            — mergeable Generated/Modified/IsDeleted maps,
+    #                                  the basis for derivation-based naming (§2.1).
+    - symbol: ShapeUpgrade_UnifySameDomain
+    - symbol: BOPAlgo_ArgumentAnalyzer
+    - symbol: BOPAlgo_CheckStatus
+    - symbol: BOPAlgo_CheckResult
+    - symbol: BOPAlgo_ListOfCheckResult
+    - symbol: BRepTools_History
+    - symbol: Handle_BRepTools_History
     - symbol: Message_ProgressRange
     # Dress-up (action/dressup.ts)
     - symbol: BRepFilletAPI_MakeFillet
@@ -83,6 +111,21 @@ mainBuild:
     - symbol: TopTools_IndexedDataMapOfShapeListOfShape
     - symbol: BRep_Tool
     - symbol: BRepAdaptor_Curve
+    # Per-surface-type face signatures (§2.1). A FaceRef's whole identity is its
+    # area-weighted average triangulation normal, which for a CLOSED curved face
+    # (hole wall, cylindrical boss, sphere) integrates to ZERO — the stored value
+    # is normalized floating-point residue, so such a face can never re-resolve
+    # after a rebuild. The fix reads the ACTUAL surface: GetType() → plane
+    # (normal+centroid) / cylinder+cone (axis+radius) / sphere (centre+radius) /
+    # torus (axes+radii). gp_Cylinder & co. are the Cylinder()/Sphere() returns.
+    - symbol: BRepAdaptor_Surface
+    - symbol: Adaptor3d_Surface # base of BRepAdaptor_Surface
+    - symbol: GeomAbs_SurfaceType
+    - symbol: gp_Cylinder
+    - symbol: gp_Cone
+    - symbol: gp_Sphere
+    - symbol: gp_Torus
+    - symbol: gp_Ax3
     - symbol: GCPnts_UniformDeflection
     # Tessellation (mesh/tessellate.ts) — Poly_Triangulation/Triangle are returned
     # by BRep_Tool.Triangulation()/Triangle() and read in JS.
@@ -101,6 +144,16 @@ mainBuild:
     - symbol: IGESControl_Writer
     - symbol: STEPControl_StepModelType
     - symbol: IFSelect_ReturnStatus
+    # STEP/IGES units (I1). NOTE — binding this class does NOT enable the usual
+    # fix: embind exposes no STATICS on it (its only own props are
+    # length|name|prototype), so `Interface_Static.SetCVal("write.step.unit","M")`
+    # does not exist at runtime. Verified + pinned by src/oc/bindings.test.ts.
+    # The unit correction is therefore done by SCALING at the interchange
+    # boundary (io/index.ts): OCCT's interchange unit is MM while the kernel is
+    # SI metres. Kept bound so the class is available if a future build exposes
+    # statics, and so the binding test can assert the limitation rather than
+    # someone "fixing" it back to a silent no-op call.
+    - symbol: Interface_Static
     # Enums read directly as oc.<Enum>.<Member> (mesh/normals.ts, action/dressup.ts).
     - symbol: TopAbs_ShapeEnum
     - symbol: TopAbs_Orientation
@@ -139,6 +192,13 @@ mainBuild:
     - symbol: Handle_Geom_BoundedCurve
     - symbol: Handle_Geom_TrimmedCurve
     - symbol: Handle_Geom_BSplineCurve
+    # Exception decoding (oc/error.ts). OCCT throws Standard_Failure; with the
+    # class UNBOUND it unwinds to JS as a raw pointer (a plain number) with no
+    # readable text, so a failed fillet/revolve/sweep can only be reported
+    # generically. Binding it lets describeOcctError() read GetMessageString()
+    # and surface OCCT's own diagnosis. Takes effect only after `just cad-occt`
+    # regenerates vendor/occt/ — until then oc/error.ts degrades honestly.
+    - symbol: Standard_Failure
 
 # emccFlags is intentionally OMITTED so the builder's known-good DEFAULTS apply.
 # The build links with `emcc -lembind <objs> -o <name> *emccFlags` and force-adds

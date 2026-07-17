@@ -7,31 +7,55 @@
 // rebuild: the transient integer id is only valid for the current mesh, while
 // the signature re-resolves the same topology after upstream edits.
 
+import type { SurfaceSignature } from "./surface.js";
+
+export type { SurfaceSignature };
+
 // Public tagged-mesh types use MUTABLE [x,y,z] tuples to match the app's
 // worker/protocol contract (which transfers them as plain arrays).
 type V3 = [number, number, number];
 
 /**
- * A persistent reference to a face. The outward unit normal is the primary
- * signature; `centroid` (the face's area centroid) is an OPTIONAL positional
- * disambiguator that distinguishes two faces sharing the same normal (coplanar
- * faces, a step, parallel walls). Optional so refs persisted before it existed
- * still resolve (by normal alone). New captures include it.
+ * A persistent reference to a face.
+ *
+ * `surface` is the PRIMARY signature: the face's analytic identity (plane
+ * normal+origin, cylinder axis+radius, sphere centre+radius, …) read straight
+ * off the B-rep surface. It is exact and mesh-independent, and it is the only
+ * signature that works for a CLOSED curved face — such a face's averaged
+ * triangulation normal integrates to zero, leaving `normal` below as
+ * meaningless floating-point residue (§2.1).
+ *
+ * `normal` + `centroid` remain for two reasons: they still resolve refs
+ * persisted before `surface` existed (back-compat — `surface` is optional), and
+ * `centroid` disambiguates two faces that share the SAME analytic surface
+ * (e.g. two coplanar fragments, or the two walls of a through-hole cut, which
+ * are the same cylinder).
  */
 export interface FaceRef {
   readonly normal: V3;
   readonly centroid?: V3;
+  /** Analytic surface identity (§2.1). Absent on refs persisted before it existed. */
+  readonly surface?: SurfaceSignature;
 }
 
 /**
- * A persistent reference to an edge: the two adjacent faces' normals (primary
- * signature) plus an OPTIONAL `midpoint` positional disambiguator that separates
- * parallel edges sharing the same adjacent-normal pair. Optional for the same
- * back-compat reason as {@link FaceRef.centroid}.
+ * A persistent reference to an edge.
+ *
+ * `faceSurfaces` is the PRIMARY signature: the two adjacent faces' analytic
+ * identities. `faceNormals` alone cannot describe an edge bordering a closed
+ * curved wall (a hole rim, a boss edge) — that side's averaged normal is
+ * residue, so the old summed-dot score could never reach its threshold and such
+ * an edge never re-resolved (§2.1).
+ *
+ * `faceNormals` + `midpoint` remain for back-compat (refs persisted before
+ * `faceSurfaces` existed) and because `midpoint` still separates parallel edges
+ * sharing the same adjacent surfaces.
  */
 export interface EdgeRef {
   readonly faceNormals: readonly [V3, V3];
   readonly midpoint?: V3;
+  /** The adjacent faces' analytic surfaces (§2.1). Absent on older refs. */
+  readonly faceSurfaces?: readonly [SurfaceSignature, SurfaceSignature];
 }
 
 /** One face's triangles as a contiguous range of the shared index buffer. */
@@ -42,11 +66,15 @@ export interface FaceGroup {
   readonly count: number;
   /** Transient face id, stable within this mesh (its render-group order). */
   readonly faceId: number;
-  /** The face's outward unit normal — its persistent FaceRef signature. */
+  /** The face's outward unit normal. MEANINGLESS for a closed curved face (its
+   * area-weighted average integrates to zero) — see {@link FaceRef} and
+   * `surface` below, which is the signature that actually identifies it (§2.1). */
   readonly normal: V3;
   /** The face's area centroid — the FaceRef positional disambiguator (separates
-   * two faces sharing `normal`). SI metres. */
+   * two faces sharing the same surface). SI metres. */
   readonly centroid: V3;
+  /** The face's ANALYTIC surface identity — the primary FaceRef signature (§2.1). */
+  readonly surface: SurfaceSignature;
 }
 
 /** One B-rep edge as a world-space polyline plus its persistent signature. */
@@ -54,8 +82,12 @@ export interface TaggedEdge {
   readonly edgeId: number;
   /** Flat `[x0,y0,z0, x1,y1,z1, …]` polyline vertices in SI metres. */
   readonly positions: number[];
-  /** The two adjacent faces' normals — the persistent EdgeRef signature. */
+  /** The two adjacent faces' normals. Residue on any side that is a closed
+   * curved wall — `faceSurfaces` is the signature that identifies such an edge (§2.1). */
   readonly faceNormals: readonly [V3, V3];
+  /** The two adjacent faces' ANALYTIC surfaces, in the SAME order as
+   * `faceNormals` — the primary EdgeRef signature (§2.1). */
+  readonly faceSurfaces: readonly [SurfaceSignature, SurfaceSignature];
   /** The two adjacent face-group ids (transient, this-mesh only), in the SAME order as
    * `faceNormals` — so a traversal can reach each adjacent face's centroid for the dihedral
    * convexity test (M2 / select/topology.ts; docs/adr/0002). A seam edge bordering one face has

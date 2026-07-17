@@ -1,3 +1,59 @@
+export declare class Adaptor3d_Surface extends Standard_Transient {
+  constructor();
+  static get_type_name(): Standard_Character;
+  static get_type_descriptor(): Handle_Standard_Type;
+  DynamicType(): Handle_Standard_Type;
+  ShallowCopy(): Handle_Adaptor3d_Surface;
+  FirstUParameter(): Standard_Real;
+  LastUParameter(): Standard_Real;
+  FirstVParameter(): Standard_Real;
+  LastVParameter(): Standard_Real;
+  UContinuity(): GeomAbs_Shape;
+  VContinuity(): GeomAbs_Shape;
+  NbUIntervals(S: GeomAbs_Shape): Graphic3d_ZLayerId;
+  NbVIntervals(S: GeomAbs_Shape): Graphic3d_ZLayerId;
+  UIntervals(T: IntTools_CArray1OfReal, S: GeomAbs_Shape): void;
+  VIntervals(T: IntTools_CArray1OfReal, S: GeomAbs_Shape): void;
+  UTrim(First: Standard_Real, Last: Standard_Real, Tol: Standard_Real): Handle_Adaptor3d_Surface;
+  VTrim(First: Standard_Real, Last: Standard_Real, Tol: Standard_Real): Handle_Adaptor3d_Surface;
+  IsUClosed(): Standard_Boolean;
+  IsVClosed(): Standard_Boolean;
+  IsUPeriodic(): Standard_Boolean;
+  UPeriod(): Standard_Real;
+  IsVPeriodic(): Standard_Boolean;
+  VPeriod(): Standard_Real;
+  Value(U: Standard_Real, V: Standard_Real): gp_Pnt;
+  D0(U: Standard_Real, V: Standard_Real, P: gp_Pnt): void;
+  D1(U: Standard_Real, V: Standard_Real, P: gp_Pnt, D1U: gp_Vec, D1V: gp_Vec): void;
+  D2(U: Standard_Real, V: Standard_Real, P: gp_Pnt, D1U: gp_Vec, D1V: gp_Vec, D2U: gp_Vec, D2V: gp_Vec, D2UV: gp_Vec): void;
+  D3(U: Standard_Real, V: Standard_Real, P: gp_Pnt, D1U: gp_Vec, D1V: gp_Vec, D2U: gp_Vec, D2V: gp_Vec, D2UV: gp_Vec, D3U: gp_Vec, D3V: gp_Vec, D3UUV: gp_Vec, D3UVV: gp_Vec): void;
+  DN(U: Standard_Real, V: Standard_Real, Nu: Graphic3d_ZLayerId, Nv: Graphic3d_ZLayerId): gp_Vec;
+  UResolution(R3d: Standard_Real): Standard_Real;
+  VResolution(R3d: Standard_Real): Standard_Real;
+  GetType(): GeomAbs_SurfaceType;
+  Plane(): gp_Pln;
+  Cylinder(): gp_Cylinder;
+  Cone(): gp_Cone;
+  Sphere(): gp_Sphere;
+  Torus(): gp_Torus;
+  UDegree(): Graphic3d_ZLayerId;
+  NbUPoles(): Graphic3d_ZLayerId;
+  VDegree(): Graphic3d_ZLayerId;
+  NbVPoles(): Graphic3d_ZLayerId;
+  NbUKnots(): Graphic3d_ZLayerId;
+  NbVKnots(): Graphic3d_ZLayerId;
+  IsURational(): Standard_Boolean;
+  IsVRational(): Standard_Boolean;
+  Bezier(): Handle_Geom_BezierSurface;
+  BSpline(): Handle_Geom_BSplineSurface;
+  AxeOfRevolution(): gp_Ax1;
+  Direction(): gp_Dir;
+  BasisCurve(): Handle_Adaptor3d_Curve;
+  BasisSurface(): Handle_Adaptor3d_Surface;
+  OffsetValue(): Standard_Real;
+  delete(): void;
+}
+
 export declare class Adaptor3d_Curve extends Standard_Transient {
   constructor();
   static get_type_name(): Standard_Character;
@@ -66,6 +122,32 @@ export declare class GeomAPI_PointsToBSpline {
     constructor(Points: TColgp_Array1OfPnt, Weight1: Standard_Real, Weight2: Standard_Real, Weight3: Standard_Real, DegMax: Graphic3d_ZLayerId, Continuity: GeomAbs_Shape, Tol3D: Standard_Real);
   }
 
+export declare class ShapeUpgrade_UnifySameDomain extends Standard_Transient {
+  Initialize(aShape: TopoDS_Shape, UnifyEdges: Standard_Boolean, UnifyFaces: Standard_Boolean, ConcatBSplines: Standard_Boolean): void;
+  AllowInternalEdges(theValue: Standard_Boolean): void;
+  KeepShape(theShape: TopoDS_Shape): void;
+  KeepShapes(theShapes: TopTools_MapOfShape): void;
+  SetSafeInputMode(theValue: Standard_Boolean): void;
+  SetLinearTolerance(theValue: Standard_Real): void;
+  SetAngularTolerance(theValue: Standard_Real): void;
+  Build(): void;
+  Shape(): TopoDS_Shape;
+  History_1(): Handle_BRepTools_History;
+  History_2(): Handle_BRepTools_History;
+  static get_type_name(): Standard_Character;
+  static get_type_descriptor(): Handle_Standard_Type;
+  DynamicType(): Handle_Standard_Type;
+  delete(): void;
+}
+
+  export declare class ShapeUpgrade_UnifySameDomain_1 extends ShapeUpgrade_UnifySameDomain {
+    constructor();
+  }
+
+  export declare class ShapeUpgrade_UnifySameDomain_2 extends ShapeUpgrade_UnifySameDomain {
+    constructor(aShape: TopoDS_Shape, UnifyEdges: Standard_Boolean, UnifyFaces: Standard_Boolean, ConcatBSplines: Standard_Boolean);
+  }
+
 export declare type STEPControl_StepModelType = {
   STEPControl_AsIs: {};
   STEPControl_ManifoldSolidBrep: {};
@@ -126,6 +208,44 @@ export declare class BRepGProp {
   static VolumePropertiesGK_2(S: TopoDS_Shape, VProps: GProp_GProps, thePln: gp_Pln, Eps: Standard_Real, OnlyClosed: Standard_Boolean, IsUseSpan: Standard_Boolean, CGFlag: Standard_Boolean, IFlag: Standard_Boolean, SkipShared: Standard_Boolean): Standard_Real;
   delete(): void;
 }
+
+export declare class Interface_Static extends Interface_TypedValue {
+  PrintStatic(S: Standard_OStream): void;
+  Family(): Standard_CString;
+  SetWild(wildcard: Handle_Interface_Static): void;
+  Wild(): Handle_Interface_Static;
+  SetUptodate(): void;
+  UpdatedStatus(): Standard_Boolean;
+  static Init_1(family: Standard_CString, name: Standard_CString, type: Interface_ParamType, init: Standard_CString): Standard_Boolean;
+  static Init_2(family: Standard_CString, name: Standard_CString, type: Standard_Character, init: Standard_CString): Standard_Boolean;
+  static Static(name: Standard_CString): Handle_Interface_Static;
+  static IsPresent(name: Standard_CString): Standard_Boolean;
+  static CDef(name: Standard_CString, part: Standard_CString): Standard_CString;
+  static IDef(name: Standard_CString, part: Standard_CString): Graphic3d_ZLayerId;
+  static IsSet(name: Standard_CString, proper: Standard_Boolean): Standard_Boolean;
+  static CVal(name: Standard_CString): Standard_CString;
+  static IVal(name: Standard_CString): Graphic3d_ZLayerId;
+  static RVal(name: Standard_CString): Standard_Real;
+  static SetCVal(name: Standard_CString, val: Standard_CString): Standard_Boolean;
+  static SetIVal(name: Standard_CString, val: Graphic3d_ZLayerId): Standard_Boolean;
+  static SetRVal(name: Standard_CString, val: Standard_Real): Standard_Boolean;
+  static Update(name: Standard_CString): Standard_Boolean;
+  static IsUpdated(name: Standard_CString): Standard_Boolean;
+  static Items(mode: Graphic3d_ZLayerId, criter: Standard_CString): Handle_TColStd_HSequenceOfHAsciiString;
+  static Standards(): void;
+  static get_type_name(): Standard_Character;
+  static get_type_descriptor(): Handle_Standard_Type;
+  DynamicType(): Handle_Standard_Type;
+  delete(): void;
+}
+
+  export declare class Interface_Static_1 extends Interface_Static {
+    constructor(family: Standard_CString, name: Standard_CString, type: Interface_ParamType, init: Standard_CString);
+  }
+
+  export declare class Interface_Static_2 extends Interface_Static {
+    constructor(family: Standard_CString, name: Standard_CString, other: Handle_Interface_Static);
+  }
 
 export declare class BRepBuilderAPI_MakeEdge extends BRepBuilderAPI_MakeShape {
   Init_1(C: Handle_Geom_Curve): void;
@@ -881,6 +1001,44 @@ export declare class TopExp {
   delete(): void;
 }
 
+export declare class Standard_Failure extends Standard_Transient {
+  Print(theStream: Standard_OStream): void;
+  GetMessageString(): Standard_CString;
+  SetMessageString(theMessage: Standard_CString): void;
+  GetStackString(): Standard_CString;
+  SetStackString(theStack: Standard_CString): void;
+  Reraise_1(): void;
+  Reraise_2(aMessage: Standard_CString): void;
+  Reraise_3(aReason: Standard_SStream): void;
+  static Raise_1(aMessage: Standard_CString): void;
+  static Raise_2(aReason: Standard_SStream): void;
+  static NewInstance_1(theMessage: Standard_CString): Handle_Standard_Failure;
+  static NewInstance_2(theMessage: Standard_CString, theStackTrace: Standard_CString): Handle_Standard_Failure;
+  static DefaultStackTraceLength(): Graphic3d_ZLayerId;
+  static SetDefaultStackTraceLength(theNbStackTraces: Graphic3d_ZLayerId): void;
+  Jump(): void;
+  static get_type_name(): Standard_Character;
+  static get_type_descriptor(): Handle_Standard_Type;
+  DynamicType(): Handle_Standard_Type;
+  delete(): void;
+}
+
+  export declare class Standard_Failure_1 extends Standard_Failure {
+    constructor();
+  }
+
+  export declare class Standard_Failure_2 extends Standard_Failure {
+    constructor(f: Standard_Failure);
+  }
+
+  export declare class Standard_Failure_3 extends Standard_Failure {
+    constructor(theDesc: Standard_CString);
+  }
+
+  export declare class Standard_Failure_4 extends Standard_Failure {
+    constructor(theDesc: Standard_CString, theStackTrace: Standard_CString);
+  }
+
 export declare class Handle_Standard_Transient {
   Nullify(): void;
   IsNull(): boolean;
@@ -1302,6 +1460,75 @@ export declare class BRepAdaptor_Curve extends Adaptor3d_Curve {
     constructor(E: TopoDS_Edge, F: TopoDS_Face);
   }
 
+export declare class BRepAdaptor_Surface extends Adaptor3d_Surface {
+  static get_type_name(): Standard_Character;
+  static get_type_descriptor(): Handle_Standard_Type;
+  DynamicType(): Handle_Standard_Type;
+  ShallowCopy(): Handle_Adaptor3d_Surface;
+  Initialize(F: TopoDS_Face, Restriction: Standard_Boolean): void;
+  Surface(): GeomAdaptor_Surface;
+  ChangeSurface(): GeomAdaptor_Surface;
+  Trsf(): gp_Trsf;
+  Face(): TopoDS_Face;
+  Tolerance(): Standard_Real;
+  FirstUParameter(): Standard_Real;
+  LastUParameter(): Standard_Real;
+  FirstVParameter(): Standard_Real;
+  LastVParameter(): Standard_Real;
+  UContinuity(): GeomAbs_Shape;
+  VContinuity(): GeomAbs_Shape;
+  NbUIntervals(theSh: GeomAbs_Shape): Graphic3d_ZLayerId;
+  NbVIntervals(theSh: GeomAbs_Shape): Graphic3d_ZLayerId;
+  UIntervals(T: IntTools_CArray1OfReal, S: GeomAbs_Shape): void;
+  VIntervals(T: IntTools_CArray1OfReal, S: GeomAbs_Shape): void;
+  UTrim(First: Standard_Real, Last: Standard_Real, Tol: Standard_Real): Handle_Adaptor3d_Surface;
+  VTrim(First: Standard_Real, Last: Standard_Real, Tol: Standard_Real): Handle_Adaptor3d_Surface;
+  IsUClosed(): Standard_Boolean;
+  IsVClosed(): Standard_Boolean;
+  IsUPeriodic(): Standard_Boolean;
+  UPeriod(): Standard_Real;
+  IsVPeriodic(): Standard_Boolean;
+  VPeriod(): Standard_Real;
+  Value(U: Standard_Real, V: Standard_Real): gp_Pnt;
+  D0(U: Standard_Real, V: Standard_Real, P: gp_Pnt): void;
+  D1(U: Standard_Real, V: Standard_Real, P: gp_Pnt, D1U: gp_Vec, D1V: gp_Vec): void;
+  D2(U: Standard_Real, V: Standard_Real, P: gp_Pnt, D1U: gp_Vec, D1V: gp_Vec, D2U: gp_Vec, D2V: gp_Vec, D2UV: gp_Vec): void;
+  D3(U: Standard_Real, V: Standard_Real, P: gp_Pnt, D1U: gp_Vec, D1V: gp_Vec, D2U: gp_Vec, D2V: gp_Vec, D2UV: gp_Vec, D3U: gp_Vec, D3V: gp_Vec, D3UUV: gp_Vec, D3UVV: gp_Vec): void;
+  DN(U: Standard_Real, V: Standard_Real, Nu: Graphic3d_ZLayerId, Nv: Graphic3d_ZLayerId): gp_Vec;
+  UResolution(theR3d: Standard_Real): Standard_Real;
+  VResolution(theR3d: Standard_Real): Standard_Real;
+  GetType(): GeomAbs_SurfaceType;
+  Plane(): gp_Pln;
+  Cylinder(): gp_Cylinder;
+  Cone(): gp_Cone;
+  Sphere(): gp_Sphere;
+  Torus(): gp_Torus;
+  UDegree(): Graphic3d_ZLayerId;
+  NbUPoles(): Graphic3d_ZLayerId;
+  VDegree(): Graphic3d_ZLayerId;
+  NbVPoles(): Graphic3d_ZLayerId;
+  NbUKnots(): Graphic3d_ZLayerId;
+  NbVKnots(): Graphic3d_ZLayerId;
+  IsURational(): Standard_Boolean;
+  IsVRational(): Standard_Boolean;
+  Bezier(): Handle_Geom_BezierSurface;
+  BSpline(): Handle_Geom_BSplineSurface;
+  AxeOfRevolution(): gp_Ax1;
+  Direction(): gp_Dir;
+  BasisCurve(): Handle_Adaptor3d_Curve;
+  BasisSurface(): Handle_Adaptor3d_Surface;
+  OffsetValue(): Standard_Real;
+  delete(): void;
+}
+
+  export declare class BRepAdaptor_Surface_1 extends BRepAdaptor_Surface {
+    constructor();
+  }
+
+  export declare class BRepAdaptor_Surface_2 extends BRepAdaptor_Surface {
+    constructor(F: TopoDS_Face, R: Standard_Boolean);
+  }
+
 export declare class TColgp_Array1OfPnt {
   begin(): any;
   end(): any;
@@ -1352,6 +1579,20 @@ export declare type GeomAbs_JoinType = {
   GeomAbs_Arc: {};
   GeomAbs_Tangent: {};
   GeomAbs_Intersection: {};
+}
+
+export declare type GeomAbs_SurfaceType = {
+  GeomAbs_Plane: {};
+  GeomAbs_Cylinder: {};
+  GeomAbs_Cone: {};
+  GeomAbs_Sphere: {};
+  GeomAbs_Torus: {};
+  GeomAbs_BezierSurface: {};
+  GeomAbs_BSplineSurface: {};
+  GeomAbs_SurfaceOfRevolution: {};
+  GeomAbs_SurfaceOfExtrusion: {};
+  GeomAbs_OffsetSurface: {};
+  GeomAbs_OtherSurface: {};
 }
 
 export declare type GeomAbs_Shape = {
@@ -1715,6 +1956,145 @@ export declare type BRepOffset_Mode = {
   BRepOffset_RectoVerso: {};
 }
 
+export declare class BOPAlgo_ArgumentAnalyzer extends BOPAlgo_Algo {
+  constructor()
+  SetShape1(TheShape: TopoDS_Shape): void;
+  SetShape2(TheShape: TopoDS_Shape): void;
+  GetShape1(): TopoDS_Shape;
+  GetShape2(): TopoDS_Shape;
+  OperationType(): BOPAlgo_Operation;
+  StopOnFirstFaulty(): Standard_Boolean;
+  ArgumentTypeMode(): Standard_Boolean;
+  SelfInterMode(): Standard_Boolean;
+  SmallEdgeMode(): Standard_Boolean;
+  RebuildFaceMode(): Standard_Boolean;
+  TangentMode(): Standard_Boolean;
+  MergeVertexMode(): Standard_Boolean;
+  MergeEdgeMode(): Standard_Boolean;
+  ContinuityMode(): Standard_Boolean;
+  CurveOnSurfaceMode(): Standard_Boolean;
+  Perform(theRange: Message_ProgressRange): void;
+  HasFaulty(): Standard_Boolean;
+  GetCheckResult(): BOPAlgo_ListOfCheckResult;
+  delete(): void;
+}
+
+export declare class BOPAlgo_ListOfCheckResult extends NCollection_BaseList {
+  begin(): any;
+  end(): any;
+  cbegin(): any;
+  cend(): any;
+  Size(): Standard_Integer;
+  Assign(theOther: BOPAlgo_ListOfCheckResult): BOPAlgo_ListOfCheckResult;
+  Clear(theAllocator: Handle_NCollection_BaseAllocator): void;
+  First_1(): BOPAlgo_CheckResult;
+  First_2(): BOPAlgo_CheckResult;
+  Last_1(): BOPAlgo_CheckResult;
+  Last_2(): BOPAlgo_CheckResult;
+  Append_1(theItem: BOPAlgo_CheckResult): BOPAlgo_CheckResult;
+  Append_3(theOther: BOPAlgo_ListOfCheckResult): void;
+  Prepend_1(theItem: BOPAlgo_CheckResult): BOPAlgo_CheckResult;
+  Prepend_2(theOther: BOPAlgo_ListOfCheckResult): void;
+  RemoveFirst(): void;
+  Reverse(): void;
+  delete(): void;
+}
+
+  export declare class BOPAlgo_ListOfCheckResult_1 extends BOPAlgo_ListOfCheckResult {
+    constructor();
+  }
+
+  export declare class BOPAlgo_ListOfCheckResult_2 extends BOPAlgo_ListOfCheckResult {
+    constructor(theAllocator: Handle_NCollection_BaseAllocator);
+  }
+
+  export declare class BOPAlgo_ListOfCheckResult_3 extends BOPAlgo_ListOfCheckResult {
+    constructor(theOther: BOPAlgo_ListOfCheckResult);
+  }
+
+export declare type BOPAlgo_CheckStatus = {
+  BOPAlgo_CheckUnknown: {};
+  BOPAlgo_BadType: {};
+  BOPAlgo_SelfIntersect: {};
+  BOPAlgo_TooSmallEdge: {};
+  BOPAlgo_NonRecoverableFace: {};
+  BOPAlgo_IncompatibilityOfVertex: {};
+  BOPAlgo_IncompatibilityOfEdge: {};
+  BOPAlgo_IncompatibilityOfFace: {};
+  BOPAlgo_OperationAborted: {};
+  BOPAlgo_GeomAbs_C0: {};
+  BOPAlgo_InvalidCurveOnSurface: {};
+  BOPAlgo_NotValid: {};
+}
+
+export declare class BOPAlgo_CheckResult {
+  constructor()
+  SetShape1(TheShape: TopoDS_Shape): void;
+  AddFaultyShape1(TheShape: TopoDS_Shape): void;
+  SetShape2(TheShape: TopoDS_Shape): void;
+  AddFaultyShape2(TheShape: TopoDS_Shape): void;
+  GetShape1(): TopoDS_Shape;
+  GetShape2(): TopoDS_Shape;
+  GetFaultyShapes1(): TopTools_ListOfShape;
+  GetFaultyShapes2(): TopTools_ListOfShape;
+  SetCheckStatus(TheStatus: BOPAlgo_CheckStatus): void;
+  GetCheckStatus(): BOPAlgo_CheckStatus;
+  SetMaxDistance1(theDist: Standard_Real): void;
+  SetMaxDistance2(theDist: Standard_Real): void;
+  SetMaxParameter1(thePar: Standard_Real): void;
+  SetMaxParameter2(thePar: Standard_Real): void;
+  GetMaxDistance1(): Standard_Real;
+  GetMaxDistance2(): Standard_Real;
+  GetMaxParameter1(): Standard_Real;
+  GetMaxParameter2(): Standard_Real;
+  delete(): void;
+}
+
+export declare class gp_Cone {
+  SetAxis(theA1: gp_Ax1): void;
+  SetLocation(theLoc: gp_Pnt): void;
+  SetPosition(theA3: gp_Ax3): void;
+  SetRadius(theR: Standard_Real): void;
+  SetSemiAngle(theAng: Standard_Real): void;
+  Apex(): gp_Pnt;
+  UReverse(): void;
+  VReverse(): void;
+  Direct(): Standard_Boolean;
+  Axis(): gp_Ax1;
+  Coefficients(theA1: Standard_Real, theA2: Standard_Real, theA3: Standard_Real, theB1: Standard_Real, theB2: Standard_Real, theB3: Standard_Real, theC1: Standard_Real, theC2: Standard_Real, theC3: Standard_Real, theD: Standard_Real): void;
+  Location(): gp_Pnt;
+  Position(): gp_Ax3;
+  RefRadius(): Standard_Real;
+  SemiAngle(): Standard_Real;
+  XAxis(): gp_Ax1;
+  YAxis(): gp_Ax1;
+  Mirror_1(theP: gp_Pnt): void;
+  Mirrored_1(theP: gp_Pnt): gp_Cone;
+  Mirror_2(theA1: gp_Ax1): void;
+  Mirrored_2(theA1: gp_Ax1): gp_Cone;
+  Mirror_3(theA2: gp_Ax2): void;
+  Mirrored_3(theA2: gp_Ax2): gp_Cone;
+  Rotate(theA1: gp_Ax1, theAng: Standard_Real): void;
+  Rotated(theA1: gp_Ax1, theAng: Standard_Real): gp_Cone;
+  Scale(theP: gp_Pnt, theS: Standard_Real): void;
+  Scaled(theP: gp_Pnt, theS: Standard_Real): gp_Cone;
+  Transform(theT: gp_Trsf): void;
+  Transformed(theT: gp_Trsf): gp_Cone;
+  Translate_1(theV: gp_Vec): void;
+  Translated_1(theV: gp_Vec): gp_Cone;
+  Translate_2(theP1: gp_Pnt, theP2: gp_Pnt): void;
+  Translated_2(theP1: gp_Pnt, theP2: gp_Pnt): gp_Cone;
+  delete(): void;
+}
+
+  export declare class gp_Cone_1 extends gp_Cone {
+    constructor();
+  }
+
+  export declare class gp_Cone_2 extends gp_Cone {
+    constructor(theA3: gp_Ax3, theAng: Standard_Real, theRadius: Standard_Real);
+  }
+
 export declare class gp_Pln {
   Coefficients(theA: Standard_Real, theB: Standard_Real, theC: Standard_Real, theD: Standard_Real): void;
   SetAxis(theA1: gp_Ax1): void;
@@ -1997,6 +2377,146 @@ export declare class gp_Dir {
     constructor(theXv: Standard_Real, theYv: Standard_Real, theZv: Standard_Real);
   }
 
+export declare class gp_Sphere {
+  SetLocation(theLoc: gp_Pnt): void;
+  SetPosition(theA3: gp_Ax3): void;
+  SetRadius(theR: Standard_Real): void;
+  Area(): Standard_Real;
+  Coefficients(theA1: Standard_Real, theA2: Standard_Real, theA3: Standard_Real, theB1: Standard_Real, theB2: Standard_Real, theB3: Standard_Real, theC1: Standard_Real, theC2: Standard_Real, theC3: Standard_Real, theD: Standard_Real): void;
+  UReverse(): void;
+  VReverse(): void;
+  Direct(): Standard_Boolean;
+  Location(): gp_Pnt;
+  Position(): gp_Ax3;
+  Radius(): Standard_Real;
+  Volume(): Standard_Real;
+  XAxis(): gp_Ax1;
+  YAxis(): gp_Ax1;
+  Mirror_1(theP: gp_Pnt): void;
+  Mirrored_1(theP: gp_Pnt): gp_Sphere;
+  Mirror_2(theA1: gp_Ax1): void;
+  Mirrored_2(theA1: gp_Ax1): gp_Sphere;
+  Mirror_3(theA2: gp_Ax2): void;
+  Mirrored_3(theA2: gp_Ax2): gp_Sphere;
+  Rotate(theA1: gp_Ax1, theAng: Standard_Real): void;
+  Rotated(theA1: gp_Ax1, theAng: Standard_Real): gp_Sphere;
+  Scale(theP: gp_Pnt, theS: Standard_Real): void;
+  Scaled(theP: gp_Pnt, theS: Standard_Real): gp_Sphere;
+  Transform(theT: gp_Trsf): void;
+  Transformed(theT: gp_Trsf): gp_Sphere;
+  Translate_1(theV: gp_Vec): void;
+  Translated_1(theV: gp_Vec): gp_Sphere;
+  Translate_2(theP1: gp_Pnt, theP2: gp_Pnt): void;
+  Translated_2(theP1: gp_Pnt, theP2: gp_Pnt): gp_Sphere;
+  delete(): void;
+}
+
+  export declare class gp_Sphere_1 extends gp_Sphere {
+    constructor();
+  }
+
+  export declare class gp_Sphere_2 extends gp_Sphere {
+    constructor(theA3: gp_Ax3, theRadius: Standard_Real);
+  }
+
+export declare class gp_Ax3 {
+  XReverse(): void;
+  YReverse(): void;
+  ZReverse(): void;
+  SetAxis(theA1: gp_Ax1): void;
+  SetDirection(theV: gp_Dir): void;
+  SetLocation(theP: gp_Pnt): void;
+  SetXDirection(theVx: gp_Dir): void;
+  SetYDirection(theVy: gp_Dir): void;
+  Angle(theOther: gp_Ax3): Standard_Real;
+  Axis(): gp_Ax1;
+  Ax2(): gp_Ax2;
+  Direction(): gp_Dir;
+  Location(): gp_Pnt;
+  XDirection(): gp_Dir;
+  YDirection(): gp_Dir;
+  Direct(): Standard_Boolean;
+  IsCoplanar_1(theOther: gp_Ax3, theLinearTolerance: Standard_Real, theAngularTolerance: Standard_Real): Standard_Boolean;
+  IsCoplanar_2(theA1: gp_Ax1, theLinearTolerance: Standard_Real, theAngularTolerance: Standard_Real): Standard_Boolean;
+  Mirror_1(theP: gp_Pnt): void;
+  Mirrored_1(theP: gp_Pnt): gp_Ax3;
+  Mirror_2(theA1: gp_Ax1): void;
+  Mirrored_2(theA1: gp_Ax1): gp_Ax3;
+  Mirror_3(theA2: gp_Ax2): void;
+  Mirrored_3(theA2: gp_Ax2): gp_Ax3;
+  Rotate(theA1: gp_Ax1, theAng: Standard_Real): void;
+  Rotated(theA1: gp_Ax1, theAng: Standard_Real): gp_Ax3;
+  Scale(theP: gp_Pnt, theS: Standard_Real): void;
+  Scaled(theP: gp_Pnt, theS: Standard_Real): gp_Ax3;
+  Transform(theT: gp_Trsf): void;
+  Transformed(theT: gp_Trsf): gp_Ax3;
+  Translate_1(theV: gp_Vec): void;
+  Translated_1(theV: gp_Vec): gp_Ax3;
+  Translate_2(theP1: gp_Pnt, theP2: gp_Pnt): void;
+  Translated_2(theP1: gp_Pnt, theP2: gp_Pnt): gp_Ax3;
+  DumpJson(theOStream: Standard_OStream, theDepth: Graphic3d_ZLayerId): void;
+  InitFromJson(theSStream: Standard_SStream, theStreamPos: Graphic3d_ZLayerId): Standard_Boolean;
+  delete(): void;
+}
+
+  export declare class gp_Ax3_1 extends gp_Ax3 {
+    constructor();
+  }
+
+  export declare class gp_Ax3_2 extends gp_Ax3 {
+    constructor(theA: gp_Ax2);
+  }
+
+  export declare class gp_Ax3_3 extends gp_Ax3 {
+    constructor(theP: gp_Pnt, theN: gp_Dir, theVx: gp_Dir);
+  }
+
+  export declare class gp_Ax3_4 extends gp_Ax3 {
+    constructor(theP: gp_Pnt, theV: gp_Dir);
+  }
+
+export declare class gp_Cylinder {
+  SetAxis(theA1: gp_Ax1): void;
+  SetLocation(theLoc: gp_Pnt): void;
+  SetPosition(theA3: gp_Ax3): void;
+  SetRadius(theR: Standard_Real): void;
+  UReverse(): void;
+  VReverse(): void;
+  Direct(): Standard_Boolean;
+  Axis(): gp_Ax1;
+  Coefficients(theA1: Standard_Real, theA2: Standard_Real, theA3: Standard_Real, theB1: Standard_Real, theB2: Standard_Real, theB3: Standard_Real, theC1: Standard_Real, theC2: Standard_Real, theC3: Standard_Real, theD: Standard_Real): void;
+  Location(): gp_Pnt;
+  Position(): gp_Ax3;
+  Radius(): Standard_Real;
+  XAxis(): gp_Ax1;
+  YAxis(): gp_Ax1;
+  Mirror_1(theP: gp_Pnt): void;
+  Mirrored_1(theP: gp_Pnt): gp_Cylinder;
+  Mirror_2(theA1: gp_Ax1): void;
+  Mirrored_2(theA1: gp_Ax1): gp_Cylinder;
+  Mirror_3(theA2: gp_Ax2): void;
+  Mirrored_3(theA2: gp_Ax2): gp_Cylinder;
+  Rotate(theA1: gp_Ax1, theAng: Standard_Real): void;
+  Rotated(theA1: gp_Ax1, theAng: Standard_Real): gp_Cylinder;
+  Scale(theP: gp_Pnt, theS: Standard_Real): void;
+  Scaled(theP: gp_Pnt, theS: Standard_Real): gp_Cylinder;
+  Transform(theT: gp_Trsf): void;
+  Transformed(theT: gp_Trsf): gp_Cylinder;
+  Translate_1(theV: gp_Vec): void;
+  Translated_1(theV: gp_Vec): gp_Cylinder;
+  Translate_2(theP1: gp_Pnt, theP2: gp_Pnt): void;
+  Translated_2(theP1: gp_Pnt, theP2: gp_Pnt): gp_Cylinder;
+  delete(): void;
+}
+
+  export declare class gp_Cylinder_1 extends gp_Cylinder {
+    constructor();
+  }
+
+  export declare class gp_Cylinder_2 extends gp_Cylinder {
+    constructor(theA3: gp_Ax3, theRadius: Standard_Real);
+  }
+
 export declare class gp_Pnt {
   SetCoord_1(theIndex: Graphic3d_ZLayerId, theXi: Standard_Real): void;
   SetCoord_2(theXp: Standard_Real, theYp: Standard_Real, theZp: Standard_Real): void;
@@ -2145,6 +2665,52 @@ export declare class gp_Ax2 {
     constructor(P: gp_Pnt, V: gp_Dir);
   }
 
+export declare class gp_Torus {
+  SetAxis(theA1: gp_Ax1): void;
+  SetLocation(theLoc: gp_Pnt): void;
+  SetMajorRadius(theMajorRadius: Standard_Real): void;
+  SetMinorRadius(theMinorRadius: Standard_Real): void;
+  SetPosition(theA3: gp_Ax3): void;
+  Area(): Standard_Real;
+  UReverse(): void;
+  VReverse(): void;
+  Direct(): Standard_Boolean;
+  Axis(): gp_Ax1;
+  Coefficients(theCoef: IntTools_CArray1OfReal): void;
+  Location(): gp_Pnt;
+  Position(): gp_Ax3;
+  MajorRadius(): Standard_Real;
+  MinorRadius(): Standard_Real;
+  Volume(): Standard_Real;
+  XAxis(): gp_Ax1;
+  YAxis(): gp_Ax1;
+  Mirror_1(theP: gp_Pnt): void;
+  Mirrored_1(theP: gp_Pnt): gp_Torus;
+  Mirror_2(theA1: gp_Ax1): void;
+  Mirrored_2(theA1: gp_Ax1): gp_Torus;
+  Mirror_3(theA2: gp_Ax2): void;
+  Mirrored_3(theA2: gp_Ax2): gp_Torus;
+  Rotate(theA1: gp_Ax1, theAng: Standard_Real): void;
+  Rotated(theA1: gp_Ax1, theAng: Standard_Real): gp_Torus;
+  Scale(theP: gp_Pnt, theS: Standard_Real): void;
+  Scaled(theP: gp_Pnt, theS: Standard_Real): gp_Torus;
+  Transform(theT: gp_Trsf): void;
+  Transformed(theT: gp_Trsf): gp_Torus;
+  Translate_1(theV: gp_Vec): void;
+  Translated_1(theV: gp_Vec): gp_Torus;
+  Translate_2(theP1: gp_Pnt, theP2: gp_Pnt): void;
+  Translated_2(theP1: gp_Pnt, theP2: gp_Pnt): gp_Torus;
+  delete(): void;
+}
+
+  export declare class gp_Torus_1 extends gp_Torus {
+    constructor();
+  }
+
+  export declare class gp_Torus_2 extends gp_Torus {
+    constructor(theA3: gp_Ax3, theMajorRadius: Standard_Real, theMinorRadius: Standard_Real);
+  }
+
 export declare type TopAbs_ShapeEnum = {
   TopAbs_COMPOUND: {};
   TopAbs_COMPSOLID: {};
@@ -2284,6 +2850,54 @@ export declare class BRepFilletAPI_LocalOperation extends BRepBuilderAPI_MakeSha
   Simulate(IC: Graphic3d_ZLayerId): void;
   NbSurf(IC: Graphic3d_ZLayerId): Graphic3d_ZLayerId;
   Sect(IC: Graphic3d_ZLayerId, IS: Graphic3d_ZLayerId): Handle_ChFiDS_SecHArray1;
+  delete(): void;
+}
+
+export declare class Handle_BRepTools_History {
+  Nullify(): void;
+  IsNull(): boolean;
+  reset(thePtr: BRepTools_History): void;
+  get(): BRepTools_History;
+  delete(): void;
+}
+
+  export declare class Handle_BRepTools_History_1 extends Handle_BRepTools_History {
+    constructor();
+  }
+
+  export declare class Handle_BRepTools_History_2 extends Handle_BRepTools_History {
+    constructor(thePtr: BRepTools_History);
+  }
+
+  export declare class Handle_BRepTools_History_3 extends Handle_BRepTools_History {
+    constructor(theHandle: Handle_BRepTools_History);
+  }
+
+  export declare class Handle_BRepTools_History_4 extends Handle_BRepTools_History {
+    constructor(theHandle: Handle_BRepTools_History);
+  }
+
+export declare class BRepTools_History extends Standard_Transient {
+  constructor()
+  static IsSupportedType(theShape: TopoDS_Shape): Standard_Boolean;
+  AddGenerated(theInitial: TopoDS_Shape, theGenerated: TopoDS_Shape): void;
+  AddModified(theInitial: TopoDS_Shape, theModified: TopoDS_Shape): void;
+  Remove(theRemoved: TopoDS_Shape): void;
+  ReplaceGenerated(theInitial: TopoDS_Shape, theGenerated: TopoDS_Shape): void;
+  ReplaceModified(theInitial: TopoDS_Shape, theModified: TopoDS_Shape): void;
+  Clear(): void;
+  Generated(theInitial: TopoDS_Shape): TopTools_ListOfShape;
+  Modified(theInitial: TopoDS_Shape): TopTools_ListOfShape;
+  IsRemoved(theInitial: TopoDS_Shape): Standard_Boolean;
+  HasGenerated(): Standard_Boolean;
+  HasModified(): Standard_Boolean;
+  HasRemoved(): Standard_Boolean;
+  Merge_1(theHistory23: Handle_BRepTools_History): void;
+  Merge_2(theHistory23: BRepTools_History): void;
+  Dump(theS: Standard_OStream): void;
+  static get_type_name(): Standard_Character;
+  static get_type_descriptor(): Handle_Standard_Type;
+  DynamicType(): Handle_Standard_Type;
   delete(): void;
 }
 
@@ -2783,6 +3397,7 @@ declare namespace FS {
 
 
 export type OpenCascadeInstance = {FS: typeof FS} & {
+  Adaptor3d_Surface: typeof Adaptor3d_Surface;
   Adaptor3d_Curve: typeof Adaptor3d_Curve;
   GeomAPI_PointsToBSpline: typeof GeomAPI_PointsToBSpline;
   GeomAPI_PointsToBSpline_1: typeof GeomAPI_PointsToBSpline_1;
@@ -2790,6 +3405,9 @@ export type OpenCascadeInstance = {FS: typeof FS} & {
   GeomAPI_PointsToBSpline_3: typeof GeomAPI_PointsToBSpline_3;
   GeomAPI_PointsToBSpline_4: typeof GeomAPI_PointsToBSpline_4;
   GeomAPI_PointsToBSpline_5: typeof GeomAPI_PointsToBSpline_5;
+  ShapeUpgrade_UnifySameDomain: typeof ShapeUpgrade_UnifySameDomain;
+  ShapeUpgrade_UnifySameDomain_1: typeof ShapeUpgrade_UnifySameDomain_1;
+  ShapeUpgrade_UnifySameDomain_2: typeof ShapeUpgrade_UnifySameDomain_2;
   STEPControl_StepModelType: STEPControl_StepModelType;
   STEPControl_Reader: typeof STEPControl_Reader;
   STEPControl_Reader_1: typeof STEPControl_Reader_1;
@@ -2798,6 +3416,9 @@ export type OpenCascadeInstance = {FS: typeof FS} & {
   STEPControl_Writer_1: typeof STEPControl_Writer_1;
   STEPControl_Writer_2: typeof STEPControl_Writer_2;
   BRepGProp: typeof BRepGProp;
+  Interface_Static: typeof Interface_Static;
+  Interface_Static_1: typeof Interface_Static_1;
+  Interface_Static_2: typeof Interface_Static_2;
   BRepBuilderAPI_MakeEdge: typeof BRepBuilderAPI_MakeEdge;
   BRepBuilderAPI_MakeEdge_1: typeof BRepBuilderAPI_MakeEdge_1;
   BRepBuilderAPI_MakeEdge_2: typeof BRepBuilderAPI_MakeEdge_2;
@@ -2913,6 +3534,11 @@ export type OpenCascadeInstance = {FS: typeof FS} & {
   TopExp_Explorer_1: typeof TopExp_Explorer_1;
   TopExp_Explorer_2: typeof TopExp_Explorer_2;
   TopExp: typeof TopExp;
+  Standard_Failure: typeof Standard_Failure;
+  Standard_Failure_1: typeof Standard_Failure_1;
+  Standard_Failure_2: typeof Standard_Failure_2;
+  Standard_Failure_3: typeof Standard_Failure_3;
+  Standard_Failure_4: typeof Standard_Failure_4;
   Handle_Standard_Transient: typeof Handle_Standard_Transient;
   Handle_Standard_Transient_1: typeof Handle_Standard_Transient_1;
   Handle_Standard_Transient_2: typeof Handle_Standard_Transient_2;
@@ -2974,6 +3600,9 @@ export type OpenCascadeInstance = {FS: typeof FS} & {
   BRepAdaptor_Curve_1: typeof BRepAdaptor_Curve_1;
   BRepAdaptor_Curve_2: typeof BRepAdaptor_Curve_2;
   BRepAdaptor_Curve_3: typeof BRepAdaptor_Curve_3;
+  BRepAdaptor_Surface: typeof BRepAdaptor_Surface;
+  BRepAdaptor_Surface_1: typeof BRepAdaptor_Surface_1;
+  BRepAdaptor_Surface_2: typeof BRepAdaptor_Surface_2;
   TColgp_Array1OfPnt: typeof TColgp_Array1OfPnt;
   TColgp_Array1OfPnt_1: typeof TColgp_Array1OfPnt_1;
   TColgp_Array1OfPnt_2: typeof TColgp_Array1OfPnt_2;
@@ -2981,6 +3610,7 @@ export type OpenCascadeInstance = {FS: typeof FS} & {
   TColgp_Array1OfPnt_4: typeof TColgp_Array1OfPnt_4;
   TColgp_Array1OfPnt_5: typeof TColgp_Array1OfPnt_5;
   GeomAbs_JoinType: GeomAbs_JoinType;
+  GeomAbs_SurfaceType: GeomAbs_SurfaceType;
   GeomAbs_Shape: GeomAbs_Shape;
   BRepOffsetAPI_MakePipe: typeof BRepOffsetAPI_MakePipe;
   BRepOffsetAPI_MakePipe_1: typeof BRepOffsetAPI_MakePipe_1;
@@ -3012,6 +3642,16 @@ export type OpenCascadeInstance = {FS: typeof FS} & {
   IGESControl_Writer_2: typeof IGESControl_Writer_2;
   IGESControl_Writer_3: typeof IGESControl_Writer_3;
   BRepOffset_Mode: BRepOffset_Mode;
+  BOPAlgo_ArgumentAnalyzer: typeof BOPAlgo_ArgumentAnalyzer;
+  BOPAlgo_ListOfCheckResult: typeof BOPAlgo_ListOfCheckResult;
+  BOPAlgo_ListOfCheckResult_1: typeof BOPAlgo_ListOfCheckResult_1;
+  BOPAlgo_ListOfCheckResult_2: typeof BOPAlgo_ListOfCheckResult_2;
+  BOPAlgo_ListOfCheckResult_3: typeof BOPAlgo_ListOfCheckResult_3;
+  BOPAlgo_CheckStatus: BOPAlgo_CheckStatus;
+  BOPAlgo_CheckResult: typeof BOPAlgo_CheckResult;
+  gp_Cone: typeof gp_Cone;
+  gp_Cone_1: typeof gp_Cone_1;
+  gp_Cone_2: typeof gp_Cone_2;
   gp_Pln: typeof gp_Pln;
   gp_Pln_1: typeof gp_Pln_1;
   gp_Pln_2: typeof gp_Pln_2;
@@ -3034,6 +3674,17 @@ export type OpenCascadeInstance = {FS: typeof FS} & {
   gp_Dir_2: typeof gp_Dir_2;
   gp_Dir_3: typeof gp_Dir_3;
   gp_Dir_4: typeof gp_Dir_4;
+  gp_Sphere: typeof gp_Sphere;
+  gp_Sphere_1: typeof gp_Sphere_1;
+  gp_Sphere_2: typeof gp_Sphere_2;
+  gp_Ax3: typeof gp_Ax3;
+  gp_Ax3_1: typeof gp_Ax3_1;
+  gp_Ax3_2: typeof gp_Ax3_2;
+  gp_Ax3_3: typeof gp_Ax3_3;
+  gp_Ax3_4: typeof gp_Ax3_4;
+  gp_Cylinder: typeof gp_Cylinder;
+  gp_Cylinder_1: typeof gp_Cylinder_1;
+  gp_Cylinder_2: typeof gp_Cylinder_2;
   gp_Pnt: typeof gp_Pnt;
   gp_Pnt_1: typeof gp_Pnt_1;
   gp_Pnt_2: typeof gp_Pnt_2;
@@ -3045,11 +3696,20 @@ export type OpenCascadeInstance = {FS: typeof FS} & {
   gp_Ax2_1: typeof gp_Ax2_1;
   gp_Ax2_2: typeof gp_Ax2_2;
   gp_Ax2_3: typeof gp_Ax2_3;
+  gp_Torus: typeof gp_Torus;
+  gp_Torus_1: typeof gp_Torus_1;
+  gp_Torus_2: typeof gp_Torus_2;
   TopAbs_ShapeEnum: TopAbs_ShapeEnum;
   TopAbs_Orientation: TopAbs_Orientation;
   BRepFilletAPI_MakeChamfer: typeof BRepFilletAPI_MakeChamfer;
   BRepFilletAPI_MakeFillet: typeof BRepFilletAPI_MakeFillet;
   BRepFilletAPI_LocalOperation: typeof BRepFilletAPI_LocalOperation;
+  Handle_BRepTools_History: typeof Handle_BRepTools_History;
+  Handle_BRepTools_History_1: typeof Handle_BRepTools_History_1;
+  Handle_BRepTools_History_2: typeof Handle_BRepTools_History_2;
+  Handle_BRepTools_History_3: typeof Handle_BRepTools_History_3;
+  Handle_BRepTools_History_4: typeof Handle_BRepTools_History_4;
+  BRepTools_History: typeof BRepTools_History;
   ChFi3d_FilletShape: ChFi3d_FilletShape;
   NCollection_BaseMap: typeof NCollection_BaseMap;
   NCollection_BaseList: typeof NCollection_BaseList;

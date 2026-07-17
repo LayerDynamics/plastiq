@@ -11,6 +11,7 @@
 // the app — see `geometryClientProbe`.
 
 import type { ZodError } from "zod";
+import { describeOcctError } from "@plastiq/cad";
 import { authoringDocumentSchema, cadDocumentSchema, toCadDocument, type AuthoringDocument } from "./schema.js";
 import type { CadDocument } from "../../store/types.js";
 import type { GeometryClient } from "../../worker/bridge.js";
@@ -102,10 +103,23 @@ export async function buildPart(input: unknown, deps: BuildPartDeps): Promise<Bu
 export function geometryClientProbe(client: Pick<GeometryClient, "build">): BuildProbe {
   return async (doc) => {
     try {
-      const mesh = await client.build(doc);
-      return mesh ? { ok: true } : { ok: false, error: "the document produced no geometry or a feature failed to build" };
+      const { mesh, statuses } = await client.build(doc);
+      // The rebuild ISOLATES per-feature failures, so a document with a broken
+      // feature can still hand back geometry. A probe that only checked for a
+      // mesh would green-light a partially-failed document — report the failed
+      // features instead, naming them.
+      const failed = statuses.filter((s) => s.status === "error");
+      if (failed.length > 0) {
+        return {
+          ok: false,
+          error: failed.map((s) => s.message ?? `feature '${s.featureId}' failed`).join("; "),
+        };
+      }
+      return mesh
+        ? { ok: true }
+        : { ok: false, error: "the document produced no geometry" };
     } catch (e) {
-      return { ok: false, error: e instanceof Error ? e.message : String(e) };
+      return { ok: false, error: describeOcctError(e) };
     }
   };
 }

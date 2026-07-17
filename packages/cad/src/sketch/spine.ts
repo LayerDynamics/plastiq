@@ -1,8 +1,10 @@
 // SpinePath — an open 3D path (world coords) used as a sweep spine. The editor
 // builds a polyline or a mixed line/arc path; buildSpineWire turns it into an
-// OCCT wire of edges.
+// OCCT wire of edges. A spine can also come from edges picked on the model
+// (buildWireFromEdges), which keeps the sweep parametric: the edges are
+// re-resolved from the rebuilt body each pass rather than baked to points.
 
-import type { TopoDS_Wire } from "opencascade.js";
+import type { TopoDS_Edge, TopoDS_Wire } from "opencascade.js";
 
 import type { Occt } from "../oc/init.js";
 
@@ -160,5 +162,32 @@ function buildSegmentedWire(oc: Occt, path: SpineSegmented): TopoDS_Wire {
   } finally {
     wireMaker.delete();
     for (let i = trash.length - 1; i >= 0; i--) trash[i]!.delete();
+  }
+}
+
+/**
+ * Build an OPEN spine wire from edges already resolved on a model body (a picked
+ * edge chain). Unlike a baked polyline this preserves each edge's exact curve —
+ * an arc stays an arc instead of being sampled into chords.
+ *
+ * `Add_3` takes the whole list at once so the edges connect regardless of the
+ * order they were picked in; edges that share no vertex leave the maker
+ * not-done, which surfaces as an explicit error rather than a partial spine.
+ * The caller owns `edges`; the returned wire is owned by the caller.
+ */
+export function buildWireFromEdges(oc: Occt, edges: readonly TopoDS_Edge[]): TopoDS_Wire {
+  if (edges.length === 0) throw new Error("SpinePath: needs at least one edge");
+  const wireMaker = new oc.BRepBuilderAPI_MakeWire_1();
+  const list = new oc.TopTools_ListOfShape_1();
+  try {
+    for (const e of edges) list.Append_1(e);
+    wireMaker.Add_3(list);
+    if (!wireMaker.IsDone()) {
+      throw new Error("SpinePath: the picked edges do not form one connected chain");
+    }
+    return wireMaker.Wire();
+  } finally {
+    wireMaker.delete();
+    list.delete();
   }
 }

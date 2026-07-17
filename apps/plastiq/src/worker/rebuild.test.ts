@@ -2,7 +2,12 @@ import { beforeAll, describe, expect, it } from "vitest";
 import { exportStep, initOcct, makeBox, mm, type Occt, type Solid } from "@plastiq/cad";
 import type { CadDocument } from "../store/types.js";
 import type { Profile } from "../sketch/profile.js";
-import { rebuildDocument, rebuildTagged, rebuildTaggedWithProps } from "./rebuild.js";
+import {
+  rebuildDocument,
+  rebuildDocumentIsolated,
+  rebuildTagged,
+  rebuildTaggedWithProps,
+} from "./rebuild.js";
 
 const INIT_TIMEOUT_MS = 120_000;
 
@@ -1312,6 +1317,168 @@ describe("CAD Studio rebuild (SPEC-5 M0.4)", () => {
     } finally {
       solid!.delete();
     }
+  });
+
+  it("an isolating rebuild keeps the prior body when a feature fails (FR-24)", () => {
+    const m = (x: number): number => mm(x);
+    // A fillet whose radius the local geometry cannot absorb: r = 40 mm on a
+    // 20 mm-thick box. Fail-fast blanks the WHOLE model; isolating must keep the
+    // box and report only the fillet.
+    const doc: CadDocument = {
+      features: [
+        { id: "f1", type: "box", params: { dx: m(40), dy: m(30), dz: m(20) } },
+        {
+          id: "f2",
+          type: "fillet",
+          deps: ["f1"],
+          params: { radius: m(40) },
+          data: { selector: { kind: "allEdges" } },
+        },
+      ],
+      params: {},
+    };
+
+    // Fail-fast contract (internal sub-builds / headless) is unchanged: it throws.
+    expect(() => rebuildDocument(oc, doc)).toThrow();
+
+    // Isolating contract (the interactive editor): the box survives, and the
+    // fillet is reported as errored rather than taking the model down with it.
+    const { solid, statuses } = rebuildDocumentIsolated(oc, doc);
+    try {
+      expect(solid).not.toBeNull();
+      // The box passed through untouched — its volume is unchanged.
+      expect(solidVolume(oc, solid!)).toBeCloseTo(m(40) * m(30) * m(20), 9);
+      expect(statuses.find((s) => s.featureId === "f1")?.status).toBe("ok");
+      const bad = statuses.find((s) => s.featureId === "f2");
+      expect(bad?.status).toBe("error");
+      // The message ALWAYS names the feature, even for a raw OCCT throw, so the
+      // UI never has to regex it out (and never renders "undefined").
+      expect(bad?.message).toContain("feature 'f2'");
+      expect(bad?.message).not.toContain("undefined");
+    } finally {
+      solid?.delete();
+    }
+  });
+
+  it("an isolating rebuild reports suppressed features and cascades a failed sketch (FR-24)", () => {
+    const doc: CadDocument = {
+      features: [
+        { id: "f1", type: "box", params: { dx: mm(20), dy: mm(20), dz: mm(20) }, suppressed: true },
+        // A sketch with no buildable profile: it fails, and the extrude that
+        // needs it must fail too rather than silently building something else.
+        { id: "f2", type: "sketch", data: {} },
+        { id: "f3", type: "extrude", deps: ["f2"], params: { height: mm(5) } },
+      ],
+      params: {},
+    };
+    const { solid, statuses } = rebuildDocumentIsolated(oc, doc);
+    try {
+      expect(statuses.find((s) => s.featureId === "f1")?.status).toBe("suppressed");
+      expect(statuses.find((s) => s.featureId === "f2")?.status).toBe("error");
+      expect(statuses.find((s) => s.featureId === "f3")?.status).toBe("error");
+      // Every error names its own feature — the cascade is attributable.
+      expect(statuses.find((s) => s.featureId === "f3")?.message).toContain("feature 'f3'");
+    } finally {
+      solid?.delete();
+    }
+  });
+
+  it("a sweep along picked model edges re-resolves its spine each rebuild (FR-32)", () => {
+    const m = (x: number): number => mm(x);
+    const box = (dz: number): CadDocument => ({
+      features: [{ id: "f1", type: "box", params: { dx: m(40), dy: m(30), dz } }],
+      params: {},
+    });
+    // Capture a real VERTICAL (Z-aligned) box edge: both its adjacent faces are
+    // side walls, so both their normals lie in the XY plane. Sweeping an XY
+    // profile along it is the clean, non-degenerate case.
+    const tagged = rebuildTagged(oc, box(m(20)), { linearDeflection: m(0.5) })!;
+    const vertical = tagged.edges.find(
+      (e) => Math.abs(e.faceNormals[0]![2]) < 1e-6 && Math.abs(e.faceNormals[1]![2]) < 1e-6,
+    );
+    expect(vertical).toBeDefined();
+    const edgeRef = { faceNormals: vertical!.faceNormals };
+
+    // 4 mm square profile swept along the picked edge; `op: "new"` leaves ONLY the
+    // pipe so its volume is measurable on its own.
+    const doc = (dz: number): CadDocument => ({
+      features: [
+        { id: "f1", type: "box", params: { dx: m(40), dy: m(30), dz } },
+        {
+          id: "f2",
+          type: "sweep",
+          deps: ["f1"],
+          data: {
+            profile: loopProfile([
+              [m(-2), m(-2)],
+              [m(2), m(-2)],
+              [m(2), m(2)],
+              [m(-2), m(2)],
+            ]),
+            pathEdges: [edgeRef],
+            op: "new",
+          },
+        },
+      ],
+      params: {},
+    });
+
+    // The spine is the picked edge itself: a 4x4 mm profile over a 20 mm edge.
+    const a = rebuildDocument(oc, doc(m(20)));
+    let volA: number;
+    try {
+      expect(a!.isValid()).toBe(true);
+      volA = solidVolume(oc, a!);
+      expect(volA).toBeCloseTo(m(4) * m(4) * m(20), 9);
+    } finally {
+      a!.delete();
+    }
+
+    // Grow the box: the EdgeRef must RE-RESOLVE against the rebuilt body and the
+    // spine must follow it — a spine baked to points at creation would not move,
+    // leaving the volume unchanged.
+    const b = rebuildDocument(oc, doc(m(40)));
+    try {
+      expect(b!.isValid()).toBe(true);
+      expect(solidVolume(oc, b!)).toBeCloseTo(m(4) * m(4) * m(40), 9);
+      expect(solidVolume(oc, b!)).toBeGreaterThan(volA * 1.9);
+    } finally {
+      b!.delete();
+    }
+  });
+
+  it("a sweep whose picked path edge no longer resolves fails loudly (FR-32)", () => {
+    const m = (x: number): number => mm(x);
+    // A signature that matches no edge on the body: the sweep must throw rather
+    // than silently sweeping along nothing or a wrong edge.
+    const doc: CadDocument = {
+      features: [
+        { id: "f1", type: "box", params: { dx: m(40), dy: m(30), dz: m(20) } },
+        {
+          id: "f2",
+          type: "sweep",
+          deps: ["f1"],
+          data: {
+            profile: loopProfile([
+              [m(-2), m(-2)],
+              [m(2), m(-2)],
+              [m(2), m(2)],
+              [m(-2), m(2)],
+            ]),
+            pathEdges: [
+              {
+                faceNormals: [
+                  [0.577, 0.577, 0.577],
+                  [-0.577, -0.577, -0.577],
+                ],
+              },
+            ],
+          },
+        },
+      ],
+      params: {},
+    };
+    expect(() => rebuildDocument(oc, doc)).toThrow(/path edge\(s\) did not resolve/);
   });
 
   it("a sweep profile plane (data.plane) reorients the section off world-XY (G3)", () => {

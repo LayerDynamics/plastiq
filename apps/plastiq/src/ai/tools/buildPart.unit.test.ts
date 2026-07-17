@@ -72,19 +72,38 @@ describe("R2.1 build_part — atomic failure paths (never apply)", () => {
 
 describe("R2.1 geometryClientProbe — the app probe over the worker's build (the __plastiqBuild seam)", () => {
   const emptyDoc: CadDocument = { features: [], params: {} };
-  // The probe only checks mesh-vs-null, so a minimal stand-in suffices (no worker in unit tests).
+  // The probe checks the mesh AND the per-feature statuses, so a minimal
+  // stand-in suffices (no worker in unit tests).
   const someMesh = {} as TransferMesh;
 
-  it("maps a returned mesh to ok", async () => {
-    const probe = geometryClientProbe({ build: async () => someMesh });
+  it("maps a returned mesh with no failed features to ok", async () => {
+    const probe = geometryClientProbe({ build: async () => ({ mesh: someMesh, statuses: [] }) });
     expect(await probe(emptyDoc)).toEqual({ ok: true });
   });
 
   it("reports the no-geometry error on a null mesh (the worker's failed-build signal)", async () => {
-    const probe = geometryClientProbe({ build: async () => null });
+    const probe = geometryClientProbe({ build: async () => ({ mesh: null, statuses: [] }) });
     const r = await probe(emptyDoc);
     expect(r.ok).toBe(false);
-    expect(r.error).toMatch(/no geometry|failed to build/);
+    expect(r.error).toMatch(/no geometry/);
+  });
+
+  it("REJECTS a document whose feature errored even though geometry survived", async () => {
+    // The rebuild isolates per-feature failures, so a broken document can still
+    // hand back a mesh. A probe that only looked at the mesh would green-light
+    // it and let the agent apply half-built geometry.
+    const probe = geometryClientProbe({
+      build: async () => ({
+        mesh: someMesh,
+        statuses: [
+          { featureId: "f1", status: "ok" as const },
+          { featureId: "f2", status: "error" as const, message: "feature 'f2' (fillet): radius too large" },
+        ],
+      }),
+    });
+    const r = await probe(emptyDoc);
+    expect(r.ok).toBe(false);
+    expect(r.error).toMatch(/f2.*radius too large/);
   });
 
   it("maps a thrown build error to a structured probe error (never a throw to the agent loop)", async () => {

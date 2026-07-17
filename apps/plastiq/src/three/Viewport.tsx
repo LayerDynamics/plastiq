@@ -10,7 +10,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import * as THREE from "three";
 import { useCadStore } from "../store/store.js";
 import { PLACEMENT_TYPE, type CadDocument, type MeshDoc, type PointCloudDoc } from "../store/types.js";
-import { GeometryClient } from "../worker/bridge.js";
+import { GeometryClient, type BuildOutcome } from "../worker/bridge.js";
 import { useProjectsStore } from "../persistence/projectsStore.js";
 import { importGltf } from "../mesh/importGltf.js";
 import { meshBodiesToGlbBase64 } from "../mesh/glb.js";
@@ -29,7 +29,7 @@ import { applyExperiment, buildTelemetry } from "../sim/experiments.js";
 import { applyJointDrives, type AssemblyModel, type Quat, type Vec3 } from "../assembly/model.js";
 import { activeBackend, type BackendName, type SimManifest } from "@plastiq/sim";
 import type { InstanceBody } from "./Assembly.js";
-import type { DatumPlane } from "@plastiq/cad";
+import { describeOcctError, type DatumPlane } from "@plastiq/cad";
 import type { TransferMesh } from "../worker/protocol.js";
 
 /** Render bodies for the document assembly: mate-solved poses + joint drives,
@@ -181,7 +181,7 @@ export function Viewport(): React.JSX.Element {
     // the ONE geometry worker — the build_part probe + inspect_geometry both use this
     // (no second OCCT worker), and the deterministic AI E2E drives it directly.
     (
-      globalThis as { __plastiqBuild?: (doc: CadDocument) => Promise<TransferMesh | null> }
+      globalThis as { __plastiqBuild?: (doc: CadDocument) => Promise<BuildOutcome> }
     ).__plastiqBuild = (doc) => client.build(doc);
 
     // Projects (M5): start the store (loads SQLite, arms crash-recovery autosave,
@@ -208,13 +208,35 @@ export function Viewport(): React.JSX.Element {
       const doc: CadDocument = { features: buildFeatures(state), params: full.params };
       lastSig = geometrySignature(state);
       try {
-        const built = await client.build(doc);
+        // Per-feature failures are isolated (FR-24): `mesh` is whatever geometry
+        // survived and `statuses` says which features failed and why.
+        const { mesh: built, statuses } = await client.build(doc);
         if (!cancelled) {
           setMesh(built);
           meshRef.current = built;
-          setStatus(built ? "ready" : "empty");
           const store = useCadStore.getState();
-          store.setErrorFeature(null);
+          const errors: Record<string, string> = {};
+          // A build-level error carries no feature id (e.g. tessellation failed
+          // AFTER every feature built). It has no tree row to badge, so it must
+          // be surfaced in the status line — dropping it would report "empty",
+          // which is precisely the silent-failure this section exists to kill.
+          const buildErrors: string[] = [];
+          for (const s of statuses) {
+            if (s.status !== "error") continue;
+            if (s.featureId) errors[s.featureId] = s.message ?? "failed";
+            else buildErrors.push(s.message ?? "the build failed");
+          }
+          store.setFeatureErrors(errors);
+          const failed = Object.keys(errors);
+          setStatus(
+            buildErrors.length > 0
+              ? `rebuild failed: ${buildErrors[0]!}`
+              : failed.length > 0
+                ? `${failed.length} feature${failed.length === 1 ? "" : "s"} failed: ${errors[failed[0]!]!}`
+                : built
+                  ? "ready"
+                  : "empty",
+          );
           if (built) {
             // Capture the positional disambiguators (face centroid / edge midpoint)
             // alongside the normal signatures so a selection re-resolves to the
@@ -243,11 +265,22 @@ export function Viewport(): React.JSX.Element {
           );
         }
       } catch (err) {
+        // Reaching here means the whole RPC failed (worker died, timed out, OCCT
+        // could not init) — per-FEATURE failures no longer land here, they come
+        // back as `statuses` above.
         if (!cancelled) {
-          const message = (err as Error).message;
-          setStatus(`rebuild failed: ${message}`);
-          const m = /feature '([^']+)'/.exec(message);
-          useCadStore.getState().setErrorFeature(m ? m[1]! : null);
+          // describeOcctError, not `(err as Error).message`: a raw OCCT
+          // Standard_Failure is a pointer with no `.message`, which is what
+          // rendered "rebuild failed: undefined".
+          setStatus(`rebuild failed: ${describeOcctError(err)}`);
+          // Drop the stale mesh: leaving the previous geometry on screen after a
+          // failed rebuild is what made a broken op look like "nothing happened".
+          setMesh(null);
+          meshRef.current = null;
+          const store = useCadStore.getState();
+          store.setFeatureErrors({});
+          store.setSelectionRefs({ faces: {}, edges: {} });
+          store.setMassProps(null);
         }
       }
     }, () => cancelled);

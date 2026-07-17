@@ -5,7 +5,10 @@
 // props, so stepping never re-tessellates.
 
 import { useEffect, useMemo } from "react";
+import type * as THREE from "three";
+import type { ThreeEvent } from "@react-three/fiber";
 import { buildPart, disposePart } from "../viewport/buildMesh.js";
+import { resolveMatePick, type MatePickHit } from "../viewport/matePick.js";
 import type { TransferMesh } from "../worker/protocol.js";
 import type { Quat, Vec3 } from "../assembly/model.js";
 
@@ -18,9 +21,17 @@ export interface InstanceBody {
 export function Assembly({
   mesh,
   instances,
+  onMatePick,
 }: {
   mesh: TransferMesh | null;
   instances: readonly InstanceBody[] | null;
+  /**
+   * Called when an instance FACE is left-clicked while mate authoring is armed
+   * (M4.2). Passing it is what makes mate picking reachable at all — without a
+   * handler the instances stay inert, which is why "Add mate → 0/2" could never
+   * advance. Left undefined outside mate mode so normal orbiting is unaffected.
+   */
+  onMatePick?: (hit: MatePickHit) => void;
 }): React.JSX.Element | null {
   const ids = instances ? instances.map((b) => b.id).join("|") : "";
   // One BuiltPart per instance id; stable across pose-only updates.
@@ -54,6 +65,21 @@ export function Assembly({
     };
   }, [parts, instances]);
 
+  /** Route an instance click through the pure resolver (viewport/matePick.ts). */
+  const handlePointerDown = (e: ThreeEvent<PointerEvent>, instanceId: string): void => {
+    if (!onMatePick) return; // not authoring a mate: leave orbit/zoom alone
+    const pick = resolveMatePick({
+      instanceId,
+      button: e.button,
+      faceIndex: e.faceIndex,
+      object: e.object as THREE.Mesh,
+      point: e.point,
+    });
+    if (!pick) return;
+    e.stopPropagation(); // only the nearest instance takes the pick
+    onMatePick(pick);
+  };
+
   if (!instances || parts.length !== instances.length) return null;
   return (
     <>
@@ -63,6 +89,7 @@ export function Assembly({
           object={parts[i]!.group}
           position={b.position}
           quaternion={b.orientation}
+          onPointerDown={(e: ThreeEvent<PointerEvent>) => handlePointerDown(e, b.id)}
         />
       ))}
     </>

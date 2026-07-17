@@ -100,8 +100,15 @@ export interface CadStore {
   /** Measure tool (FR-13): active flag + latest readout (null when none). */
   measuring: boolean;
   measureResult: string | null;
-  /** Id of the feature that failed the last rebuild (errored badge), or null. */
-  errorFeatureId: FeatureId | null;
+  /**
+   * Every feature that failed the last rebuild → its message (FR-24).
+   *
+   * A map, not a single id: the rebuild ISOLATES per-feature failures, so more
+   * than one feature can be errored at once (and a cascade — a failed sketch
+   * plus the extrude that needed it — is the common case). Empty when the last
+   * rebuild was clean.
+   */
+  featureErrors: Record<FeatureId, string>;
   /** Persistent refs for the current build's pickable faces/edges (FR-16). */
   selectionRefs: SelectionRefs;
   /** Volume + centroid of the current build (mass-properties readout), or null
@@ -151,8 +158,8 @@ export interface CadStore {
   /** Toggle the measure tool; turning it off clears the readout (FR-13). */
   toggleMeasure: () => void;
   setMeasureResult: (result: string | null) => void;
-  /** Record the feature that failed the last rebuild (null clears it). */
-  setErrorFeature: (id: FeatureId | null) => void;
+  /** Replace the failed-feature map from a rebuild's statuses ({} clears it). */
+  setFeatureErrors: (errors: Record<FeatureId, string>) => void;
   /** Replace the persistent-ref lookup for the current build (FR-16). */
   setSelectionRefs: (refs: SelectionRefs) => void;
   /** Publish the current build's volume + centroid (null when no geometry). */
@@ -323,7 +330,7 @@ type CadStateKey =
   | "gizmoMode"
   | "measuring"
   | "measureResult"
-  | "errorFeatureId"
+  | "featureErrors"
   | "selectionRefs"
   | "massProps"
   | "section"
@@ -366,7 +373,7 @@ function initialCadState(): CadState {
     gizmoMode: "translate",
     measuring: false,
     measureResult: null,
-    errorFeatureId: null,
+    featureErrors: {},
     selectionRefs: { faces: {}, edges: {} },
     massProps: null,
     section: null,
@@ -484,7 +491,7 @@ export const useCadStore = create<CadStore>((set, get) => ({
   toggleMeasure: () =>
     set((s) => ({ measuring: !s.measuring, measureResult: s.measuring ? null : s.measureResult })),
   setMeasureResult: (result) => set({ measureResult: result }),
-  setErrorFeature: (id) => set({ errorFeatureId: id }),
+  setFeatureErrors: (errors) => set({ featureErrors: errors }),
   setSelectionRefs: (refs) => set({ selectionRefs: refs }),
 
   setMassProps: (props) => set({ massProps: props }),

@@ -20,6 +20,7 @@ import { RightClickDropdownGizmo } from "./gizmos/rightClickDropdown.gizmo.js";
 import { SketchCamera } from "./SketchCamera.js";
 import { Section } from "./Section.js";
 import { Assembly, type InstanceBody } from "./Assembly.js";
+import { localToWorld } from "../assembly/model.js";
 import { VoxelSculpt } from "./VoxelSculpt.js";
 import { MeshEditing } from "./MeshEditing.js";
 import { SketchScene } from "../sketch/SketchScene.js";
@@ -33,6 +34,44 @@ import { useVoxelStore } from "../voxel/voxelStore.js";
 import type { TransferMesh } from "../worker/protocol.js";
 import type { MeshBody } from "../mesh/meshBody.js";
 import type { PointCloudDoc } from "../store/types.js";
+
+/**
+ * The two accumulated mate endpoints, marked on the model (M4.2).
+ *
+ * Mate picks are stored INSTANCE-LOCAL, so each marker is placed through the
+ * instance's live rendered pose (mate-solved / exploded / simulating) rather
+ * than the document pose. Without this the only feedback for a pick is a
+ * "Picking n/2" counter — the user cannot see WHAT they picked. The two picks
+ * are coloured differently because a mate is directional (a → b).
+ */
+function MatePickGizmo({
+  instances,
+}: {
+  instances: readonly InstanceBody[] | null;
+}): React.JSX.Element | null {
+  const mateMode = useCadStore((s) => s.mateMode);
+  const matePicks = useCadStore((s) => s.matePicks);
+  if (!mateMode || !instances || matePicks.length === 0) return null;
+  return (
+    <>
+      {matePicks.map((p, i) => {
+        const body = instances.find((b) => b.id === p.instanceId);
+        if (!body) return null;
+        const world = localToWorld(
+          { position: body.position, orientation: body.orientation },
+          p.point,
+        );
+        return (
+          <mesh key={`${p.instanceId}-${i}`} position={world} renderOrder={999}>
+            <sphereGeometry args={[0.003, 16, 16]} />
+            {/* depthTest off so a marker on a far face stays visible. */}
+            <meshBasicMaterial color={i === 0 ? 0x4ade80 : 0x60a5fa} depthTest={false} />
+          </mesh>
+        );
+      })}
+    </>
+  );
+}
 
 /** Static ground slab visual for physics experiments (matches applyExperiment half-height 0.02). */
 function ExperimentGround(): React.JSX.Element | null {
@@ -112,6 +151,9 @@ export function Scene({
   // The open voxel sculpt (ADR-0010), or null. Non-null swaps the scene to the
   // voxel branch below, exactly as builtBodies does for a mesh document.
   const voxelDoc = useVoxelStore((s) => s.doc);
+  /** Mate authoring armed (M4.2) — gates the instance pick handler below. */
+  const mateMode = useCadStore((s) => s.mateMode);
+  const addMatePick = useCadStore((s) => s.addMatePick);
 
   // three-stdlib's OrbitControls calls `domElement.releasePointerCapture(id)` on
   // pointerup even though it never calls setPointerCapture — so for any pointerup
@@ -337,7 +379,16 @@ export function Scene({
       {/* Base part shows for a bare single body; the assembly layer takes over
           when instances exist (M4) or a simulation is running (M6). */}
       {instances == null && <Part part={part} />}
-      <Assembly mesh={mesh} instances={instances} />
+      {/* Mate authoring (M4.2): the pick handler is armed ONLY while mateMode is
+          on, so instances stay inert (and orbiting unaffected) the rest of the
+          time. This is the input path AssemblyTree's "Picking n/2" counter and
+          every mate menu item depend on. */}
+      <Assembly
+        mesh={mesh}
+        instances={instances}
+        {...(mateMode ? { onMatePick: addMatePick } : {})}
+      />
+      <MatePickGizmo instances={instances} />
       <ExperimentGround />
       <Picking part={part} />
       <Section part={part} />

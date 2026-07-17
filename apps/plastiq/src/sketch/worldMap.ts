@@ -86,7 +86,7 @@ export function arcWorld(
     while (x > Math.PI) x -= 2 * Math.PI;
     return x;
   };
-  let mid = norm(a1 - a0);
+  const mid = norm(a1 - a0);
   let end = norm(a2 - a0);
   if (mid * end < 0 || Math.abs(mid) > Math.abs(end)) {
     if (end > 0) end -= 2 * Math.PI;

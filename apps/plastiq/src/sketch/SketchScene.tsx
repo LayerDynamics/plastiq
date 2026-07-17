@@ -261,7 +261,6 @@ function SketchEntities({ plane }: { plane: DatumPlane }): React.JSX.Element {
     }
     return out;
     // model + selection drive recompute
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [plane, model, selection]);
 
   return (

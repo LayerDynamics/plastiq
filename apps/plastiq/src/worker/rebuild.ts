@@ -17,8 +17,12 @@ import {
   extrude,
   extrudeToFace,
   fillet,
+  describeOcctError,
   resolveEdgeDirection,
   resolveEdgeAxis,
+  resolveEdgeRef,
+  buildWireFromEdges,
+  sweepAlongWire,
   importStep,
   intersect,
   linearPattern,
@@ -52,6 +56,7 @@ import {
   type TaggedMesh,
   type TessellateOptions,
 } from "@plastiq/cad";
+import type { TopoDS_Edge } from "opencascade.js";
 import type { CadDocument, EditorFeature } from "../store/types.js";
 import { extractProfile, isProfile, type Profile } from "../sketch/profile.js";
 import { resolveSketchPlane } from "./sketchPlane.js";
@@ -167,6 +172,43 @@ function dressFaces(oc: Occt, base: Solid, f: EditorFeature): FaceRef[] {
 }
 
 /**
+ * Sweep `sk` along a spine picked on the model: re-resolve each persistent
+ * EdgeRef against the CURRENT body, wire the edges into a spine, and pipe the
+ * profile along it. This is what keeps an edge-driven sweep parametric — the
+ * spine is re-derived every rebuild instead of being baked to points at
+ * creation, so the pipe follows its edges when upstream parameters move them.
+ *
+ * An unresolved edge fails LOUDLY (same contract as the dress-ups): silently
+ * sweeping along the remaining edges would produce a quietly wrong solid.
+ */
+function sweepAlongPickedEdges(
+  oc: Occt,
+  base: Solid | null,
+  sk: Sketch,
+  pathEdges: readonly EdgeRef[],
+  featureId: string,
+  opts: SweepOptions | undefined,
+): Solid {
+  if (!base) throw new Error(`feature '${featureId}' (sweep): no body for the path edges`);
+  const edges: TopoDS_Edge[] = [];
+  try {
+    for (const ref of pathEdges) {
+      const e = resolveEdgeRef(oc, base, ref);
+      if (!e) {
+        throw new Error(
+          `feature '${featureId}' (sweep): ${pathEdges.length - edges.length} of ${pathEdges.length} path edge(s) did not resolve on the current body`,
+        );
+      }
+      edges.push(e);
+    }
+    // sweepAlongWire takes ownership of the wire (frees it on success and throw).
+    return sweepAlongWire(oc, sk, buildWireFromEdges(oc, edges), opts);
+  } finally {
+    for (const e of edges) e.delete();
+  }
+}
+
+/**
  * Evaluate `doc`'s feature tree into a single Solid (or null if it produces no
  * geometry). Throws on the first unrecoverable feature error; the caller
  * (worker/tree) attributes it to the offending feature.
@@ -192,7 +234,34 @@ function sketchForFeature(
   return lastSketch;
 }
 
-export function rebuildDocument(oc: Occt, doc: CadDocument): Solid | null {
+/** Per-feature outcome of a rebuild pass (SPEC-5 FR-24 timeline semantics). */
+export interface FeatureBuildStatus {
+  readonly featureId: string;
+  readonly status: "ok" | "error" | "suppressed";
+  /** Present only when `status === "error"`; always names the feature. */
+  readonly message?: string;
+}
+
+/** Result of an isolating rebuild: the geometry that survived + every feature's fate. */
+export interface IsolatedBuild {
+  readonly solid: Solid | null;
+  readonly statuses: FeatureBuildStatus[];
+}
+
+/**
+ * Evaluate a document's feature tree.
+ *
+ * `isolate` picks the failure contract:
+ *  - `false` (fail-fast) — the first bad feature throws. Correct for INTERNAL
+ *    sub-builds (a boolean's tool subtree, a pattern's tool features) and the
+ *    headless CLI, where a half-built tool must not silently become geometry.
+ *  - `true` (isolating) — a bad feature is recorded and SKIPPED, and the
+ *    previous solid passes through untouched, so one impossible fillet no
+ *    longer blanks the whole model. This is Fusion/Onshape timeline semantics
+ *    and is what the interactive editor uses.
+ */
+function evaluateDocument(oc: Occt, doc: CadDocument, isolate: boolean): IsolatedBuild {
+  const statuses: FeatureBuildStatus[] = [];
   let solid: Solid | null = null;
   // Sketch registry by feature id (C3) + last-wins fallback for documents without deps.
   const sketches = new Map<string, ActiveSketch>();
@@ -202,9 +271,35 @@ export function rebuildDocument(oc: Occt, doc: CadDocument): Solid | null {
     solid?.delete();
     solid = next;
   };
+  /**
+   * Read the accumulator. Every assignment to `solid` happens inside `replace`,
+   * and TypeScript's control-flow analysis does not look into closures — so it
+   * pins `solid` to the `null` of its initializer and narrows guarded reads to
+   * `never`. Reading through an accessor whose DECLARED return type is
+   * `Solid | null` restores the truth that a body may exist by this point.
+   */
+  const currentSolid = (): Solid | null => solid;
 
   for (const f of doc.features) {
-    if (f.suppressed) continue;
+    if (f.suppressed) {
+      statuses.push({ featureId: f.id, status: "suppressed" });
+      continue;
+    }
+    try {
+      buildFeature(f);
+      statuses.push({ featureId: f.id, status: "ok" });
+    } catch (err) {
+      if (!isolate) throw err;
+      // Isolating pass: record and skip. `solid` is untouched by a throw (every
+      // kernel call frees its own temporaries in a finally and only `replace`
+      // swaps the accumulator), so the previous body passes through.
+      statuses.push({ featureId: f.id, status: "error", message: featureErrorMessage(f, err) });
+    }
+  }
+  return { solid, statuses };
+
+  /** Build one feature into the accumulator. Throws on any failure. */
+  function buildFeature(f: EditorFeature): void {
     switch (f.type) {
       case "box":
         replace(makeBox(oc, num(f, "dx"), num(f, "dy"), num(f, "dz")));
@@ -433,8 +528,15 @@ export function rebuildDocument(oc: Occt, doc: CadDocument): Solid | null {
         // XY (G3).
         const prof = f.data?.["profile"] as Profile | undefined;
         const path = f.data?.["path"] as SpinePath | undefined;
+        // A spine picked on the model (FR-32): persistent EdgeRefs re-resolved
+        // against the current body each rebuild, so the swept pipe FOLLOWS its
+        // edges when an upstream parameter moves them. Takes precedence over a
+        // baked `path`, which stays the authoring surface for a typed spine.
+        const pathEdges = f.data?.["pathEdges"] as EdgeRef[] | undefined;
         if (!isProfile(prof)) throw new Error(`feature '${f.id}' (sweep): no profile`);
-        if (!path) throw new Error(`feature '${f.id}' (sweep): no path`);
+        if (!path && !(pathEdges && pathEdges.length > 0)) {
+          throw new Error(`feature '${f.id}' (sweep): no path`);
+        }
         const planeSpec = f.data?.["plane"] as SketchPlaneSpec | undefined;
         let sweepPlane: DatumPlane;
         if (isFaceSketchPlane(planeSpec)) {
@@ -477,7 +579,16 @@ export function rebuildDocument(oc: Occt, doc: CadDocument): Solid | null {
             : undefined;
         {
           // Join-by-default when a body exists (C4 / Grok): same op contract as extrude.
-          const body = sweep(oc, profileSketch(prof, sweepPlane), path, sweepOpts);
+          const body = pathEdges?.length
+            ? sweepAlongPickedEdges(
+                oc,
+                currentSolid(),
+                profileSketch(prof, sweepPlane),
+                pathEdges,
+                f.id,
+                sweepOpts,
+              )
+            : sweep(oc, profileSketch(prof, sweepPlane), path!, sweepOpts);
           const op = f.data?.["op"];
           const join = solid != null && (op === "join" || op !== "new");
           if (join && solid) {
@@ -628,7 +739,7 @@ export function rebuildDocument(oc: Occt, doc: CadDocument): Solid | null {
       case "transform": {
         // Baked rigid move of the current solid (FR-31; distinct from placement gizmo).
         // Order: rotate about pivot (COM by default, or explicit px/py/pz), then translate (C7).
-        const base = solid;
+        const base = currentSolid();
         if (!base) throw new Error(`feature '${f.id}' (transform): no solid`);
         const angle = opt(f, "angle", 0);
         const tx = opt(f, "tx", 0);
@@ -651,8 +762,9 @@ export function rebuildDocument(oc: Occt, doc: CadDocument): Solid | null {
         if (tx !== 0 || ty !== 0 || tz !== 0) {
           const moved = translate(oc, current, [tx, ty, tz]);
           if (owned) owned.delete();
+          // `owned` (not `current`) carries the result to replace() below — this
+          // is the last read of `current`.
           owned = moved;
-          current = moved;
         }
         if (owned) replace(owned);
         // No-op transform (all zeros): leave solid unchanged.
@@ -807,7 +919,40 @@ export function rebuildDocument(oc: Occt, doc: CadDocument): Solid | null {
         throw new Error(`unsupported feature type '${f.type}'`);
     }
   }
-  return solid;
+}
+
+/**
+ * A message that ALWAYS names the offending feature.
+ *
+ * Kernel errors raised by this module already carry a `feature '<id>' (<type>)`
+ * prefix; raw OCCT `Standard_Failure` throws (a plain pointer number) carry
+ * nothing at all — which is how the UI ended up rendering "rebuild failed:
+ * undefined" and "rebuild failed: 5286968". Prefixing here means the caller
+ * never has to parse a message to find out what broke.
+ */
+function featureErrorMessage(f: EditorFeature, err: unknown): string {
+  const raw = describeOcctError(err);
+  return raw.includes(`feature '${f.id}'`) ? raw : `feature '${f.id}' (${f.type}): ${raw}`;
+}
+
+/**
+ * Evaluate `doc` into a Solid, FAILING FAST on the first bad feature.
+ *
+ * Kept for internal sub-builds (boolean tool subtrees, pattern tool features)
+ * and the headless CLI, where a partially-built tool body must never silently
+ * become geometry. The interactive editor uses {@link rebuildDocumentIsolated}.
+ */
+export function rebuildDocument(oc: Occt, doc: CadDocument): Solid | null {
+  return evaluateDocument(oc, doc, false).solid;
+}
+
+/**
+ * Evaluate `doc`, ISOLATING per-feature failures: a feature that throws is
+ * reported in `statuses` and skipped, and the last good solid passes through.
+ * One impossible fillet no longer blanks the entire model (FR-24).
+ */
+export function rebuildDocumentIsolated(oc: Occt, doc: CadDocument): IsolatedBuild {
+  return evaluateDocument(oc, doc, true);
 }
 
 /** A built part: its tagged mesh plus the solid's density-free mass properties
@@ -844,4 +989,43 @@ export function rebuildTagged(
   opts: TessellateOptions,
 ): TaggedMesh | null {
   return rebuildTaggedWithProps(oc, doc, opts)?.mesh ?? null;
+}
+
+/** An isolating build: the geometry that survived (null if none) + every feature's fate. */
+export interface BuiltDocument {
+  readonly part: BuiltPart | null;
+  readonly statuses: FeatureBuildStatus[];
+}
+
+/**
+ * The INTERACTIVE editor's build: isolates per-feature failures and always
+ * reports every feature's fate, so the UI can badge the offending feature
+ * (FR-24) without parsing a message, and can still render whatever geometry
+ * survived. Unlike {@link rebuildTaggedWithProps} this never throws for a bad
+ * feature, and it returns statuses even when the document builds no geometry
+ * at all — the failure list is exactly what the user needs in that case.
+ */
+export function buildDocumentIsolated(
+  oc: Occt,
+  doc: CadDocument,
+  opts: TessellateOptions,
+): BuiltDocument {
+  const { solid, statuses } = rebuildDocumentIsolated(oc, doc);
+  if (!solid) return { part: null, statuses };
+  try {
+    const mesh = tessellateTagged(oc, solid, opts);
+    return {
+      part: { mesh, volume: solid.volume(), com: solid.centreOfMass() },
+      statuses,
+    };
+  } catch (err) {
+    // Tessellation itself failed: the features are fine, the mesh is not. Report
+    // it rather than throwing away the whole build response.
+    return {
+      part: null,
+      statuses: [...statuses, { featureId: "", status: "error", message: describeOcctError(err) }],
+    };
+  } finally {
+    solid.delete();
+  }
 }

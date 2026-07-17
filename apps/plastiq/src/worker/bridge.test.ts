@@ -38,7 +38,13 @@ describe("GeometryClient worker timeout (CADStudio.md §5.6)", () => {
       removeEventListener: () => {},
     };
     const client = new GeometryClient({ worker: responder as unknown as Worker, timeoutMs: 1000 });
-    await expect(client.build({ features: [], params: {} })).resolves.toBeNull();
+    // build() returns the isolating outcome (mesh + per-feature statuses). This
+    // responder omits `statuses` entirely, so it also pins the defensive `?? []`:
+    // callers must always be able to iterate the list.
+    await expect(client.build({ features: [], params: {} })).resolves.toEqual({
+      mesh: null,
+      statuses: [],
+    });
     client.dispose();
   });
 

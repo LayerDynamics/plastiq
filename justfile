@@ -31,13 +31,30 @@ build:
 dev:
     pnpm --filter @plastiq/app run dev
 
-# Build the TRIMMED opencascade.js for @plastiq/cad (Docker; long: 30–90 min,
-# several GB). The symbol list lives in packages/cad/occt.build.yml. Deferred /
-# optional — see packages/cad/scripts/build-occt.md. The image tag MUST match the
-# pinned opencascade.js npm version.
+# The symbol list lives in packages/cad/occt.build.yml — see
+# packages/cad/scripts/build-occt.md. The image tag MUST match the pinned
+# opencascade.js npm version.
+#
+# The builder's WorkingDir is the /src mount and it writes plastiq-occt.{js,d.ts,
+# wasm} there, so it is handed a STAGING dir containing only a copy of the config
+# rather than the package itself. Mounting packages/cad directly (as this recipe
+# once did) drops the generated artifacts in the package root, where they shadow
+# the committed vendor/occt/ copies and get linted — a minified 260 KB bundle is
+# ~345 lint errors and a red CI. The build products ARE the vendored kernel, so
+# they are copied into vendor/occt/ (committed; loaded by src/oc/init.ts).
+
+# Rebuild the trimmed OCCT wasm for @plastiq/cad (Docker; long: 30–90 min, several GB).
 cad-occt:
-    docker run --rm -v "{{justfile_directory()}}/packages/cad:/src" -u "$(id -u):$(id -g)" \
+    mkdir -p "{{justfile_directory()}}/packages/cad/build/occt"
+    cp "{{justfile_directory()}}/packages/cad/occt.build.yml" \
+        "{{justfile_directory()}}/packages/cad/build/occt/occt.build.yml"
+    docker run --rm -v "{{justfile_directory()}}/packages/cad/build/occt:/src" -u "$(id -u):$(id -g)" \
         donalffons/opencascade.js:2.0.0-beta.b5ff984 occt.build.yml
+    cp "{{justfile_directory()}}/packages/cad/build/occt/plastiq-occt.js" \
+        "{{justfile_directory()}}/packages/cad/build/occt/plastiq-occt.d.ts" \
+        "{{justfile_directory()}}/packages/cad/build/occt/plastiq-occt.wasm" \
+        "{{justfile_directory()}}/packages/cad/vendor/occt/"
+    @echo "cad-occt: artifacts copied into packages/cad/vendor/occt/ — commit them, then run 'npx vitest run packages/cad/src/oc/bindings.test.ts' to verify the new trim binds every required symbol."
 
 # --- CADGenBench harness (local/manual — NOT push-CI) -------------------------
 # Evaluates our parametric AI generation against the CADGenBench benchmark. Needs

@@ -22,10 +22,11 @@ import type { CloudCaptureDeps } from "./tools/cloudCapture.js";
 import type { AiSettings } from "./settings.js";
 import type { GenImage } from "./meshgen/types.js";
 import type { CadDocument } from "../store/types.js";
-import type { TransferMesh } from "../worker/protocol.js";
+import type { BuildOutcome } from "../worker/bridge.js";
 
-/** The off-thread build seam the viewport publishes (build_part/inspect_geometry probe). */
-export type BuildSeam = (doc: CadDocument) => Promise<TransferMesh | null>;
+/** The off-thread build seam the viewport publishes (build_part/inspect_geometry probe).
+ * Returns the isolating build's outcome: surviving geometry + every feature's fate. */
+export type BuildSeam = (doc: CadDocument) => Promise<BuildOutcome>;
 
 /** Read the live build seam, or null when the geometry worker isn't ready yet. */
 export function buildSeam(): BuildSeam | null {
@@ -112,7 +113,9 @@ export function buildTurnTools(deps: TurnToolsDeps): AgentTools | null {
   // GeometryClient.build — the same null-mesh/throw → structured-error mapping the
   // headless probe implements against the kernel directly.
   const probe = geometryClientProbe({ build });
-  const meshProbe: MeshProbe = (doc) => build(doc);
+  // inspect_geometry only reads the mesh; the per-feature statuses are the
+  // build_part probe's concern (it must reject a partially-failed document).
+  const meshProbe: MeshProbe = async (doc) => (await build(doc)).mesh;
   const apply: ApplyDocument = (doc) => useCadStore.getState().loadDocument(doc);
 
   return buildAgentTools({

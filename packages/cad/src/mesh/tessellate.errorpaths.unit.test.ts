@@ -171,6 +171,31 @@ function makeOc(edgeSpecs: FakeEdgeSpec[], opts?: { faces?: FakeFace[] }): Occt 
     BRepAdaptor_Curve_2: function () {
       return curve();
     },
+    // §2.1: every face/edge signature now carries the ANALYTIC surface, read via
+    // BRepAdaptor_Surface. These fakes report a plane (the flat quad the rest of
+    // this mock describes) so the surface pass never masks the error paths this
+    // file actually exercises.
+    BRepAdaptor_Surface_2: function () {
+      return {
+        GetType: () => "plane",
+        Plane: () => ({
+          Axis: () => ({
+            Direction: () => ({ X: () => 0, Y: () => 0, Z: () => 1, delete: () => {} }),
+            Location: () => ({ X: () => 0, Y: () => 0, Z: () => 0, delete: () => {} }),
+            delete: () => {},
+          }),
+          delete: () => {},
+        }),
+        delete: () => {},
+      };
+    },
+    GeomAbs_SurfaceType: {
+      GeomAbs_Plane: "plane",
+      GeomAbs_Cylinder: "cylinder",
+      GeomAbs_Cone: "cone",
+      GeomAbs_Sphere: "sphere",
+      GeomAbs_Torus: "torus",
+    },
     GCPnts_UniformDeflection_2: function () {
       return { IsDone: () => true, NbPoints: () => 2, Value: (i: number) => point(i, 0, 0), delete: () => {} };
     },

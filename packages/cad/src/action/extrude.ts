@@ -62,11 +62,12 @@ export function extrude(
   // shift) still frees the face, the vector, and the prism maker — parity with
   // revolve/loft/sweep/dress-up in the long-lived geometry worker.
   let baseFace: TopoDS_Face | TopoDS_Shape = face;
-  let shiftedFace: TopoDS_Shape | null = null;
   const trash: Array<{ delete(): void }> = [face];
   try {
     if (back !== 0) {
-      shiftedFace = shifted(oc, face, scale(dir, -back));
+      // Scoped to this block: the shifted copy is only ever reached through
+      // `baseFace`/`trash` afterwards.
+      const shiftedFace = shifted(oc, face, scale(dir, -back));
       trash.push(shiftedFace);
       baseFace = shiftedFace;
       // Original face is still in trash; baseFace now points at the shifted copy.

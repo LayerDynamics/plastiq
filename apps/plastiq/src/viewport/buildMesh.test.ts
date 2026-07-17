@@ -4,14 +4,18 @@ import type { TransferMesh } from "../worker/protocol.js";
 import type { MeshBody } from "../mesh/meshBody.js";
 import { buildMeshBody, buildPart, FACE_MATERIAL } from "./buildMesh.js";
 
+// Both fixture faces lie in the z=0 plane, so they share its analytic signature
+// (§2.1) — the identity a FaceGroup carries alongside its averaged normal.
+const PLANE_Z0 = { kind: "plane", normal: [0, 0, 1], origin: [0, 0, 0] } as const;
+
 // A minimal tagged mesh: two triangles split across two faces + two edges.
 function sampleMesh(): TransferMesh {
   return {
     vertices: new Float32Array([0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0]),
     indices: new Uint32Array([0, 1, 2, 0, 2, 3]),
     faceGroups: [
-      { faceId: 1, start: 0, count: 3, normal: [0, 0, 1], centroid: [0.667, 0.333, 0] },
-      { faceId: 2, start: 3, count: 3, normal: [0, 0, 1], centroid: [0.333, 0.667, 0] },
+      { faceId: 1, start: 0, count: 3, normal: [0, 0, 1], centroid: [0.667, 0.333, 0], surface: PLANE_Z0 },
+      { faceId: 2, start: 3, count: 3, normal: [0, 0, 1], centroid: [0.333, 0.667, 0], surface: PLANE_Z0 },
     ],
     edges: [
       {

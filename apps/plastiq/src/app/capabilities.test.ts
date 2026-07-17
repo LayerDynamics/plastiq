@@ -3,19 +3,28 @@
 // localStorage / IndexedDB with each global stubbed out in turn, and the
 // unsupported-browser screen naming exactly what's missing.
 //
-// jsdom's canvas has no WebGL and no IndexedDB, so the "all present" case stubs
-// both IN; the missing cases stub the remaining real globals OUT.
+// jsdom's canvas has no WebGL, and this environment exposes neither IndexedDB
+// nor localStorage on the global, so the "all present" case stubs all three IN;
+// the missing cases stub the remaining real globals OUT.
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { detectCapabilities, renderUnsupportedScreen } from "./capabilities.js";
 
-/** Make every capability probe pass in jsdom (WebGL2 context + indexedDB). */
+/** Make every capability probe pass in jsdom (WebGL2 context + indexedDB +
+ * a writable localStorage). A real browser supplies all three; this environment
+ * supplies none of them, so an unstubbed probe would report a false "missing". */
 function stubAllPresent(): void {
   vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(
     {} as unknown as RenderingContext,
   );
   vi.stubGlobal("indexedDB", {});
+  const store = new Map<string, string>();
+  vi.stubGlobal("localStorage", {
+    setItem: (k: string, v: string) => void store.set(k, v),
+    getItem: (k: string) => store.get(k) ?? null,
+    removeItem: (k: string) => void store.delete(k),
+  });
 }
 
 afterEach(() => {

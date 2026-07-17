@@ -15,6 +15,7 @@ export const CAD_KERNEL_VERSION = "0.1.0" as const;
 
 // R2 — engine, units, geometry core.
 export { initOcct, type Occt } from "./oc/init.js";
+export { describeOcctError, isRawOcctFailure } from "./oc/error.js";
 export { mm, cm, m, inch, deg, rad, toMm, toDeg } from "./unit/index.js";
 export { Solid } from "./solid/solid.js";
 export { makeBox, makeBoxAt } from "./solid/primitives.js";
@@ -78,6 +79,7 @@ export {
   type SweepTransition,
   loft,
   sweep,
+  sweepAlongWire,
   linearPattern,
   circularPattern,
 } from "./action/index.js";
@@ -87,6 +89,7 @@ export {
   type SpineSegmented,
   type SpineSegment,
   buildSpineWire,
+  buildWireFromEdges,
 } from "./sketch/spine.js";
 
 // R5 — sketch constraint solver (planegcs) + 3D assembly mate solver.

@@ -6,6 +6,7 @@
 
 import {
   decomposerReady,
+  describeOcctError,
   exportGltf,
   exportIges,
   exportStep,
@@ -15,7 +16,7 @@ import {
   type Occt,
   type TaggedMesh,
 } from "@plastiq/cad";
-import { rebuildDocument, rebuildTaggedWithProps } from "./rebuild.js";
+import { buildDocumentIsolated, rebuildDocument } from "./rebuild.js";
 import { lowerAssembly } from "./lower.js";
 import type { AssemblyModel } from "../assembly/model.js";
 import type { CadDocument } from "../store/types.js";
@@ -152,8 +153,14 @@ export async function handleRequest(
         solid.delete();
       }
     }
-    const built = rebuildTaggedWithProps(oc, req.doc, { linearDeflection: req.deflection });
-    const mesh = built ? toTransfer(built.mesh, built.volume, built.com) : null;
+    // Isolating build (FR-24): a bad feature is reported in `statuses` and
+    // skipped rather than blanking the whole model, so the response carries
+    // BOTH whatever geometry survived and every feature's fate. The caller
+    // badges features from `statuses` — it never parses the message text.
+    const { part, statuses } = buildDocumentIsolated(oc, req.doc, {
+      linearDeflection: req.deflection,
+    });
+    const mesh = part ? toTransfer(part.mesh, part.volume, part.com) : null;
     const transfer: Transferable[] = mesh
       ? [
           mesh.vertices.buffer,
@@ -162,13 +169,16 @@ export async function handleRequest(
           ...mesh.edges.map((e) => e.positions.buffer),
         ]
       : [];
-    return { response: { id: req.id, ok: true, op: "build", mesh }, transfer };
+    return { response: { id: req.id, ok: true, op: "build", mesh, statuses }, transfer };
   } catch (err) {
     return {
       response: {
         id: req.id,
         ok: false,
-        error: err instanceof Error ? err.message : String(err),
+        // describeOcctError, not String(err): a raw OCCT Standard_Failure is a
+        // pointer, so String(err) rendered "5286968" and `.message` rendered
+        // "undefined".
+        error: describeOcctError(err),
       },
       transfer: [],
     };

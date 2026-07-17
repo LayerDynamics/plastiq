@@ -13,17 +13,26 @@ import type { BuiltPart } from "./buildMesh.js";
  * Map a raycast triangle index to its B-rep faceId via the mesh groups.
  * Keyed off the group `start/count` ranges only — NOT `materialIndex`, which
  * every group shares until highlighted and which mutates during selection.
+ *
+ * Takes the THREE.Mesh rather than a BuiltPart so it also serves hits on an
+ * ASSEMBLY INSTANCE, whose group is built from the same tagged mesh but is not
+ * the base part (mate picking, M4.2).
  */
-export function faceIdAt(part: BuiltPart, faceIndex: number): number | null {
-  const faceIds = part.mesh.userData["faceIds"] as number[] | undefined;
+export function faceIdOfMesh(mesh: THREE.Mesh, faceIndex: number): number | null {
+  const faceIds = mesh.userData["faceIds"] as number[] | undefined;
   if (!faceIds) return null;
   const offset = faceIndex * 3; // index-buffer offset of this triangle
-  const groups = part.mesh.geometry.groups;
+  const groups = mesh.geometry.groups;
   for (let i = 0; i < groups.length; i++) {
     const g = groups[i]!;
     if (offset >= g.start && offset < g.start + g.count) return faceIds[i] ?? null;
   }
   return null;
+}
+
+/** Map a raycast triangle index on the base part to its B-rep faceId. */
+export function faceIdAt(part: BuiltPart, faceIndex: number): number | null {
+  return faceIdOfMesh(part.mesh, faceIndex);
 }
 
 /** A rubber-band rectangle in NDC space (−1..1, y up). */
