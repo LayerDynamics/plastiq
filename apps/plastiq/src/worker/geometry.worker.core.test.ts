@@ -3,8 +3,9 @@
 // single-body fallback that geometry.worker.ts wires to onmessage/postMessage.
 
 import { beforeAll, describe, expect, it } from "vitest";
-import { initOcct, mm, type Occt } from "@plastiq/cad";
+import { importStep, initOcct, massProperties, mm, type Occt } from "@plastiq/cad";
 import type { CadDocument } from "../store/types.js";
+import { eulerXYZQuat } from "../viewport/placement.js";
 import { effectiveAssembly, handleRequest } from "./geometry.worker.core.js";
 
 const INIT_TIMEOUT_MS = 120_000;
@@ -14,7 +15,27 @@ const boxDoc = (): CadDocument => ({
   params: {},
 });
 
+/** The same box, gizmo-moved: rotated π/2 about Z then lifted 0.5 m (§2.11.1). */
+const placedBoxDoc = (): CadDocument => ({
+  features: [
+    { id: "f1", type: "box", params: { dx: mm(40), dy: mm(30), dz: mm(20) } },
+    { id: "f2", type: "placement", params: { tz: 0.5, rz: Math.PI / 2 } },
+  ],
+  params: {},
+});
+
 const emptyDoc = (): CadDocument => ({ features: [], params: {} });
+
+/** The centre of mass of the solid a STEP string carries (SI metres). */
+const stepCom = (oc: Occt, content: string): [number, number, number] => {
+  const solid = importStep(oc, content);
+  try {
+    const c = massProperties(oc, solid, 1).com;
+    return [c[0], c[1], c[2]];
+  } finally {
+    solid.delete();
+  }
+};
 
 let oc: Occt;
 beforeAll(async () => {
@@ -30,6 +51,16 @@ describe("effectiveAssembly", () => {
     expect(a.instances[0]!.pose.orientation).toEqual([0, 0, 0, 1]);
     expect(a.mates).toHaveLength(0);
     expect(a.joints).toHaveLength(0);
+  });
+
+  it("poses body0 at the document's placement (§2.11.1 — no teleport to origin)", () => {
+    const a = effectiveAssembly(placedBoxDoc());
+    expect(a.instances).toHaveLength(1);
+    expect(a.instances[0]!.pose.position).toEqual([0, 0, 0.5]);
+    const q = eulerXYZQuat(0, 0, Math.PI / 2);
+    for (let i = 0; i < 4; i++) {
+      expect(a.instances[0]!.pose.orientation[i]).toBeCloseTo(q[i]!, 12);
+    }
   });
 
   it("passes an assembly that already has instances through unchanged", () => {
@@ -100,6 +131,20 @@ describe("handleRequest — lower (single-body fallback)", () => {
     if (response.ok) throw new Error("expected an error response");
     expect(response.error).toMatch(/no geometry/);
   });
+
+  it("lowers a placed part AT its placement pose (§2.11.1 — sim starts where the viewport shows it)", async () => {
+    const { response } = await handleRequest(oc, { id: 10, op: "lower", doc: placedBoxDoc() });
+    expect(response.ok).toBe(true);
+    if (!response.ok || response.op !== "lower") throw new Error("expected a lower response");
+    expect(response.manifest.bodies).toHaveLength(1);
+    // The manifest body's world COM composes the placement over the local COM:
+    // Rz(π/2)·localCom + (0, 0, 0.5); Rz(π/2) maps (x, y, z) → (−y, x, z).
+    const local = response.localCom;
+    const world = response.manifest.bodies[0]!.com;
+    expect(world[0]).toBeCloseTo(-local[1]!, 9);
+    expect(world[1]).toBeCloseTo(local[0]!, 9);
+    expect(world[2]).toBeCloseTo(local[2]! + 0.5, 9);
+  });
 });
 
 describe("handleRequest — export", () => {
@@ -114,6 +159,20 @@ describe("handleRequest — export", () => {
     if (!response.ok || response.op !== "export") throw new Error("expected an export response");
     expect(response.format).toBe("step");
     expect(response.content).toContain("ISO-10303"); // STEP header marker
+  });
+
+  it("bakes the placement pose into the exported STEP (§2.11.1 WYSIWYG)", async () => {
+    const unposed = await handleRequest(oc, { id: 11, op: "export", doc: boxDoc(), format: "step" });
+    const posed = await handleRequest(oc, { id: 12, op: "export", doc: placedBoxDoc(), format: "step" });
+    if (!unposed.response.ok || unposed.response.op !== "export") throw new Error("unposed export failed");
+    if (!posed.response.ok || posed.response.op !== "export") throw new Error("posed export failed");
+    // Round-trip both files through importStep: the posed file's COM must be the
+    // unposed COM rotated π/2 about Z ((x, y, z) → (−y, x, z)) then lifted 0.5 m.
+    const c0 = stepCom(oc, unposed.response.content);
+    const c1 = stepCom(oc, posed.response.content);
+    expect(c1[0]).toBeCloseTo(-c0[1], 6);
+    expect(c1[1]).toBeCloseTo(c0[0], 6);
+    expect(c1[2]).toBeCloseTo(c0[2] + 0.5, 6);
   });
 
   it("errors on export with no geometry", async () => {

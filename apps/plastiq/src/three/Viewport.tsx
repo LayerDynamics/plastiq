@@ -21,6 +21,7 @@ import { resolveDatumPlane } from "../worker/sketchPlane.js";
 import { createCoalescer } from "./coalesce.js";
 import { useSketchStore } from "../sketch/sketchStore.js";
 import { explodeInstances } from "../viewport/explode.js";
+import { placementPoseOf } from "../viewport/placement.js";
 import { ViewCubeOverlay } from "../viewport/ViewCube.js";
 import { LoadingOverlay } from "./LoadingOverlay.js";
 import { findClashes, type InstanceBox } from "../viewport/interference.js";
@@ -49,16 +50,23 @@ function explodedInstances(s: {
   return explodeInstances(list, s.explodeFactor);
 }
 
-/** The bodies a simulation drives: the assembly instances, or one identity body
- * for a bare part (matching the worker's synthesized body0). */
-function simBodies(assembly: AssemblyModel): InstanceBody[] {
-  return assembly.instances.length > 0
-    ? assembly.instances.map((i) => ({
-        id: i.id,
-        position: i.pose.position,
-        orientation: i.pose.orientation,
-      }))
-    : [{ id: "body0", position: [0, 0, 0], orientation: [0, 0, 0, 1] }];
+/** The bodies a simulation drives: the assembly instances, or one body at the
+ * document's placement pose for a bare part — matching the worker's synthesized
+ * body0 (§2.11.1, via the SAME placementPoseOf), so the sim render seed starts
+ * the part exactly where the viewport shows it. */
+function simBodies(state: {
+  assembly: AssemblyModel;
+  features: CadDocument["features"];
+}): InstanceBody[] {
+  if (state.assembly.instances.length > 0) {
+    return state.assembly.instances.map((i) => ({
+      id: i.id,
+      position: i.pose.position,
+      orientation: i.pose.orientation,
+    }));
+  }
+  const pose = placementPoseOf(state.features);
+  return [{ id: "body0", position: pose.position, orientation: pose.orientation }];
 }
 
 /** Local axis-aligned bounds of the part from its tessellation vertices. */
@@ -389,7 +397,7 @@ export function Viewport(): React.JSX.Element {
       const { manifest, localCom } = await client.lower(state.toDocument());
       // Experiment layer: lift, gravity, ground — pure transform of the CAD lower.
       const prepared = applyExperiment(manifest as SimManifest, state.simExperiment);
-      const bodies = simBodies(state.assembly);
+      const bodies = simBodies(state);
       setInstances(bodies);
       // Experiment backend override (else last explicit setBackend / default MuJoCo).
       const expBackend =

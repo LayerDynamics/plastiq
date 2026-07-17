@@ -13,13 +13,22 @@ import {
   faceDatumPlane,
   initDecomposer,
   resolveFaceRef,
+  rotate,
+  translate,
   type Occt,
+  type Solid,
   type TaggedMesh,
 } from "@plastiq/cad";
 import { buildDocumentIsolated, rebuildDocument } from "./rebuild.js";
 import { lowerAssembly } from "./lower.js";
 import type { AssemblyModel } from "../assembly/model.js";
 import type { CadDocument } from "../store/types.js";
+import {
+  findPlacement,
+  isIdentityPlacement,
+  placementFromFeature,
+  placementPoseOf,
+} from "../viewport/placement.js";
 import type { TransferMesh, WorkerRequest, WorkerResponse } from "./protocol.js";
 
 export function toTransfer(
@@ -47,8 +56,11 @@ export function toTransfer(
 
 /**
  * The assembly to lower for a document: its own instances if present, else a
- * single identity-posed "body0" wrapping the bare part — so Simulate/lowering
- * works on the modelled part directly even before any assembly is built.
+ * single "body0" wrapping the bare part — so Simulate/lowering works on the
+ * modelled part directly even before any assembly is built. body0 is posed at
+ * the document's placement (§2.11.1): the pose the viewport shows becomes the
+ * body's world pose, so Simulate starts the part exactly where it is on screen
+ * instead of teleporting it to origin (identity when no placement exists).
  */
 export function effectiveAssembly(doc: CadDocument): AssemblyModel {
   const assembly = doc.assembly ?? { instances: [], mates: [], joints: [] };
@@ -58,15 +70,41 @@ export function effectiveAssembly(doc: CadDocument): AssemblyModel {
       {
         id: "body0",
         name: "Part",
-        pose: {
-          position: [0, 0, 0],
-          orientation: [0, 0, 0, 1],
-        },
+        pose: placementPoseOf(doc.features),
       },
     ],
     mates: [],
     joints: [],
   };
+}
+
+/**
+ * Bake the document's placement pose into the rebuilt solid for file export
+ * (§2.11.1 WYSIWYG): the exported body sits exactly where the viewport shows
+ * it. The intrinsic-XYZ placement equals fixed-frame rotations about Z, then
+ * Y, then X — all about the part's local origin — followed by the translation.
+ * Consumes (deletes) the input whenever a transform applies; returns it
+ * untouched for an identity placement. A kernel failure mid-chain frees the
+ * newest solid before rethrowing, so nothing leaks.
+ */
+export function posePlacementForExport(oc: Occt, solid: Solid, doc: CadDocument): Solid {
+  const p = placementFromFeature(findPlacement(doc.features));
+  if (isIdentityPlacement(p)) return solid;
+  let s = solid;
+  const step = (next: Solid): void => {
+    s.delete();
+    s = next;
+  };
+  try {
+    if (p.rz !== 0) step(rotate(oc, s, [0, 0, 0], [0, 0, 1], p.rz));
+    if (p.ry !== 0) step(rotate(oc, s, [0, 0, 0], [0, 1, 0], p.ry));
+    if (p.rx !== 0) step(rotate(oc, s, [0, 0, 0], [1, 0, 0], p.rx));
+    if (p.tx !== 0 || p.ty !== 0 || p.tz !== 0) step(translate(oc, s, [p.tx, p.ty, p.tz]));
+  } catch (e) {
+    s.delete();
+    throw e;
+  }
+  return s;
 }
 
 /**
@@ -102,8 +140,10 @@ export async function handleRequest(
       }
     }
     if (req.op === "export") {
-      const solid = rebuildDocument(oc, req.doc);
-      if (!solid) throw new Error("export: the document has no geometry");
+      const built = rebuildDocument(oc, req.doc);
+      if (!built) throw new Error("export: the document has no geometry");
+      // WYSIWYG (§2.11.1): the file carries the part AT its placement pose.
+      const solid = posePlacementForExport(oc, built, req.doc);
       try {
         const content =
           req.format === "step"

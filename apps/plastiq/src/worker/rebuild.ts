@@ -1046,8 +1046,10 @@ function evaluateDocument(oc: Occt, doc: CadDocument, isolate: boolean): Isolate
       }
       case "placement":
         // A body placement (FR-11) is a scene-level pose, not a geometry op —
-        // it is applied to the part group in the viewport and composed into the
-        // sim manifest at export, so the kernel rebuild leaves geometry local.
+        // the viewport applies it to the part group, lowering composes it into
+        // the synthesized body0's sim pose, and file export bakes it into the
+        // solid (geometry.worker.core.ts, §2.11.1) — so the kernel REBUILD
+        // always leaves geometry in the local frame.
         break;
       default:
         throw new Error(`unsupported feature type '${f.type}'`);
