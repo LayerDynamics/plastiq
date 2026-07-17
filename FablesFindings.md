@@ -348,7 +348,7 @@ Extrude oblique `direction` normalized, `height` along the direction (vol A·h/�
 
 - **P1** `tangentFaces` seed matching has no distance threshold — stale seed snaps to nearest centroid anywhere and grows the wrong selection silently (`predicates.ts:158-177`).
 - **P2** `topFace`/`bottomFace` tie-break uses exact float equality on mesh-derived normals — tessellation jitter can flip which coplanar candidate wins (`predicates.ts:113-123`; pairs with §2.2).
-- **P2** `allEdges` includes cylinder **seam** edges (classified "smooth", `topology.ts:80`) — feeding a seam to fillet typically fails the whole fillet; "fillet all edges" on any body with a hole is a trap.
+- ~~**P2** `allEdges` includes cylinder **seam** edges…~~ ✅ **FIXED (2026-07-17).** `allEdges`, `verticalEdges` and `edgesParallelTo` now exclude seam edges (both adjacent face ids equal). A seam is not user-selectable and feeding it to MakeFillet failed the WHOLE op, so "fillet all edges" was a trap on any body with a hole/boss/fillet. Test (`predicates.unit.test.ts`): a bored body has a seam, allEdges omits it, and filleting the result builds a valid solid.
 
 ### 4.11 primitives / transform / solid / assembly solver
 
@@ -571,7 +571,7 @@ Also: code throughout cites "SPEC-5 FR-11/FR-33/…" but **no SPEC-5 document ex
 
    **Cost note:** each stale-locator spec burns the full 240 s timeout, so a red suite takes ~15 min mostly waiting. `assembly-to-sim` (1.5 s) and `context-menu` (7 s) fail fast and are *different* bugs — they deserve separate diagnosis and have not had it.
 9. ~~**`tsc --noEmit` is not enforced in CI** for the app (or §2.3 could not have landed).~~ **RETRACTED 2026-07-17 — this claim was false.** CI *does* enforce it: `.github/workflows/ci.yml:35` runs `pnpm -r --if-present run typecheck` and `apps/plastiq/package.json:12` defines `typecheck`. Verified by running the exact CI command: `apps/plastiq` is in scope and it exits 0. The red build merged past an existing gate rather than through a missing one — the audit's "or §2.3 could not have landed" was an unsound inference. PropertiesPanel suites don't cover the boolean display-default mismatch, sweep selects, draft attach, deps-vs-sketchId precedence; schema tests have no NaN/huge-value/boolean-location cases; draft has no AI integration test.
-10. Loft winding mismatch, sweep spine-position (N2), sweep transformed-transition (N7), revolve angle wrap (N6), shell tolerance (N1): none tested.
+10. Loft winding mismatch, sweep spine-position (N2), sweep transformed-transition (N7), shell tolerance (N1): none tested. (Revolve angle wrap N6 + pattern degenerate-step §4.6 are now fixed AND tested — 2026-07-17.)
 
 ---
 

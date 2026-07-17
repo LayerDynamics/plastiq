@@ -97,7 +97,18 @@ export function resolveSelector(oc: Occt, solid: Solid, selector: Selector): Sel
   const faceRef = (g: { normal: V3; centroid: V3 }): FaceRef => ({ normal: g.normal, centroid: g.centroid });
   const edgeRef = (e: { faceNormals: readonly [V3, V3]; midpoint: V3 }): EdgeRef => ({ faceNormals: e.faceNormals, midpoint: e.midpoint });
   const groups = mesh.faceGroups as ReadonlyArray<{ normal: V3; centroid: V3; start: number; count: number }>;
-  const edges = mesh.edges as ReadonlyArray<{ faceNormals: readonly [V3, V3]; midpoint: V3; positions: number[] }>;
+  const edges = mesh.edges as ReadonlyArray<{
+    faceNormals: readonly [V3, V3];
+    midpoint: V3;
+    positions: number[];
+    faceIds: readonly [number, number];
+  }>;
+  // A SEAM edge (a cylinder/cone/sphere's parameterisation seam) borders ONE face,
+  // so its two adjacent face ids are equal. It is not a real edge the user can
+  // select, and feeding one to MakeFillet/MakeChamfer typically fails the WHOLE
+  // operation — which made "fillet all edges" a trap on any body with a hole,
+  // boss, or fillet (§4.10). Exclude seams from the bulk edge selectors.
+  const isSeam = (e: { faceIds: readonly [number, number] }): boolean => e.faceIds[0] === e.faceIds[1];
   const none: SelectorResult = { faces: [], edges: [] };
 
   switch (selector.kind) {
@@ -105,7 +116,7 @@ export function resolveSelector(oc: Occt, solid: Solid, selector: Selector): Sel
       return { faces: groups.map(faceRef), edges: [] };
 
     case "allEdges":
-      return { faces: [], edges: edges.map(edgeRef) };
+      return { faces: [], edges: edges.filter((e) => !isSeam(e)).map(edgeRef) };
 
     case "topFace":
     case "bottomFace": {
@@ -149,6 +160,10 @@ export function resolveSelector(oc: Occt, solid: Solid, selector: Selector): Sel
       const tol = dotTol(selector.tol ?? 5);
       const out: EdgeRef[] = [];
       for (const e of edges) {
+        // Skip seams (§4.10): a cylinder's seam runs parallel to its axis, so a
+        // "vertical edges" / axis-parallel selection would otherwise sweep it in
+        // and break the dress-up.
+        if (isSeam(e)) continue;
         const d = edgeDir(e.positions);
         if (d && Math.abs(dot(d, axis)) >= tol) out.push(edgeRef(e));
       }

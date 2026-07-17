@@ -5,7 +5,10 @@
 
 import { beforeAll, describe, it, expect } from "vitest";
 import { initOcct, type Occt } from "../oc/init.js";
-import { makeBox } from "../solid/primitives.js";
+import { makeBox, makeCylinder } from "../solid/primitives.js";
+import { subtract } from "../action/boolean.js";
+import { fillet } from "../action/dressup.js";
+import { tessellateTagged } from "../mesh/tessellate.js";
 import { mm } from "../unit/index.js";
 import { resolveFaceRef, resolveEdgeRef } from "../mesh/resolve.js";
 import { resolveSelector, isSelector } from "./predicates.js";
@@ -25,6 +28,40 @@ describe("R3.2 selector predicates (real OCCT)", () => {
       expect(resolveSelector(oc, b, { kind: "allEdges" }).edges).toHaveLength(12);
     } finally {
       b.delete();
+    }
+  });
+
+  // §4.10 — a cylinder's parameterisation SEAM is an edge whose two adjacent face
+  // ids are equal. It is not a user-selectable edge, and feeding it to MakeFillet
+  // fails the whole operation, so "fillet all edges" was a trap on any body with a
+  // hole. allEdges must exclude seams, and filleting the result must SUCCEED.
+  it("allEdges excludes cylinder seams, so 'fillet all edges' does not choke on a bored body", () => {
+    const block = makeBox(oc, mm(40), mm(40), mm(20));
+    const bore = makeCylinder(oc, mm(8), mm(60), { origin: [mm(20), mm(20), mm(-20)] });
+    const r = subtract(oc, block, bore);
+    bore.delete();
+    block.delete();
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    const bored = r.solid;
+    try {
+      // Count seams directly from the tagged mesh (faceIds equal), and confirm
+      // there is at least one to exclude.
+      const mesh = tessellateTagged(oc, bored, { angularDeflection: 0.1 });
+      const seams = mesh.edges.filter((e) => e.faceIds[0] === e.faceIds[1]).length;
+      expect(seams, "a through-hole wall has a seam").toBeGreaterThan(0);
+
+      const all = resolveSelector(oc, bored, { kind: "allEdges" }).edges;
+      expect(all).toHaveLength(mesh.edges.length - seams);
+
+      // The payoff: filleting every selected edge builds a valid solid instead of
+      // failing on the seam.
+      const filleted = fillet(oc, bored, all, mm(1));
+      expect(filleted.isValid()).toBe(true);
+      expect(filleted.volume()).toBeGreaterThan(0);
+      filleted.delete();
+    } finally {
+      bored.delete();
     }
   });
 
