@@ -273,18 +273,44 @@ type ActiveSketch = { profile: Profile; plane: DatumPlane };
 /** Resolve the sketch profile for extrude/cut/revolve (C3): prefer
  * `data.sketchId`, then the first `deps` entry that names a known sketch, then
  * the most recent sketch (legacy last-wins). */
+/**
+ * The sketch a profile feature (extrude/cut/revolve/sweep/boolean) consumes.
+ *
+ * Resolution order, and the §2.10.3 fix — an EXPLICIT binding must resolve or the
+ * feature FAILS (returns null → the caller errors it loudly), rather than silently
+ * rebinding to an unrelated sketch:
+ *
+ *  1. `data.sketchId` (the authoritative AI/panel binding): if set, it MUST name a
+ *     currently-active sketch — a stale id (its sketch deleted/suppressed/renamed)
+ *     returns null, never a fallback.
+ *  2. `deps`: the first dep that is an active sketch wins. If none is active but a
+ *     dep named a sketch that is now DELETED (gone from the doc) or SUPPRESSED (a
+ *     sketch feature that did not build), the feature lost its bound sketch → null.
+ *  3. Otherwise (the feature named no specific sketch — most ribbon-created
+ *     features carry no deps) fall back to the last-built sketch. This is the only
+ *     legitimate use of the last-wins fallback.
+ */
 function sketchForFeature(
   f: { id: string; deps?: readonly string[]; data?: Record<string, unknown> },
   sketches: Map<string, ActiveSketch>,
   lastSketch: ActiveSketch | null,
+  allFeatureIds: ReadonlySet<string>,
+  sketchFeatureIds: ReadonlySet<string>,
 ): ActiveSketch | null {
   const sketchId =
     typeof f.data?.["sketchId"] === "string" ? (f.data["sketchId"] as string) : undefined;
-  if (sketchId && sketches.has(sketchId)) return sketches.get(sketchId)!;
-  if (f.deps) {
+  // An explicit sketchId is the binding — resolve it or FAIL (§2.10.3). It also
+  // takes precedence over deps (the AI path overrides the panel's deps select).
+  if (sketchId !== undefined) return sketches.get(sketchId) ?? null;
+  if (f.deps && f.deps.length > 0) {
     for (const id of f.deps) {
-      if (sketches.has(id)) return sketches.get(id)!;
+      const s = sketches.get(id);
+      if (s) return s;
     }
+    // No dep resolved to an ACTIVE sketch. If a dep named a sketch that is now
+    // deleted or suppressed, this feature lost its bound sketch — do NOT rebind.
+    const lostSketchDep = f.deps.some((id) => !allFeatureIds.has(id) || sketchFeatureIds.has(id));
+    if (lostSketchDep) return null;
   }
   return lastSketch;
 }
@@ -321,6 +347,13 @@ function evaluateDocument(oc: Occt, doc: CadDocument, isolate: boolean): Isolate
   // Sketch registry by feature id (C3) + last-wins fallback for documents without deps.
   const sketches = new Map<string, ActiveSketch>();
   let lastSketch: ActiveSketch | null = null;
+  // Every feature id, and every SKETCH feature id (incl. suppressed) — so
+  // sketchForFeature can tell a deleted/suppressed sketch dependency (fail) from a
+  // legitimately non-sketch dep (fall back), §2.10.3.
+  const allFeatureIds: ReadonlySet<string> = new Set(doc.features.map((x) => x.id));
+  const sketchFeatureIds: ReadonlySet<string> = new Set(
+    doc.features.filter((x) => x.type === "sketch").map((x) => x.id),
+  );
 
   const replace = (next: Solid): void => {
     solid?.delete();
@@ -439,7 +472,7 @@ function evaluateDocument(oc: Occt, doc: CadDocument, isolate: boolean): Isolate
         break;
       }
       case "extrude": {
-        const activeSketch = sketchForFeature(f, sketches, lastSketch);
+        const activeSketch = sketchForFeature(f, sketches, lastSketch, allFeatureIds, sketchFeatureIds);
         if (!activeSketch)
           throw new Error(`feature '${f.id}' (extrude): no sketch profile upstream`);
         const sk = profileSketch(activeSketch.profile, activeSketch.plane);
@@ -504,7 +537,7 @@ function evaluateDocument(oc: Occt, doc: CadDocument, isolate: boolean): Isolate
         break;
       }
       case "revolve": {
-        const activeSketch = sketchForFeature(f, sketches, lastSketch);
+        const activeSketch = sketchForFeature(f, sketches, lastSketch, allFeatureIds, sketchFeatureIds);
         if (!activeSketch)
           throw new Error(`feature '${f.id}' (revolve): no sketch profile upstream`);
         // Revolve the active profile about an axis through (ox,oy,oz) along
@@ -654,7 +687,7 @@ function evaluateDocument(oc: Occt, doc: CadDocument, isolate: boolean): Isolate
         } else if (planeSpec) {
           sweepPlane = resolveSketchPlane(planeSpec);
         } else {
-          const bound = sketchForFeature(f, sketches, lastSketch);
+          const bound = sketchForFeature(f, sketches, lastSketch, allFeatureIds, sketchFeatureIds);
           sweepPlane = bound?.plane ?? planeXY();
         }
         const modeRaw = f.data?.["mode"];
@@ -709,7 +742,7 @@ function evaluateDocument(oc: Occt, doc: CadDocument, isolate: boolean): Isolate
       case "cut": {
         const base = solid;
         if (!base) throw new Error(`feature '${f.id}' (cut): no solid to cut into`);
-        const activeSketch = sketchForFeature(f, sketches, lastSketch);
+        const activeSketch = sketchForFeature(f, sketches, lastSketch, allFeatureIds, sketchFeatureIds);
         if (!activeSketch) throw new Error(`feature '${f.id}' (cut): no sketch profile upstream`);
         // Subtract the active profile, extruded `depth` (optionally two-sided via
         // `back`, optionally along a baked/edge direction — parity with extrude, G5),

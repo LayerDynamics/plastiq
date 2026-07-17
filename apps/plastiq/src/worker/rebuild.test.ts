@@ -1,6 +1,6 @@
 import { beforeAll, describe, expect, it } from "vitest";
 import { exportStep, initOcct, makeBox, mm, type Occt, type Solid } from "@plastiq/cad";
-import type { CadDocument } from "../store/types.js";
+import type { CadDocument, EditorFeature } from "../store/types.js";
 import type { Profile } from "../sketch/profile.js";
 import {
   rebuildDocument,
@@ -162,6 +162,97 @@ describe("CAD Studio rebuild (SPEC-5 M0.4)", () => {
     const mesh = rebuildTagged(oc, doc, { linearDeflection: mm(0.5) })!;
     expect(mesh.faceGroups.length).toBeGreaterThan(6);
     solid!.delete();
+  });
+
+  describe("§2.10.3: a consumer never silently rebinds to a DIFFERENT sketch", () => {
+    const m = (x: number): number => mm(x);
+    const small = (): EditorFeature => ({
+      id: "sA",
+      type: "sketch",
+      data: {
+        profile: loopProfile([
+          [0, 0],
+          [m(20), 0],
+          [m(20), m(20)],
+          [0, m(20)],
+        ]),
+      },
+    });
+    const large = (): EditorFeature => ({
+      id: "sB",
+      type: "sketch",
+      data: {
+        profile: loopProfile([
+          [0, 0],
+          [m(40), 0],
+          [m(40), m(40)],
+          [0, m(40)],
+        ]),
+      },
+    });
+    const VOL_A = m(20) * m(20) * m(10);
+    const VOL_B = m(40) * m(40) * m(10);
+
+    it("builds from the DEPS-named sketch when it is present", () => {
+      const doc: CadDocument = {
+        features: [
+          small(),
+          large(),
+          { id: "e1", type: "extrude", deps: ["sA"], params: { height: m(10) }, data: { op: "new" } },
+        ],
+        params: {},
+      };
+      const solid = rebuildDocument(oc, doc)!;
+      expect(solidVolume(oc, solid)).toBeCloseTo(VOL_A, 12); // A, not B
+      solid.delete();
+    });
+
+    it("FAILS (not rebinds to B) when the DEPS-named sketch is DELETED", () => {
+      // Old behaviour rebuilt from B's profile — wrong geometry, zero error.
+      const doc: CadDocument = {
+        features: [
+          large(), // only B remains; the extrude still names sA
+          { id: "e1", type: "extrude", deps: ["sA"], params: { height: m(10) }, data: { op: "new" } },
+        ],
+        params: {},
+      };
+      expect(() => rebuildDocument(oc, doc)).toThrow(/no sketch profile upstream/);
+    });
+
+    it("FAILS when the DEPS-named sketch is SUPPRESSED (still a feature, not active)", () => {
+      const doc: CadDocument = {
+        features: [
+          { ...small(), suppressed: true },
+          large(),
+          { id: "e1", type: "extrude", deps: ["sA"], params: { height: m(10) }, data: { op: "new" } },
+        ],
+        params: {},
+      };
+      expect(() => rebuildDocument(oc, doc)).toThrow(/no sketch profile upstream/);
+    });
+
+    it("FAILS when an explicit data.sketchId points at a missing sketch", () => {
+      const doc: CadDocument = {
+        features: [
+          large(),
+          { id: "e1", type: "extrude", data: { sketchId: "sA", op: "new" }, params: { height: m(10) } },
+        ],
+        params: {},
+      };
+      expect(() => rebuildDocument(oc, doc)).toThrow(/no sketch profile upstream/);
+    });
+
+    it("STILL falls back to the last sketch for a feature that names NO sketch (ribbon path)", () => {
+      // The legitimate last-wins fallback must survive: a ribbon extrude carries no
+      // deps and no sketchId, so it uses the most recent sketch (B here).
+      const doc: CadDocument = {
+        features: [large(), { id: "e1", type: "extrude", params: { height: m(10) }, data: { op: "new" } }],
+        params: {},
+      };
+      const solid = rebuildDocument(oc, doc)!;
+      expect(solidVolume(oc, solid)).toBeCloseTo(VOL_B, 12); // last sketch = B
+      solid.delete();
+    });
   });
 
   it("a sketch's datum plane reorients the extrude (XZ extrudes along Y, not Z)", () => {
