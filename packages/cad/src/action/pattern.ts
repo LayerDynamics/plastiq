@@ -7,6 +7,29 @@ import { normalize, scale } from "../math/index.js";
 import type { Solid } from "../solid/solid.js";
 import { rotate, translate } from "./transform.js";
 
+/**
+ * Upper bound on a pattern's instance count (§2.10.4).
+ *
+ * Each instance is a placed copy that the caller then fuses; the app runs this on
+ * a SINGLE geometry worker, so an unbounded count (the audit's `count: 1e6`)
+ * hangs it and freezes every interactive rebuild WITHOUT ever erroring. 10 000 is
+ * far above any realistic pattern (a dense perforation is a few hundred) yet
+ * bounds the work — a pathological request now fails loudly instead of wedging
+ * the worker. Enforced in the kernel so every caller (UI, AI probe, headless) is
+ * covered by one guard.
+ */
+const MAX_PATTERN_COUNT = 10_000;
+
+/** Reject a non-positive or pathologically large instance count. */
+function checkCount(name: string, count: number): void {
+  if (count < 1) throw new Error(`${name}: count must be ≥ 1`);
+  if (count > MAX_PATTERN_COUNT) {
+    throw new Error(
+      `${name}: count ${count} exceeds the maximum of ${MAX_PATTERN_COUNT} — a larger pattern would freeze the geometry worker`,
+    );
+  }
+}
+
 /** `count` copies of `base`, each offset by `spacing` along `dir` (i = 0…count−1).
  * `dir` is unitized so a non-unit authoring vector does not silently scale the
  * spacing (G11). A zero-length direction throws. */
@@ -17,7 +40,7 @@ export function linearPattern(
   spacing: number,
   count: number,
 ): Solid[] {
-  if (count < 1) throw new Error("linearPattern: count must be ≥ 1");
+  checkCount("linearPattern", count);
   // Zero spacing places every copy on top of the base (§4.6): the subsequent
   // fuse collapses them back to the base, so the pattern silently "does nothing".
   // Reject it rather than return a lie — a single copy is `count: 1`, which needs
@@ -55,7 +78,7 @@ export function circularPattern(
   count: number,
   angle: number,
 ): Solid[] {
-  if (count < 1) throw new Error("circularPattern: count must be ≥ 1");
+  checkCount("circularPattern", count);
   // A zero total angle gives step 0 → every copy coincident with the base (§4.6),
   // which the fuse collapses back to the base: the pattern silently does nothing.
   // Reject for count > 1 (count 1 is just the base and needs no angle).

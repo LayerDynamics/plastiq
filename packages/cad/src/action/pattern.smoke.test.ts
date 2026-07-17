@@ -53,4 +53,18 @@ describe("pattern — smoke", () => {
     one.forEach((s) => s.delete());
     box.delete();
   });
+
+  // §2.10.4 — a pathological count (the audit's 1e6) hung the single geometry
+  // worker WITHOUT erroring. It must now fail loudly, and a large-but-sane count
+  // must still be allowed.
+  it("rejects a pathologically large count instead of freezing the worker", () => {
+    const box = makeBox(oc, mm(1), mm(1), mm(1));
+    expect(() => linearPattern(oc, box, [1, 0, 0], mm(2), 1_000_000)).toThrow(/exceeds the maximum/);
+    expect(() => circularPattern(oc, box, [0, 0, 0], [0, 0, 1], 1_000_000, Math.PI)).toThrow(
+      /exceeds the maximum/,
+    );
+    // The boundary is inclusive: 10 000 is allowed (though we don't build it here).
+    expect(() => linearPattern(oc, box, [1, 0, 0], mm(2), 10_001)).toThrow(/exceeds the maximum/);
+    box.delete();
+  });
 });
