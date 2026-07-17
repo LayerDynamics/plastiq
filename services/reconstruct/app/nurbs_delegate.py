@@ -64,12 +64,13 @@ from OCC.Core.BRepBuilderAPI import (
     BRepBuilderAPI_MakeFace,
     BRepBuilderAPI_MakeVertex,
     BRepBuilderAPI_MakeWire,
+    BRepBuilderAPI_Transform,
 )
 from OCC.Core.BRepCheck import BRepCheck_Analyzer
 from OCC.Core.BRepLib import breplib
 from OCC.Core.Geom2d import Geom2d_BSplineCurve
 from OCC.Core.GeomAPI import GeomAPI_ProjectPointOnSurf
-from OCC.Core.gp import gp_Pnt, gp_Pnt2d
+from OCC.Core.gp import gp_Pnt, gp_Pnt2d, gp_Trsf
 from OCC.Core.IFSelect import IFSelect_RetDone
 from OCC.Core.ShapeFix import ShapeFix_Face
 from OCC.Core.STEPControl import STEPControl_Reader
@@ -106,12 +107,28 @@ def _submesh_glb_base64(mesh: trimesh.Trimesh, face_indices: np.ndarray) -> str:
     return base64.b64encode(glb).decode("ascii")
 
 
+#: The nurbs service emits millimetre STEP (I1); this pipeline works in SI metres.
+MM_TO_M = 1.0 / 1000.0
+
+
+def _to_metres(shape: TopoDS_Shape) -> TopoDS_Shape:
+    """Scale a millimetre shape (as OCCT's STEP reader hands it back) into SI metres."""
+    trsf = gp_Trsf()
+    trsf.SetScale(gp_Pnt(0.0, 0.0, 0.0), MM_TO_M)
+    return BRepBuilderAPI_Transform(shape, trsf, True).Shape()
+
+
 def _face_from_step(step_text: str) -> Optional[TopoDS_Face]:
     """First ``TopoDS_Face`` of a STEP document (the nurbs open-mode result is one fitted face).
 
     Writes the text to a temp file (``STEPControl_Reader`` reads files only) and reads it back with
     the same kernel path the app already trusts for this service's STEP. Returns ``None`` on any
-    reader status that is not ``RetDone``/has no roots/no face."""
+    reader status that is not ``RetDone``/has no roots/no face.
+
+    Units (FablesFindings I1): the nurbs service now emits honest MILLIMETRE STEP, and OCCT's
+    reader normalises any file into millimetres — while this pipeline works in SI METRES. So the
+    shape is scaled back down here. Without it the delegated surface comes back 1000x too large
+    (and the caller's volume check fails by 1000**3 ≈ 1e9, which is exactly how this was caught)."""
     fd, path = tempfile.mkstemp(suffix=".step")
     os.close(fd)
     try:
@@ -122,7 +139,7 @@ def _face_from_step(step_text: str) -> Optional[TopoDS_Face]:
             return None
         if reader.TransferRoots() <= 0:
             return None
-        shape = reader.OneShape()
+        shape = _to_metres(reader.OneShape())
     finally:
         os.remove(path)
     explorer = TopExp_Explorer(shape, TopAbs_FACE)
@@ -268,7 +285,9 @@ def _submit_and_poll(
 
 
 def _shape_from_step(step_text: str) -> Optional[TopoDS_Shape]:
-    """Full ``TopoDS_Shape`` of a STEP document (closed-mode nurbs returns a multi-face solid)."""
+    """Full ``TopoDS_Shape`` of a STEP document (closed-mode nurbs returns a multi-face solid).
+
+    Scaled millimetres → SI metres, same contract as ``_face_from_step`` (FablesFindings I1)."""
     fd, path = tempfile.mkstemp(suffix=".step")
     os.close(fd)
     try:
@@ -279,7 +298,7 @@ def _shape_from_step(step_text: str) -> Optional[TopoDS_Shape]:
             return None
         if reader.TransferRoots() <= 0:
             return None
-        return reader.OneShape()
+        return _to_metres(reader.OneShape())
     finally:
         os.remove(path)
 

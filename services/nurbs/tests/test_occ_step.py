@@ -261,17 +261,31 @@ def test_surfaces_to_step_rejects_empty_surface_list():
         surfaces_to_step([])
 
 
-# --- units / mode sanity: raw metre coordinates, no scaling (SPEC-7 D-4 / SPEC-12) -----------
+# --- units: STEP is written in MILLIMETRES (FablesFindings I1) -------------------------------
+#
+# This previously asserted the OPPOSITE — that coordinates stayed raw metres and
+# "nothing was scaled (a mm conversion would put 1500.0 in the text)". That
+# pinned the defect as the contract: OCCT writes raw numbers but DECLARES the
+# file millimetre, so a 1.5 m radius went out as "1.5 mm" — 1000x too small for
+# every consumer. It looked fine only because Plastiq's reader was wrong the same
+# way. Both sides now convert at the boundary, so the file is honest.
 
 
-def test_step_coordinates_are_raw_metres_unscaled():
+def test_step_coordinates_are_millimetres():
     step_text, _ = surfaces_to_step([cylinder_surface()])
     coords = _cartesian_coords(step_text)
-    # the known pole coordinates survive verbatim: RADIUS 1.5 and HEIGHT 2.0
-    assert np.isclose(coords, RADIUS, rtol=0.0, atol=1e-9).any()
-    assert np.isclose(coords, HEIGHT, rtol=0.0, atol=1e-9).any()
-    # and nothing was scaled (a mm conversion would put 1500.0 in the text)
-    assert np.abs(coords).max() < 10.0
+    # The poles are converted m → mm: RADIUS 1.5 m → 1500 mm, HEIGHT 2.0 m → 2000 mm.
+    assert np.isclose(coords, RADIUS * 1000.0, rtol=0.0, atol=1e-6).any()
+    assert np.isclose(coords, HEIGHT * 1000.0, rtol=0.0, atol=1e-6).any()
+    # The raw SI magnitudes must NOT appear as coordinates any more.
+    assert np.abs(coords).max() > 100.0
+
+
+def test_step_declares_the_millimetre_unit_it_writes():
+    # The scale is only correct if the file also DECLARES millimetre — the two
+    # must agree, and it is their disagreement that was the 1000x defect.
+    step_text, _ = surfaces_to_step([cylinder_surface()])
+    assert re.search(r"LENGTH_UNIT\(\)[\s\S]{0,60}SI_UNIT\(\.MILLI\.,\.METRE\.\)", step_text)
 
 
 # --- validation happens BEFORE OCCT / before any subprocess (§6.2, FR-6) ---------------------

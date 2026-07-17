@@ -71,6 +71,7 @@ export {
   translate,
   rotate,
   mirror,
+  scale,
   extrude,
   revolve,
   type DraftOptions,

@@ -38,12 +38,13 @@ from OCC.Core.BRepBuilderAPI import (
     BRepBuilderAPI_MakeFace,
     BRepBuilderAPI_MakeSolid,
     BRepBuilderAPI_Sewing,
+    BRepBuilderAPI_Transform,
 )
 from OCC.Core.BRepCheck import BRepCheck_Analyzer
 from OCC.Core.BRepGProp import brepgprop
 from OCC.Core.BRepLib import breplib
 from OCC.Core.Geom import Geom_BSplineSurface
-from OCC.Core.gp import gp_Pnt
+from OCC.Core.gp import gp_Pnt, gp_Trsf
 from OCC.Core.GProp import GProp_GProps
 from OCC.Core.IFSelect import IFSelect_RetDone
 from OCC.Core.STEPControl import STEPControl_AsIs, STEPControl_Writer
@@ -139,14 +140,33 @@ def _count_faces(shape: TopoDS_Shape) -> int:
     return count
 
 
+#: Fitted surfaces are in SI metres; STEP declares millimetres (FablesFindings I1).
+M_TO_MM = 1000.0
+
+
+def _to_millimetres(shape: TopoDS_Shape) -> TopoDS_Shape:
+    """Scale an SI-metre shape into millimetres (a copy; the input is untouched)."""
+    trsf = gp_Trsf()
+    trsf.SetScale(gp_Pnt(0.0, 0.0, 0.0), M_TO_MM)
+    return BRepBuilderAPI_Transform(shape, trsf, True).Shape()
+
+
 def _shape_to_step(shape: TopoDS_Shape) -> str:
     """Serialize a shape to STEP text — reconstruct's convention (SPEC-7 D-4).
 
-    ``STEPControl_AsIs``, raw coordinates, OCCT's default write unit; the writer
-    only targets files, so write to a temp file and read the text back.
+    ``STEPControl_AsIs``, coordinates scaled to MILLIMETRES so they agree with the
+    unit OCCT declares; the writer only targets files, so write to a temp file and
+    read the text back.
+
+    This used to write RAW coordinates and lean on OCCT's default write unit. That
+    only ever worked because the kernel's reader was wrong in the same direction:
+    the shapes are SI metres, OCCT writes their raw numbers and DECLARES the file
+    millimetre, so a 20 mm feature went out as "0.02 mm" — 1000x too small for
+    every consumer except Plastiq. The kernel now converts at its own boundary
+    (FablesFindings I1), so emitting raw SI here would read back 1000x too small.
     """
     writer = STEPControl_Writer()
-    if writer.Transfer(shape, STEPControl_AsIs) != IFSelect_RetDone:
+    if writer.Transfer(_to_millimetres(shape), STEPControl_AsIs) != IFSelect_RetDone:
         raise RuntimeError("STEP transfer failed (OCCT status not RetDone)")
     fd, path = tempfile.mkstemp(suffix=".step")
     os.close(fd)

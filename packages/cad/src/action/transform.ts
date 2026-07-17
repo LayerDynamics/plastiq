@@ -1,6 +1,10 @@
-// Rigid transforms (BRepBuilderAPI_Transform). Each returns a NEW independent
-// solid (Copy = true), so callers can freely delete the input — the rebuild loop
-// and pattern fusing rely on this.
+// Transforms (BRepBuilderAPI_Transform). Each returns a NEW independent solid
+// (Copy = true), so callers can freely delete the input — the rebuild loop and
+// pattern fusing rely on this.
+//
+// translate/rotate/mirror are rigid (distance-preserving); `scale` is not, and is
+// the one operation here that changes size. It is what the interchange boundary
+// uses to convert the kernel's SI metres to a file's declared units (I1).
 
 import type { TopoDS_Shape } from "opencascade.js";
 
@@ -35,6 +39,37 @@ export function translate(oc: Occt, solid: Solid, delta: Vec3): Solid {
   v.delete();
   trsf.delete();
   return new Solid(oc, shape);
+}
+
+/**
+ * Uniformly scale a solid by `factor` about `centre` (default the origin).
+ *
+ * The kernel had NO scale operation (§4.11), which left two holes: a user could
+ * not resize a body at all, and the interchange boundary had no way to convert
+ * SI metres to a file's declared units (I1) — so STEP shipped a 1000× error.
+ *
+ * Uniform only, deliberately: gp_Trsf models a similarity transform and a
+ * NON-uniform scale is not one. Passing per-axis factors to gp_GTrsf turns
+ * circles into ellipses and planes into different planes, so every analytic
+ * surface the kernel relies on (§2.1's FaceRef signatures, fillets, offsets)
+ * would degrade to a B-spline. A uniform scale maps a cylinder to a cylinder.
+ */
+export function scale(oc: Occt, solid: Solid, factor: number, centre: Vec3 = [0, 0, 0]): Solid {
+  // Validate BEFORE allocating: 0 collapses the solid to a point and a negative
+  // factor is a mirror-plus-scale that silently inverts orientation — both
+  // produce a "valid" shape OCCT will not complain about.
+  if (!Number.isFinite(factor) || factor <= 0) {
+    throw new Error(`scale: factor must be a finite number > 0 (got ${factor})`);
+  }
+  const trsf = new oc.gp_Trsf_1();
+  const p = new oc.gp_Pnt_3(centre[0], centre[1], centre[2]);
+  try {
+    trsf.SetScale(p, factor);
+    return new Solid(oc, applied(oc, solid.shape, trsf));
+  } finally {
+    p.delete();
+    trsf.delete();
+  }
 }
 
 /** Rotate a solid by `angle` radians about the axis (origin, direction). */

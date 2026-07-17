@@ -2,13 +2,49 @@
 // minimal glTF 2.0 emitter built from the tagged tessellation (mesh export).
 //
 // OCCT writes to its in-memory Emscripten FS; we read the result back out.
+//
+// UNITS (I1) — why every STEP/IGES boundary scales
+// ------------------------------------------------
+// The kernel works in SI METRES. OCCT's STEP writer does NOT convert: it writes
+// each coordinate's raw number and separately DECLARES the file's unit, which
+// defaults to millimetre. Measured on a 40×30×20 mm box (0.04 × 0.03 × 0.02 in
+// kernel units), the emitted file contained:
+//
+//     #346 = ( LENGTH_UNIT() NAMED_UNIT(*) SI_UNIT(.MILLI.,.METRE.) );
+//     #25  = CARTESIAN_POINT('',(0.,0.,2.E-02));
+//
+// i.e. it told every other CAD system the part is 0.02 mm tall when it is 20 mm
+// — exactly 1000× too small. The mirror-image defect on import: OCCT's reader
+// converts a file into its target unit, which is also millimetre, so a
+// real-world mm STEP hands back 40 for 40 mm and the kernel reads it as 40
+// METRES — 1000× too large.
+//
+// This was invisible because the round trip is consistently wrong in both
+// directions: io.test.ts re-imported our own export and got the right volume
+// back. Only a file crossing the boundary — in either direction — is affected,
+// which is precisely the case a self-round-trip cannot see.
+//
+// The fix scales the shape at the boundary rather than configuring OCCT.
+// Interface_Static ("write.step.unit" / "xstep.cascade.unit") is the normal
+// mechanism and it is NOT available: the class binds, but embind exposes no
+// statics on it, so SetCVal does not exist at runtime (pinned by
+// oc/bindings.test.ts). Scaling needs no kernel config and is directly testable.
 
 import type { STEPControl_StepModelType } from "opencascade.js";
 
 import type { Occt } from "../oc/init.js";
 import { Solid } from "../solid/solid.js";
+import { scale } from "../action/transform.js";
 import { tessellateTagged } from "../mesh/tessellate.js";
 import type { TessellateOptions } from "../mesh/tagged.js";
+
+/**
+ * Kernel metres → interchange millimetres.
+ *
+ * OCCT's STEP/IGES writers declare MILLIMETRE and its readers convert INTO
+ * millimetre, so this is the factor on both sides of every boundary.
+ */
+const M_TO_MM = 1000;
 
 function assertDone(oc: Occt, status: unknown, what: string): void {
   if (status !== oc.IFSelect_ReturnStatus.IFSelect_RetDone) {
@@ -16,14 +52,20 @@ function assertDone(oc: Occt, status: unknown, what: string): void {
   }
 }
 
-/** Export a solid to STEP (AP214) text. */
+/**
+ * Export a solid to STEP (AP214) text, in MILLIMETRES (the unit OCCT declares).
+ *
+ * The solid is scaled m → mm first so the numbers written match the declared
+ * unit; the caller's solid is untouched (scale returns an independent copy).
+ */
 export function exportStep(oc: Occt, solid: Solid): string {
   const writer = new oc.STEPControl_Writer_1();
   const progress = new oc.Message_ProgressRange_1();
+  const mmSolid = scale(oc, solid, M_TO_MM);
   const path = "/plastiq-export.step";
   try {
     const status = writer.Transfer(
-      solid.shape,
+      mmSolid.shape,
       oc.STEPControl_StepModelType.STEPControl_AsIs as unknown as STEPControl_StepModelType,
       true,
       progress,
@@ -32,12 +74,19 @@ export function exportStep(oc: Occt, solid: Solid): string {
     assertDone(oc, writer.Write(path), "STEP write");
     return oc.FS.readFile(path, { encoding: "utf8" });
   } finally {
+    mmSolid.delete();
     progress.delete();
     writer.delete();
   }
 }
 
-/** Import a STEP text as a single base body. */
+/**
+ * Import a STEP text as a single base body, converting mm → kernel metres.
+ *
+ * OCCT's reader normalises whatever unit the file declares into millimetres, so
+ * the inverse scale here is unconditional — it is correct for a file declaring
+ * inches or metres just as much as one declaring mm.
+ */
 export function importStep(oc: Occt, text: string): Solid {
   const path = "/plastiq-import.step";
   oc.FS.writeFile(path, text);
@@ -54,20 +103,31 @@ export function importStep(oc: Occt, text: string): Solid {
       shape.delete();
       throw new Error("STEP import produced an empty shape");
     }
-    return new Solid(oc, shape);
+    const mmSolid = new Solid(oc, shape);
+    try {
+      return scale(oc, mmSolid, 1 / M_TO_MM);
+    } finally {
+      mmSolid.delete();
+    }
   } finally {
     progress.delete();
     reader.delete();
   }
 }
 
-/** Export a solid to IGES text. */
+/**
+ * Export a solid to IGES text, in MILLIMETRES.
+ *
+ * Same unit contract as STEP: IGESControl_Writer's default unit is millimetre
+ * and it writes raw coordinates, so the shape is scaled m → mm first.
+ */
 export function exportIges(oc: Occt, solid: Solid): string {
   const writer = new oc.IGESControl_Writer_1();
   const progress = new oc.Message_ProgressRange_1();
+  const mmSolid = scale(oc, solid, M_TO_MM);
   const path = "/plastiq-export.igs";
   try {
-    if (!writer.AddShape(solid.shape, progress)) {
+    if (!writer.AddShape(mmSolid.shape, progress)) {
       throw new Error("IGES AddShape failed");
     }
     writer.ComputeModel();
@@ -75,6 +135,7 @@ export function exportIges(oc: Occt, solid: Solid): string {
     if (!writer.Write_2(path, false)) throw new Error("IGES write failed");
     return oc.FS.readFile(path, { encoding: "utf8" });
   } finally {
+    mmSolid.delete();
     progress.delete();
     writer.delete();
   }
