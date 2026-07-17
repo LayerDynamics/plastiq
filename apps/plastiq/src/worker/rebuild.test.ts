@@ -113,6 +113,57 @@ describe("CAD Studio rebuild (SPEC-5 M0.4)", () => {
     expect(mesh!.indices.length).toBeGreaterThan(0);
   });
 
+  it("§2.7: a plate with a RECTANGULAR hole extrudes to a solid with the hole", () => {
+    const m = (x: number): number => mm(x);
+    // 40×30 mm plate, 20×10 mm rectangular hole centred in it, extruded 20 mm.
+    // The old extractor returned null for two disjoint loops → "no buildable
+    // profile", so drawing a hole broke the WHOLE sketch. Now the inner loop is a
+    // hole and the pad is a plate-with-a-slot.
+    const doc: CadDocument = {
+      features: [
+        {
+          id: "f1",
+          type: "sketch",
+          data: {
+            profile: {
+              kind: "loop",
+              start: [0, 0],
+              segments: [
+                { kind: "line", to: [m(40), 0] },
+                { kind: "line", to: [m(40), m(30)] },
+                { kind: "line", to: [0, m(30)] },
+                { kind: "line", to: [0, 0] },
+              ],
+              holes: [
+                {
+                  kind: "loop",
+                  start: [m(10), m(10)],
+                  segments: [
+                    { kind: "line", to: [m(30), m(10)] },
+                    { kind: "line", to: [m(30), m(20)] },
+                    { kind: "line", to: [m(10), m(20)] },
+                    { kind: "line", to: [m(10), m(10)] },
+                  ],
+                },
+              ],
+            },
+          },
+        },
+        { id: "f2", type: "extrude", deps: ["f1"], params: { height: m(20) }, data: { op: "new" } },
+      ],
+      params: {},
+    };
+    const solid = rebuildDocument(oc, doc);
+    expect(solid).not.toBeNull();
+    // Volume = (outer 40×30 − hole 20×10) × 20 mm.
+    const expected = (m(40) * m(30) - m(20) * m(10)) * m(20);
+    expect(solidVolume(oc, solid!)).toBeCloseTo(expected, 12);
+    // A through-slot adds an inner wall: the prism has more than a plain box's 6 faces.
+    const mesh = rebuildTagged(oc, doc, { linearDeflection: mm(0.5) })!;
+    expect(mesh.faceGroups.length).toBeGreaterThan(6);
+    solid!.delete();
+  });
+
   it("a sketch's datum plane reorients the extrude (XZ extrudes along Y, not Z)", () => {
     const m = (x: number): number => mm(x);
     // A 20×30 mm rect at the plane origin, extruded 20 mm along the plane normal.

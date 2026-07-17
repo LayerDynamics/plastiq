@@ -117,7 +117,10 @@ function profileSketch(profile: Profile, plane: DatumPlane = planeXY()): Sketch 
   return sk;
 }
 
-/** Cut circular holes from a pad/pocket solid (T11/C5 — profile.holes). */
+/** Cut a pad/pocket solid's holes (T11/C5/§2.7 — profile.holes). A hole is a full
+ * circle or an inner LOOP of line/arc/spline segments (a rectangular/shaped hole),
+ * so the plate-with-a-hole case no longer breaks the whole sketch. Each hole is
+ * extruded through the same range as the pad and subtracted. */
 function cutProfileHoles(
   oc: Occt,
   body: Solid,
@@ -130,7 +133,10 @@ function cutProfileHoles(
   if (profile.kind !== "loop" || !profile.holes?.length) return body;
   let acc = body;
   for (const h of profile.holes) {
-    const holeSk = Sketch.circle(plane, h.center[0], h.center[1], h.radius);
+    const holeSk =
+      h.kind === "circle"
+        ? Sketch.circle(plane, h.center[0], h.center[1], h.radius)
+        : profileSketch({ kind: "loop", start: h.start, segments: h.segments }, plane);
     const tool = extrude(oc, holeSk, height, { back: opts.back ?? 0, direction: opts.direction });
     try {
       const r = subtract(oc, acc, tool);
@@ -526,11 +532,15 @@ function evaluateDocument(oc: Occt, doc: CadDocument, isolate: boolean): Isolate
           axis,
           angle,
         );
-        // C9: profile.holes → revolve each hole circle and subtract (ring solid of revolution).
+        // C9 / §2.7: profile.holes → revolve each hole (circle OR inner loop) and
+        // subtract (ring solid of revolution).
         const prof = activeSketch.profile;
         if (prof.kind === "loop" && prof.holes?.length) {
           for (const h of prof.holes) {
-            const holeSk = Sketch.circle(activeSketch.plane, h.center[0], h.center[1], h.radius);
+            const holeSk =
+              h.kind === "circle"
+                ? Sketch.circle(activeSketch.plane, h.center[0], h.center[1], h.radius)
+                : profileSketch({ kind: "loop", start: h.start, segments: h.segments }, activeSketch.plane);
             const tool = revolve(oc, holeSk, origin, axis, angle);
             try {
               const r = subtract(oc, body, tool);

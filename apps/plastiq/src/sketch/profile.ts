@@ -18,8 +18,11 @@ export type ProfileSegment =
   | { kind: "arc"; through: [number, number]; to: [number, number] }
   | { kind: "spline"; through: [number, number][]; to: [number, number] };
 
-/** A circular hole inside a loop profile (plane UV). */
-export type ProfileHole = { kind: "circle"; center: [number, number]; radius: number };
+/** A hole inside a loop profile (plane UV): a full circle, or an inner loop of
+ * line/arc/spline segments (§2.7 — a rectangular/shaped hole, not just a drill). */
+export type ProfileHole =
+  | { kind: "circle"; center: [number, number]; radius: number }
+  | { kind: "loop"; start: [number, number]; segments: ProfileSegment[] };
 
 /** The derived, kernel-ready profile shape. */
 export type Profile =
@@ -39,7 +42,26 @@ interface Edge {
   ent: LineEntity | ArcEntity | SplineEntity;
 }
 
-/** The closed loop of non-construction line/arc/spline edges as a typed profile. */
+/** One extracted closed cycle: its start point and the ordered segment chain. */
+interface Cycle {
+  start: [number, number];
+  segments: ProfileSegment[];
+}
+
+/**
+ * The non-construction line/arc/spline geometry as a typed loop profile.
+ *
+ * Extracts ALL closed cycles, not just one (§2.7). The classic failure was a
+ * plate-with-a-hole (two disjoint loops): the old walk consumed a single cycle
+ * and, finding leftover edges, returned null — so drawing a hole broke the WHOLE
+ * previously-working sketch with "no buildable profile". Now the loops are
+ * classified by even-odd containment: the single outer boundary becomes the
+ * profile and the loops inside it become holes (alongside any interior circles).
+ *
+ * Deliberately still returns null (an honest failure, unchanged) for cases this
+ * profile shape cannot represent: multiple disjoint OUTER regions, or nested
+ * islands (a solid inside a hole) — never a silently-dropped region.
+ */
 function edgeLoop(model: SketchModel): Profile | null {
   const edges: Edge[] = [];
   for (const e of model.entities) {
@@ -54,7 +76,10 @@ function edgeLoop(model: SketchModel): Profile | null {
   // degenerate zero-area sliver); a curved edge can close a 2-edge region.
   if (edges.every((e) => e.ent.kind === "line") && edges.length < 3) return null;
 
-  // Vertex → incident edge indices. Every vertex must have degree exactly 2.
+  // Vertex → incident edge indices. Every vertex must have degree exactly 2 — this
+  // is what guarantees the geometry is a set of DISJOINT simple closed loops (a
+  // shared vertex would be degree 4 and is rejected), so the cycles are
+  // vertex-disjoint and a cycle's own vertex is strictly inside/outside any other.
   const inc = new Map<string, number[]>();
   edges.forEach((e, i) => {
     (inc.get(e.a) ?? inc.set(e.a, []).get(e.a)!).push(i);
@@ -67,68 +92,95 @@ function edgeLoop(model: SketchModel): Profile | null {
     return p ? [p.u, p.v] : null;
   };
 
-  // Walk edge→edge, consuming each once, until we return to the start vertex.
-  const startV = edges[0]!.a;
-  const startCoord = coord(startV);
-  if (!startCoord) return null;
   const used = new Set<number>();
-  const segments: ProfileSegment[] = [];
-  let cur = startV;
-  let guard = edges.length + 1;
-  while (guard-- > 0) {
-    const next = inc.get(cur)!.find((i) => !used.has(i));
-    if (next === undefined) break;
-    used.add(next);
-    const e = edges[next]!;
-    const toV = e.a === cur ? e.b : e.a;
-    const toCoord = coord(toV);
-    if (!toCoord) return null;
-    if (e.ent.kind === "arc") {
-      const through = coord(e.ent.through);
-      if (!through) return null;
-      segments.push({ kind: "arc", through, to: toCoord });
-    } else if (e.ent.kind === "spline") {
-      // Interpolation points after the segment start, in traversal direction.
-      const ids =
-        e.ent.points[0] === cur ? e.ent.points.slice(1) : [...e.ent.points].reverse().slice(1);
-      const through: [number, number][] = [];
-      for (const pid of ids) {
-        const c = coord(pid);
-        if (!c) return null;
-        through.push(c);
+  /** Walk the cycle reachable from the unused edge `seed`, consuming its edges. */
+  const walkFrom = (seed: number): Cycle | null => {
+    const startV = edges[seed]!.a;
+    const startCoord = coord(startV);
+    if (!startCoord) return null;
+    const segments: ProfileSegment[] = [];
+    let cur = startV;
+    let guard = edges.length + 1;
+    while (guard-- > 0) {
+      const next = inc.get(cur)!.find((i) => !used.has(i));
+      if (next === undefined) break;
+      used.add(next);
+      const e = edges[next]!;
+      const toV = e.a === cur ? e.b : e.a;
+      const toCoord = coord(toV);
+      if (!toCoord) return null;
+      if (e.ent.kind === "arc") {
+        const through = coord(e.ent.through);
+        if (!through) return null;
+        segments.push({ kind: "arc", through, to: toCoord });
+      } else if (e.ent.kind === "spline") {
+        // Interpolation points after the segment start, in traversal direction.
+        const ids =
+          e.ent.points[0] === cur ? e.ent.points.slice(1) : [...e.ent.points].reverse().slice(1);
+        const through: [number, number][] = [];
+        for (const pid of ids) {
+          const c = coord(pid);
+          if (!c) return null;
+          through.push(c);
+        }
+        segments.push({ kind: "spline", through, to: toCoord });
+      } else {
+        segments.push({ kind: "line", to: toCoord });
       }
-      segments.push({ kind: "spline", through, to: toCoord });
-    } else {
-      segments.push({ kind: "line", to: toCoord });
+      cur = toV;
+      if (cur === startV) break;
     }
-    cur = toV;
-    if (cur === startV) break;
+    // The walk must close back on its start (a valid simple loop).
+    return cur === startV ? { start: startCoord, segments } : null;
+  };
+
+  const cycles: Cycle[] = [];
+  for (let i = 0; i < edges.length; i++) {
+    if (used.has(i)) continue;
+    const c = walkFrom(i);
+    if (!c) return null;
+    cycles.push(c);
   }
-  // A single closed cycle consumes every edge and lands back on the start.
-  if (used.size !== edges.length || cur !== startV) return null;
-  // Drop the final segment's redundant landing back on `start` only if the walk
-  // double-counted; here the last segment legitimately closes onto start, so keep
-  // all segments (the kernel auto-closes if the last point ≠ start, but ours does
-  // land on start — its `to` equals start, which the kernel treats as closing).
-  const holes = interiorCircles(model, startCoord, segments);
+  // Every edge must belong to exactly one closed cycle.
+  if (used.size !== edges.length || cycles.length === 0) return null;
+
+  // Classify by even-odd containment. A cycle's start vertex sits ON its own
+  // boundary but strictly inside/outside every OTHER (disjoint) cycle, so it is a
+  // safe representative point. depth = how many other cycles contain it.
+  const rings = cycles.map((c) => ringOf(c.start, c.segments));
+  const depth = cycles.map((c, i) =>
+    cycles.reduce((n, _c, j) => (j !== i && pointInRing(c.start, rings[j]!) ? n + 1 : n), 0),
+  );
+
+  // Exactly one outermost (depth 0) boundary. Zero or several ⇒ no single region
+  // this profile shape can hold ⇒ honest null (never a dropped region).
+  const outerIdxs = depth.flatMap((d, i) => (d === 0 ? [i] : []));
+  if (outerIdxs.length !== 1) return null;
+  const oi = outerIdxs[0]!;
+
+  // Loops directly inside the boundary (depth 1) are holes; anything deeper is a
+  // nested island this shape cannot represent ⇒ honest null.
+  const loopHoles: ProfileHole[] = [];
+  for (let i = 0; i < cycles.length; i++) {
+    if (i === oi) continue;
+    if (depth[i] !== 1) return null;
+    loopHoles.push({ kind: "loop", start: cycles[i]!.start, segments: cycles[i]!.segments });
+  }
+
+  const outer = cycles[oi]!;
+  const circleHoles = interiorCircles(model, outer.start, outer.segments);
+  const holes = [...loopHoles, ...circleHoles];
   return holes.length > 0
-    ? { kind: "loop", start: startCoord, segments, holes }
-    : { kind: "loop", start: startCoord, segments };
+    ? { kind: "loop", start: outer.start, segments: outer.segments, holes }
+    : { kind: "loop", start: outer.start, segments: outer.segments };
 }
 
-/** Ray-cast point-in-polygon for the outer loop (C9 — true containment for holes). */
-function pointInOuterLoop(
-  u: number,
-  v: number,
-  start: [number, number],
-  segments: ProfileSegment[],
-): boolean {
-  // Build polyline ring of sample points along the outer path.
+/** A closed loop as a polyline ring of sample UV points (arcs/splines sampled by
+ * their through + end points — enough for even-odd containment). */
+function ringOf(start: [number, number], segments: ProfileSegment[]): [number, number][] {
   const ring: [number, number][] = [start];
-  let cur: [number, number] = start;
   for (const seg of segments) {
     if (seg.kind === "arc") {
-      // Sample the arc mid (through) plus endpoint — enough for containment of circle centres.
       ring.push(seg.through, seg.to);
     } else if (seg.kind === "spline") {
       for (const p of seg.through) ring.push(p);
@@ -136,10 +188,14 @@ function pointInOuterLoop(
     } else {
       ring.push(seg.to);
     }
-    cur = seg.to;
   }
+  return ring;
+}
+
+/** Even-odd ray-cast point-in-polygon for a ring (C9 — true containment). */
+function pointInRing(p: [number, number], ring: [number, number][]): boolean {
   if (ring.length < 3) return false;
-  // Standard even-odd ray cast in UV.
+  const [u, v] = p;
   let inside = false;
   for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
     const [ui, vi] = ring[i]!;
@@ -157,12 +213,13 @@ function interiorCircles(
   start: [number, number],
   segments: ProfileSegment[],
 ): ProfileHole[] {
+  const ring = ringOf(start, segments);
   const holes: ProfileHole[] = [];
   for (const e of model.entities) {
     if (e.kind !== "circle" || e.construction) continue;
     const centre = model.points.find((p) => p.id === e.center);
     if (!centre || !(e.radius > 0)) continue;
-    if (!pointInOuterLoop(centre.u, centre.v, start, segments)) continue;
+    if (!pointInRing([centre.u, centre.v], ring)) continue;
     holes.push({ kind: "circle", center: [centre.u, centre.v], radius: e.radius });
   }
   return holes;
@@ -195,22 +252,51 @@ export function isProfile(v: unknown): v is Profile {
     const s = (v as { start?: unknown }).start;
     const segs = (v as { segments?: unknown }).segments;
     if (!Array.isArray(s) || s.length !== 2 || !Array.isArray(segs)) return false;
-    return segs.every((g) => {
-      if (typeof g !== "object" || g === null) return false;
-      const k = (g as { kind?: unknown }).kind;
-      if (k === "line") return Array.isArray((g as { to?: unknown }).to);
-      if (k === "arc")
-        return (
-          Array.isArray((g as { to?: unknown }).to) &&
-          Array.isArray((g as { through?: unknown }).through)
-        );
-      if (k === "spline") {
-        const to = (g as { to?: unknown }).to;
-        const through = (g as { through?: unknown }).through;
-        return Array.isArray(to) && Array.isArray(through) && through.length >= 1;
+    if (!segs.every(isSegment)) return false;
+    // Holes are optional; when present each is a circle or an inner loop (§2.7).
+    const holes = (v as { holes?: unknown }).holes;
+    if (holes !== undefined) {
+      if (!Array.isArray(holes)) return false;
+      if (
+        !holes.every((h) => {
+          if (typeof h !== "object" || h === null) return false;
+          const hk = (h as { kind?: unknown }).kind;
+          if (hk === "circle") {
+            const c = (h as { center?: unknown }).center;
+            const r = (h as { radius?: unknown }).radius;
+            return Array.isArray(c) && c.length === 2 && typeof r === "number" && r > 0;
+          }
+          if (hk === "loop") {
+            const hs = (h as { start?: unknown }).start;
+            const hsegs = (h as { segments?: unknown }).segments;
+            return (
+              Array.isArray(hs) && hs.length === 2 && Array.isArray(hsegs) && hsegs.every(isSegment)
+            );
+          }
+          return false;
+        })
+      ) {
+        return false;
       }
-      return false;
-    });
+    }
+    return true;
+  }
+  return false;
+}
+
+/** Validate one deserialized ProfileSegment (line / arc / spline). */
+function isSegment(g: unknown): boolean {
+  if (typeof g !== "object" || g === null) return false;
+  const k = (g as { kind?: unknown }).kind;
+  if (k === "line") return Array.isArray((g as { to?: unknown }).to);
+  if (k === "arc")
+    return (
+      Array.isArray((g as { to?: unknown }).to) && Array.isArray((g as { through?: unknown }).through)
+    );
+  if (k === "spline") {
+    const to = (g as { to?: unknown }).to;
+    const through = (g as { through?: unknown }).through;
+    return Array.isArray(to) && Array.isArray(through) && through.length >= 1;
   }
   return false;
 }

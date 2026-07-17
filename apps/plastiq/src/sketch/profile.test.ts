@@ -102,9 +102,116 @@ describe("extractProfile — circle profile (FR-16 true curved edge)", () => {
     expect(p.kind).toBe("loop");
     if (p.kind === "loop") {
       expect(p.holes).toHaveLength(1);
-      expect(p.holes![0]!.radius).toBe(0.005);
-      expect(p.holes![0]!.center).toEqual([0.025, 0.015]);
+      const hole = p.holes![0]!;
+      expect(hole.kind).toBe("circle");
+      if (hole.kind === "circle") {
+        expect(hole.radius).toBe(0.005);
+        expect(hole.center).toEqual([0.025, 0.015]);
+      }
     }
+  });
+
+  // §2.7 — a plate with a RECTANGULAR hole (two disjoint line loops). The old
+  // extractor consumed a single cycle, found leftover edges, and returned null →
+  // the WHOLE sketch failed with "no buildable profile" the moment a hole was
+  // drawn. Now the inner loop is classified as a hole by even-odd containment.
+  it("a rectangle inside a rectangle becomes a loop with an inner-loop hole", () => {
+    const m = rect(); // outer [0,0]–[0.05,0.03]
+    // Inner rectangle [0.01,0.01]–[0.04,0.02], fully inside the outer.
+    m.points.push(
+      { id: "ia", u: 0.01, v: 0.01 },
+      { id: "ib", u: 0.04, v: 0.01 },
+      { id: "ic", u: 0.04, v: 0.02 },
+      { id: "id", u: 0.01, v: 0.02 },
+    );
+    m.entities.push(
+      { id: "il0", kind: "line", a: "ia", b: "ib" },
+      { id: "il1", kind: "line", a: "ib", b: "ic" },
+      { id: "il2", kind: "line", a: "ic", b: "id" },
+      { id: "il3", kind: "line", a: "id", b: "ia" },
+    );
+    const p = extractProfile(m);
+    expect(p, "a plate with a hole must still be buildable (not null)").not.toBeNull();
+    expect(p!.kind).toBe("loop");
+    if (p!.kind === "loop") {
+      // The OUTER boundary is the profile; the inner rectangle is a loop hole.
+      expect(loopVerts(p!)).toHaveLength(4);
+      expect(p!.holes).toHaveLength(1);
+      const hole = p!.holes![0]!;
+      expect(hole.kind).toBe("loop");
+      if (hole.kind === "loop") {
+        // The hole loop carries the 4 inner corners.
+        const hv = new Set([hole.start, ...hole.segments.map((s) => s.to)].map((c) => c.join(",")));
+        for (const c of ["0.01,0.01", "0.04,0.01", "0.04,0.02", "0.01,0.02"]) expect(hv.has(c)).toBe(true);
+      }
+    }
+  });
+
+  it("picks the OUTER loop as the boundary regardless of which loop was drawn first", () => {
+    // Same as above but the inner loop's entities come FIRST — classification must
+    // be by containment, not draw order.
+    const m: SketchModel = {
+      plane: "XY",
+      points: [
+        { id: "ia", u: 0.01, v: 0.01 },
+        { id: "ib", u: 0.04, v: 0.01 },
+        { id: "ic", u: 0.04, v: 0.02 },
+        { id: "id", u: 0.01, v: 0.02 },
+        { id: "a", u: 0, v: 0 },
+        { id: "b", u: 0.05, v: 0 },
+        { id: "c", u: 0.05, v: 0.03 },
+        { id: "d", u: 0, v: 0.03 },
+      ],
+      entities: [
+        { id: "il0", kind: "line", a: "ia", b: "ib" },
+        { id: "il1", kind: "line", a: "ib", b: "ic" },
+        { id: "il2", kind: "line", a: "ic", b: "id" },
+        { id: "il3", kind: "line", a: "id", b: "ia" },
+        { id: "l0", kind: "line", a: "a", b: "b" },
+        { id: "l1", kind: "line", a: "b", b: "c" },
+        { id: "l2", kind: "line", a: "c", b: "d" },
+        { id: "l3", kind: "line", a: "d", b: "a" },
+      ],
+      constraints: [],
+    };
+    const p = extractProfile(m);
+    expect(p).not.toBeNull();
+    if (p!.kind === "loop") {
+      // Outer boundary spans the full 0.05×0.03 extent.
+      const us = [p!.start[0], ...p!.segments.map((s) => s.to[0])];
+      expect(Math.max(...us)).toBeCloseTo(0.05, 9);
+      expect(p!.holes).toHaveLength(1);
+    }
+  });
+
+  it("returns null for TWO disjoint outer regions (honest failure, never a dropped region)", () => {
+    // Two side-by-side rectangles that don't contain each other — this profile
+    // shape holds ONE outer boundary, so it declines rather than silently drop one.
+    const m: SketchModel = {
+      plane: "XY",
+      points: [
+        { id: "a", u: 0, v: 0 },
+        { id: "b", u: 0.02, v: 0 },
+        { id: "c", u: 0.02, v: 0.02 },
+        { id: "d", u: 0, v: 0.02 },
+        { id: "e", u: 0.05, v: 0 },
+        { id: "f", u: 0.07, v: 0 },
+        { id: "g", u: 0.07, v: 0.02 },
+        { id: "h", u: 0.05, v: 0.02 },
+      ],
+      entities: [
+        { id: "l0", kind: "line", a: "a", b: "b" },
+        { id: "l1", kind: "line", a: "b", b: "c" },
+        { id: "l2", kind: "line", a: "c", b: "d" },
+        { id: "l3", kind: "line", a: "d", b: "a" },
+        { id: "m0", kind: "line", a: "e", b: "f" },
+        { id: "m1", kind: "line", a: "f", b: "g" },
+        { id: "m2", kind: "line", a: "g", b: "h" },
+        { id: "m3", kind: "line", a: "h", b: "e" },
+      ],
+      constraints: [],
+    };
+    expect(extractProfile(m)).toBeNull();
   });
 
   it("rejects a circle whose centre is outside the outer loop (C9 containment)", () => {

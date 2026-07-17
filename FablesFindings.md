@@ -169,17 +169,21 @@ The pure model layer is genuinely good — real planegcs solve with DOF/verdict/
 
 **Actionable outline:** finish ADR-0014 as a unit: route clicks through `hitTest`; call the existing drag-solve on pointer-move + snapshot on pointer-up; never delete `reusePointId` points; mount `SketchCamera` with the real frame and re-enable glyph pointer events; wire the implemented-and-tested `nearestSnap`/`segmentHint` (`sketch/infer.ts:32,89,127`); add delete + auto shape-constraints; restore last-valid on solve failure.
 
-### 2.7 Profiles: single loop only — the hole-in-plate case regresses the whole sketch
+### 2.7 Profiles: the hole-in-plate case — ✅ CORE SYMPTOM FIXED (2026-07-17); some sub-items remain
 
-**Where:**
+**FIXED — a hole no longer breaks the whole sketch.** `sketch/profile.ts` `edgeLoop` now extracts **all** closed cycles and classifies them by **even-odd containment**: the single outer boundary becomes the profile, and loops inside it become **holes** — a full circle OR an inner **loop** of line/arc/spline segments (a rectangular/shaped hole, not just a drill). The `ProfileHole` type gained a `{kind:"loop"}` variant; `rebuild.ts` `cutProfileHoles` (and the revolve hole path) build each hole and subtract it (the existing per-hole boolean mechanism, extended to loops). So rect-in-rect / washer / any inner loop now builds a plate-with-a-slot instead of throwing `no buildable profile`.
+- Tests: `sketch/profile.test.ts` (rect-in-rect → loop hole; outer picked by containment regardless of draw order; two disjoint OUTER regions still → null honestly); `worker/rebuild.test.ts` (real OCCT: a 40×30 plate with a 20×10 hole extrudes to the **exact** (outer − hole)×height volume, with more than a box's 6 faces).
+- Bonus: the refactor removed `profile.ts`'s lone lint error (the dead `cur` vestige §2.7 itself flagged) — lint is now **23**, all in `Sketcher.tsx`.
 
-- `packages/cad/src/sketch/sketch.ts:192-204` (verified) — `toFace` builds from exactly **one** wire; no inner wires.
-- `sketch/profile.ts:57-63,107-108` — extraction requires every vertex degree exactly 2 and one cycle consuming **all** edges. Two disjoint closed loops (rect-in-rect, washer, or any second profile) → null → the *entire sketch* throws `no buildable profile` (`rebuild.ts:221-224`). Drawing a hole **breaks the previously working sketch**.
-- Holes exist only as full circles inside a line/arc loop (`profile.ts:154-169`), implemented as per-hole boolean subtractions (`rebuild.ts:110-134`); circle-in-circle is unbuildable (`profile.ts:172-183`). Hole containment is centre-only (`profile.ts:130-136`) → overlapping holes still subtract → sliver geometry.
-- No self-intersection detection: a bowtie wire passes `MakeFace` and extrudes into an invalid solid silently; `Solid.isValid()` exists (`solid/solid.ts:38-43`) but **no production path calls it**.
-- Endpoints coincident *by constraint* (two distinct points) leave degree-1 vertices → no profile, Finish disabled, no diagnostic.
+**Design note:** this reuses boolean subtraction rather than `toFace` inner wires. `Sketch.toFace` (`sketch.ts:192-204`) still builds from ONE wire; the holes are cut as separate extruded tools, which is the mechanism the kernel already used for circular holes. Native `MakeFace.Add(reversedInnerWire)` would be marginally cleaner geometry but a larger, riskier change for no functional gain here.
 
-**Actionable outline:** `toFace` outer + inner wires (`MakeFace.Add(reversedInnerWire)`); N-loop extraction with even-odd containment; multiple outer loops → region list (extrude all or picked subset); `ShapeAnalysis_Wire.CheckSelfIntersection` + coincident-endpoint merge at Finish; call `isValid()` after solid ops in CI builds.
+**STILL OPEN (not addressed by this change):**
+- **Multiple disjoint OUTER regions** (two separate rectangles in one sketch) → still `null` (honest failure — the `Profile` shape holds one boundary; a region list is a bigger change).
+- **Nested islands** (a solid inside a hole) → `null` (rejected at depth ≥ 2).
+- **Circle-outer with a circle hole** (circle-in-circle) still unbuildable — `soleCircle` handles only a lone circle; the outer must be a line/arc/spline loop.
+- **No self-intersection detection:** a bowtie wire still passes `MakeFace` and extrudes into an invalid solid silently; `Solid.isValid()` exists (`solid/solid.ts:38-43`) but no production path calls it.
+- **Endpoints coincident *by constraint*** (two distinct point ids) still leave degree-1 vertices → no profile (the degree-2 requirement); no coincident-endpoint merge at Finish.
+- Hole containment for circles is still centre-only (`profile.ts`), so overlapping circle holes can sliver.
 
 ### 2.8 3D selection is unreliable: stale picks, three disagreeing pickers, right-click destroys selections
 
@@ -252,7 +256,7 @@ The pure model layer is genuinely good — real planegcs solve with DOF/verdict/
 | Draw a rectangle → constrain it | constraint buttons never enable (points-only selection) | §2.6.1 |
 | Drag to adjust the sketch | constraints visibly violated, no re-solve | §2.6.2 |
 | Draw a circle snapped to an existing corner | corner point deleted; profile silently lost | §2.6.3 |
-| Plate with a hole (rect + inner rect) | whole sketch → "no buildable profile" | §2.7 |
+| ~~Plate with a hole (rect + inner rect)~~ | ✅ FIXED — the inner loop is classified as a hole; the plate builds with a real slot (exact volume) | §2.7 |
 | Sketch on the XZ plane (by document/AI) | v-axis maps to −Z → Z-mirrored geometry | §4.8 N5 |
 | Extrude works → extrude again with "new body" | first body destroyed | §2.4 |
 | ~~Join two pads → shell/fillet the top~~ | ✅ FIXED — the boolean unifies same-domain faces, so `topFace` selects the whole joined face (10 faces → 6) | §2.2 |
