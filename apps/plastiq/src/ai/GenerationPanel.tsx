@@ -339,7 +339,7 @@ function MeshConvertSection(): React.JSX.Element {
         },
       });
       const name = doc.name ?? "Reconstructed mesh";
-      useCadStore.getState().loadDocument(stepToImportDocument(result.step, name));
+      useCadStore.getState().replaceDocument(stepToImportDocument(result.step, name));
       // M1: surface a pose/scale-robust fidelity readout (SCD) when the server reports it —
       // honest NFR-4 UX: "good" if the reconstructed surface tracks the mesh, "coarse" otherwise.
       const dev = result.report.surface_deviation;
@@ -410,7 +410,7 @@ function MeshConvertSection(): React.JSX.Element {
       const name = doc.name ?? "Fitted mesh";
       const { report } = await fitMeshToCad(
         doc.glb,
-        { load: (d) => useCadStore.getState().loadDocument(d) },
+        { load: (d) => useCadStore.getState().replaceDocument(d) },
         {
           signal: controller.signal,
           onState: (s) => setStatus(s),

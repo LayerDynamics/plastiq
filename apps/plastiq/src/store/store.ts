@@ -241,7 +241,14 @@ export interface CadStore {
 
   // --- document I/O (persistence M5 / reproducible reload) ---
   toDocument: () => CadDocument;
+  /** Replace the whole document, WIPING undo/redo — for OPENING a project or a
+   * reload/recovery, where the prior in-memory history is meaningless. */
   loadDocument: (doc: CadDocument) => void;
+  /** Replace the whole document but PRESERVE undo history: snapshots the current
+   * document onto the undo stack first, so the swap is a single undoable step
+   * (§2.12.1). Used by AI/ML applies mid-session — accepting an AI edit must not
+   * make an hour of prior manual edits un-undoable. */
+  replaceDocument: (doc: CadDocument) => void;
   reset: () => void;
 }
 
@@ -283,6 +290,44 @@ function snapshot(s: {
 /** History patch to merge into a mutating `set`: push the prior doc, drop redo. */
 function pushHistory(s: CadStore): { past: HistorySnapshot[]; future: HistorySnapshot[] } {
   return { past: [...s.past, snapshot(s)].slice(-HISTORY_LIMIT), future: [] };
+}
+
+/**
+ * The non-history state fields for loading a document: a deep-cloned features /
+ * params / assembly, `nextSeq` re-derived from EVERY typed id minted off the
+ * shared counter (features `f<n>`, instances `i<n>`, mates `m<n>`, joints `j<n>` —
+ * missing the mate/joint prefixes would let a reloaded assembly reissue a
+ * colliding id), and the transient selection/rollback reset. Shared by
+ * `loadDocument` (which then WIPES history) and `replaceDocument` (which
+ * PRESERVES it) so the two can never diverge on how a doc is loaded.
+ */
+function docLoadState(doc: CadDocument) {
+  const ids = [
+    ...doc.features.map((f) => f.id),
+    ...(doc.assembly?.instances ?? []).map((i) => i.id),
+    ...(doc.assembly?.mates ?? []).map((m) => m.id),
+    ...(doc.assembly?.joints ?? []).map((j) => j.id),
+  ];
+  const maxSeq = ids.reduce((m, id) => {
+    const n = /^[fimj](\d+)$/.exec(id);
+    return n ? Math.max(m, Number(n[1])) : m;
+  }, 0);
+  const a = doc.assembly;
+  const assembly: AssemblyModel = a
+    ? { instances: a.instances, mates: a.mates, joints: a.joints ?? [] }
+    : emptyAssembly();
+  const cloned = structuredClone({ features: doc.features, params: doc.params, assembly });
+  return {
+    features: cloned.features,
+    params: cloned.params,
+    assembly: cloned.assembly,
+    nextSeq: maxSeq + 1,
+    jointDrive: {},
+    selectedFeatureId: null,
+    picks: [],
+    rollbackIndex: null,
+    rollbackBeforeId: null,
+  };
 }
 
 function defaultName(type: string, seq: number): string {
@@ -789,37 +834,18 @@ export const useCadStore = create<CadStore>((set, get) => ({
     return structuredClone({ features, params, assembly }) as CadDocument;
   },
 
-  loadDocument: (doc) => {
-    // Re-derive nextSeq from EVERY typed id minted off the shared counter —
-    // features `f<n>`, instances `i<n>`, mates `m<n>`, joints `j<n>`. Missing the
-    // mate/joint prefixes here let a reloaded assembly reissue a colliding id.
-    const ids = [
-      ...doc.features.map((f) => f.id),
-      ...(doc.assembly?.instances ?? []).map((i) => i.id),
-      ...(doc.assembly?.mates ?? []).map((m) => m.id),
-      ...(doc.assembly?.joints ?? []).map((j) => j.id),
-    ];
-    const maxSeq = ids.reduce((m, id) => {
-      const n = /^[fimj](\d+)$/.exec(id);
-      return n ? Math.max(m, Number(n[1])) : m;
-    }, 0);
-    const a = doc.assembly;
-    const assembly: AssemblyModel = a
-      ? { instances: a.instances, mates: a.mates, joints: a.joints ?? [] }
-      : emptyAssembly();
-    const cloned = structuredClone({ features: doc.features, params: doc.params, assembly });
+  loadDocument: (doc) => set({ ...docLoadState(doc), past: [], future: [] }),
+
+  replaceDocument: (doc) => {
+    // Preserve undo (§2.12.1): snapshot the CURRENT document onto the undo stack
+    // BEFORE swapping, so accepting this (AI/ML) edit is a single undoable step
+    // instead of erasing every prior manual edit. future is cleared — a new edit
+    // invalidates redo, exactly like any other mutation.
+    const s = get();
     set({
-      features: cloned.features,
-      params: cloned.params,
-      assembly: cloned.assembly,
-      nextSeq: maxSeq + 1,
-      jointDrive: {},
-      past: [],
+      ...docLoadState(doc),
+      past: [...s.past, snapshot(s)].slice(-HISTORY_LIMIT),
       future: [],
-      selectedFeatureId: null,
-      picks: [],
-      rollbackIndex: null,
-      rollbackBeforeId: null,
     });
   },
 

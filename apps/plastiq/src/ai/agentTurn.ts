@@ -79,7 +79,7 @@ export function buildMeshToCadDeps(deps: TurnToolsDeps): MeshToCadDeps {
     reconstruct: reconstructMesh,
     fitNurbs: fitMeshToCad,
     stepToDoc: stepToImportDocument,
-    load: (doc) => useCadStore.getState().loadDocument(doc),
+    load: (doc) => useCadStore.getState().replaceDocument(doc),
     onConverted: (name) =>
       useProjectsStore.setState({ activeMeshDoc: null, currentId: null, currentName: name }),
     ...(deps.signal ? { signal: deps.signal } : {}),
@@ -116,7 +116,7 @@ export function buildTurnTools(deps: TurnToolsDeps): AgentTools | null {
   // inspect_geometry only reads the mesh; the per-feature statuses are the
   // build_part probe's concern (it must reject a partially-failed document).
   const meshProbe: MeshProbe = async (doc) => (await build(doc)).mesh;
-  const apply: ApplyDocument = (doc) => useCadStore.getState().loadDocument(doc);
+  const apply: ApplyDocument = (doc) => useCadStore.getState().replaceDocument(doc);
 
   return buildAgentTools({
     buildPart: { probe, apply },

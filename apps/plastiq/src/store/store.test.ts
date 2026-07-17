@@ -377,6 +377,31 @@ describe("CAD Studio store — document I/O (FR-39 reproducible reload)", () => 
     expect(next).toBe("f3");
   });
 
+  it("§2.12.1: replaceDocument PRESERVES undo; loadDocument wipes it", () => {
+    // A manual edit the user would not want an AI apply to erase.
+    s().addFeature({ type: "box", params: { dx: 0.06, dy: 0.04, dz: 0.03 } });
+    expect(s().features).toHaveLength(1);
+
+    // An AI/ML apply swaps the whole document via replaceDocument.
+    const aiDoc = {
+      features: [{ id: "f9", type: "sketch" as const, data: {} }],
+      params: {},
+    };
+    s().replaceDocument(aiDoc);
+    expect(s().features.map((f) => f.id)).toEqual(["f9"]); // the AI doc is live
+
+    // The accepted AI edit is a SINGLE undoable step — undo restores the manual work.
+    s().undo();
+    expect(s().features).toHaveLength(1);
+    expect(s().features[0]!.type).toBe("box"); // back to the user's box
+
+    // Contrast: loadDocument (project open / recovery) WIPES history.
+    s().addFeature({ type: "fillet" });
+    s().loadDocument(aiDoc);
+    expect(s().past).toHaveLength(0);
+    expect(s().future).toHaveLength(0);
+  });
+
   it("reloads an assembly with mates without reissuing a colliding id (CADStudio.md §5.1)", () => {
     const i1 = s().addInstance(); // i1
     const i2 = s().addInstance(); // i2

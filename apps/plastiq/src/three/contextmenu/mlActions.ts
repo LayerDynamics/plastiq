@@ -84,7 +84,7 @@ export function liveMlDeps(): MlActionDeps | null {
     checkHealth: checkServiceHealth,
     reconstruct: reconstructMesh,
     fitNurbs: fitMeshToCad,
-    load: (doc) => useCadStore.getState().loadDocument(doc),
+    load: (doc) => useCadStore.getState().replaceDocument(doc),
     finish: (name, status) =>
       useProjectsStore.setState({ activeMeshDoc: null, currentId: null, currentName: name, status }),
     setStatus: (s) => useProjectsStore.setState({ status: s }),
