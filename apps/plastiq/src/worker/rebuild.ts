@@ -29,6 +29,11 @@ import {
   loft,
   makeBox,
   makeBoxAt,
+  makeCylinder,
+  makeSphere,
+  makeCone,
+  makeTorus,
+  type AxisPlacement,
   mirror,
   offsetPlane,
   faceDatumPlane,
@@ -154,6 +159,48 @@ function fusePatternCopies(oc: Occt, copies: readonly Solid[], featureId: string
   const r = unionAll(oc, copies);
   if (!r.ok) throw new Error(`feature '${featureId}' (pattern union): ${r.error}`);
   return r.solid;
+}
+
+/**
+ * Combine a freshly-built primitive with the current body per `data.op` (§4.11).
+ *
+ * Mirrors the extrude convention — join-by-default once a body exists, explicit
+ * `"new"` replaces — and adds `"cut"`/`"intersect"`, which is what makes the round
+ * primitives immediately useful: subtracting a cylinder IS a bore, with the
+ * sketcher (§2.6/§2.7) out of the loop entirely.
+ *
+ * Takes ownership of `tool`: it is always freed, and the returned solid is the
+ * one the caller should install.
+ */
+function combinePrimitive(oc: Occt, current: Solid | null, tool: Solid, f: EditorFeature): Solid {
+  const op = f.data?.["op"];
+  if (!current || op === "new") return tool;
+  try {
+    const r =
+      op === "cut"
+        ? subtract(oc, current, tool)
+        : op === "intersect"
+          ? intersect(oc, current, tool)
+          : union(oc, current, tool);
+    if (!r.ok) throw new Error(`feature '${f.id}' (${f.type} ${String(op ?? "join")}): ${r.error}`);
+    return r.solid;
+  } finally {
+    tool.delete();
+  }
+}
+
+/** A round primitive's placement: origin defaults to the world origin, axis to +Z. */
+function primitivePlacement(f: EditorFeature): AxisPlacement & { angle?: number } {
+  const angle = f.params?.["angle"];
+  return {
+    origin: [opt(f, "ox", 0), opt(f, "oy", 0), opt(f, "oz", 0)],
+    axis: [opt(f, "ax", 0), opt(f, "ay", 0), opt(f, "az", 1)],
+    // A full sweep is the ABSENCE of an angle, not 2π: passing 2π selects OCCT's
+    // partial-sweep ctor, which builds a seam the full-sweep one does not.
+    ...(typeof angle === "number" && Number.isFinite(angle) && angle < 2 * Math.PI
+      ? { angle }
+      : {}),
+  };
 }
 
 /** Dress-up edge selection: explicit EdgeRef[] if given, else resolve a selector
@@ -305,6 +352,48 @@ function evaluateDocument(oc: Occt, doc: CadDocument, isolate: boolean): Isolate
     switch (f.type) {
       case "box":
         replace(makeBox(oc, num(f, "dx"), num(f, "dy"), num(f, "dz")));
+        break;
+      // Round primitives (§4.11). Box was the only primitive, which made the
+      // sketcher a single point of failure for ALL round geometry.
+      case "cylinder":
+        replace(
+          combinePrimitive(
+            oc,
+            currentSolid(),
+            makeCylinder(oc, num(f, "radius"), num(f, "height"), primitivePlacement(f)),
+            f,
+          ),
+        );
+        break;
+      case "sphere":
+        replace(
+          combinePrimitive(
+            oc,
+            currentSolid(),
+            makeSphere(oc, num(f, "radius"), primitivePlacement(f)),
+            f,
+          ),
+        );
+        break;
+      case "cone":
+        replace(
+          combinePrimitive(
+            oc,
+            currentSolid(),
+            makeCone(oc, num(f, "radius1"), num(f, "radius2"), num(f, "height"), primitivePlacement(f)),
+            f,
+          ),
+        );
+        break;
+      case "torus":
+        replace(
+          combinePrimitive(
+            oc,
+            currentSolid(),
+            makeTorus(oc, num(f, "majorRadius"), num(f, "minorRadius"), primitivePlacement(f)),
+            f,
+          ),
+        );
         break;
       case "sketch": {
         let prof = f.data?.["profile"] as Profile | undefined;

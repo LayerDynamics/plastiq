@@ -21,7 +21,7 @@
 | Gate | Command | Result |
 | --- | --- | --- |
 | Kernel tests | `npx vitest run packages/cad` | **89 files, 389 tests — all green** (on the REBUILT wasm) |
-| App tests | `pnpm --filter plastiq test` | **307 files pass, 0 fail** (2003 passed, 6 skipped) |
+| App tests | `pnpm --filter plastiq test` | **307 files pass, 0 fail** (2010 passed, 6 skipped) |
 | Typecheck | `npx tsc --noEmit -p apps/plastiq/tsconfig.json` | **exit 0 — clean** |
 | Lint | `pnpm run lint` (`--max-warnings 0`) | **24 errors — all deliberate**, see below |
 | reconstruct service | `pytest services/reconstruct/tests` | **149 pass, 4 skip** |
@@ -256,7 +256,7 @@ The pure model layer is genuinely good — real planegcs solve with DOF/verdict/
 | Sketch on the XZ plane (by document/AI) | v-axis maps to −Z → Z-mirrored geometry | §4.8 N5 |
 | Extrude works → extrude again with "new body" | first body destroyed | §2.4 |
 | ~~Join two pads → shell/fillet the top~~ | ✅ FIXED — the boolean unifies same-domain faces, so `topFace` selects the whole joined face (10 faces → 6) | §2.2 |
-| ~~Model anything round without the sketcher~~ | ✅ FIXED in the KERNEL — cylinder/sphere/cone/torus primitives exist and bore/boolean correctly; **still has no UI surface** | §4.11 |
+| ~~Model anything round without the sketcher~~ | ✅ FIXED end-to-end — Primitives ribbon panel → cylinder/sphere/cone/torus; Op=cut bores a block with NO sketch feature in the document | §4.11 |
 | ~~Export STEP and open it in another CAD~~ | ✅ FIXED — the file declared MM while carrying SI numbers, so a 20 mm part read as 0.02 mm; both boundaries now convert | I1 |
 | Fillet a hole rim → change the hole radius | ref never re-resolves → feature errors | §2.1 |
 | Shift-click 3 edges → right-click → Fillet | right-click miss wipes the selection | §2.8.2 |
@@ -354,7 +354,14 @@ Extrude oblique `direction` normalized, `height` along the direction (vol A·h/�
 
 - ~~**P1** Box is the only primitive~~ — ✅ **FIXED (2026-07-17).** `makeCylinder` / `makeSphere` / `makeCone` / `makeTorus` (`solid/primitives.ts`), each placeable via a `gp_Ax2` (origin + axis) with an optional partial sweep angle. Round geometry no longer depends on the sketcher at all — "bores a block with a primitive cylinder, no sketcher involved" is now a test. Volumes asserted exactly (πr²h, 4/3πr³, frustum, Pappus 2π²Rr²), and each primitive's curved face reports the exact analytic surface a §2.1 FaceRef re-resolves it by. Degenerate inputs are rejected rather than built (self-intersecting torus, equal-radii "cone", zero radius). Needed `BRepPrimAPI_MakeOneAxis` (their shared base) in the trim: a derived class cannot be CONSTRUCTED unless its whole base chain is bound — the leaf alone throws `UnboundTypeError` at first call, which is exactly how an under-listed class survives a green suite. Tests: `solid/primitives.test.ts` (18). **Still kernel-only — no ribbon/AI surface yet (see below).**
 - ~~**P1** No scale operation~~ — ✅ **FIXED (2026-07-17).** `scale(oc, solid, factor, centre?)` in `action/transform.ts`. Uniform only, deliberately: `gp_Trsf` models a similarity transform and a non-uniform scale is not one — per-axis factors via `gp_GTrsf` turn circles into ellipses, degrading every analytic surface the kernel relies on (§2.1 signatures, fillets, offsets) into B-splines. Rejects `factor <= 0` (zero collapses the solid to a point; negative silently inverts orientation — OCCT complains about neither). It is also what I1's interchange boundary uses.
-- **NEW P1 (opened by the above):** the round primitives are **kernel-only**. There is no ribbon action, no `rebuild.ts` feature type, and no AI schema entry for cylinder/sphere/cone/torus, so a user still cannot create one from the UI — the §4.11 fix is complete in the kernel and unreachable in the product. Same shape of gap as §2.9's `addMatePick`. Wiring them needs: a `primitive` feature type in the evaluator, ribbon entries, `featureUnits.ts` LENGTH/ANGLE table rows (so the properties panel can edit radius/height — §9), and a zod schema arm.
+- **The primitives are WIRED END-TO-END, not kernel-only (2026-07-17).** They were briefly kernel-only — the same shape of gap as §2.9's unreachable `addMatePick` — and are now reachable by a real user:
+  - **Evaluator:** `cylinder` / `sphere` / `cone` / `torus` feature types (`worker/rebuild.ts`), with `data.op` = `join` (default once a body exists) | `cut` | `intersect` | `new`, mirroring the extrude convention. **`cut` is the payoff: subtracting a cylinder IS a bore, with the sketcher out of the loop entirely** — a test builds a bored block from a document containing NO sketch feature.
+  - **Ribbon:** a new "Primitives" panel in the Solid tab. Selection-driven per the C6 convention — a picked face supplies the origin (its centroid) and axis (its normal), so "select a face → Cylinder" lands a boss, or a bore with Op=cut.
+  - **§9 compliance, deliberately:** every param is baked at creation — `ox/oy/oz`, `ax/ay/az` and `angle` included, even at their defaults — because `FeatureEditor` iterates ONLY `Object.entries(feature.params)`, so a param creation omits can NEVER be added by the panel later. This is the exact defect that leaves mirror's `ny/nz/oy/oz` and revolve's axis permanently unreachable (§9); the primitives do not repeat it.
+  - **Units:** rows in `featureUnits.ts` LENGTH/ANGLE tables, so the properties panel's mm/deg display and the AI mm→SI converter both work automatically (they read that single source). Axis components are unitless scalars and are correctly in neither table.
+  - **AI:** zod arms for all four in `ai/tools/schema.ts`, with optional placement + `data.op`.
+  - Tests: `worker/rebuild.test.ts` (7) — exact analytic volumes through the evaluator, the no-sketch bore, a joined boss, a non-default (+X) axis, `angle >= 2π` meaning a FULL solid rather than a degenerate wedge (the ribbon's baked default), and a degenerate torus failing loudly.
+  - **Not done:** no gizmo for radius/height (the `featureGizmo.ts` drag contract), and no primitive entries in the right-click context menu — both are §6/§9 surface gaps, not §4.11 ones.
 - **P2** `volume()` on open shells/compounds returns garbage without error (`solid/solid.ts:46-52`) and is used as a success proxy (`extrude.ts:350,419`).
 - Assembly solver is a real LM solver (numeric Jacobian, rank DOF, teleport-regression suite). **P1** local minima reported "over-constrained", no multi-start (`solver.ts:309-323`); **P1** joints impose no kinematic constraint in the solve (`lower/joints.ts:31-38` consumes them only for physics); no tangent/lock mates or limits. **P2** O(mates × 6·free²) forward-difference Jacobian; `distance` residual non-differentiable at 0 (`solver.ts:121-122`).
 

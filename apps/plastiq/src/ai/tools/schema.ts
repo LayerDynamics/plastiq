@@ -74,10 +74,63 @@ const base = {
 };
 
 // Recursive feature schema — `boolean.toolFeatures` is a full sub-document, so the
+/** Shared optional placement params for the round primitives (§4.11). */
+const primitivePlacement = {
+  ox: z.number().optional(),
+  oy: z.number().optional(),
+  oz: z.number().optional(),
+  ax: z.number().optional(),
+  ay: z.number().optional(),
+  az: z.number().optional(),
+  angle: z.number().optional(),
+};
+
+/** How a primitive combines with the current body (mirrors extrude's data.op). */
+const primitiveData = z
+  .object({ op: z.enum(["new", "join", "cut", "intersect"]).optional() })
+  .optional();
+
 // union references itself via z.lazy (the standard zod recursion pattern).
 const featureSchema: z.ZodTypeAny = z.lazy(() =>
   z.discriminatedUnion("type", [
     z.object({ ...base, type: z.literal("box"), params: z.object({ dx: z.number(), dy: z.number(), dz: z.number() }), data: z.unknown().optional() }),
+    // Round primitives (§4.11) — analytic solids needing no sketch. Placement
+    // (ox,oy,oz / ax,ay,az) and the partial-sweep `angle` are optional and
+    // default to the origin, +Z, and a full revolution. `data.op` combines with
+    // the current body: "join" (default), "cut", "intersect", or "new".
+    z.object({
+      ...base,
+      type: z.literal("cylinder"),
+      params: z.object({ radius: z.number(), height: z.number(), ...primitivePlacement }),
+      data: primitiveData,
+    }),
+    z.object({
+      ...base,
+      type: z.literal("sphere"),
+      params: z.object({ radius: z.number(), ...primitivePlacement }),
+      data: primitiveData,
+    }),
+    z.object({
+      ...base,
+      type: z.literal("cone"),
+      params: z.object({
+        radius1: z.number(),
+        radius2: z.number(),
+        height: z.number(),
+        ...primitivePlacement,
+      }),
+      data: primitiveData,
+    }),
+    z.object({
+      ...base,
+      type: z.literal("torus"),
+      params: z.object({
+        majorRadius: z.number(),
+        minorRadius: z.number(),
+        ...primitivePlacement,
+      }),
+      data: primitiveData,
+    }),
     z.object({
       ...base,
       type: z.literal("sketch"),

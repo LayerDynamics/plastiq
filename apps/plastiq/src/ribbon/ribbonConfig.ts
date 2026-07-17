@@ -47,6 +47,12 @@ export const RIBBON: Record<Workspace, RibbonTab[]> = {
           ],
         },
         {
+          // Round primitives (§4.11): analytic solids that need no sketch, so
+          // round geometry no longer depends on the sketcher working.
+          title: "Primitives",
+          items: [a("cylinder"), a("sphere"), a("cone"), a("torus")],
+        },
+        {
           title: "Modify",
           items: [
             a("fillet"),

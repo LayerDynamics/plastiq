@@ -1804,3 +1804,158 @@ describe("CAD Studio rebuild (SPEC-5 M0.4)", () => {
     expect(() => rebuildDocument(oc, doc)).toThrow(/no sketch profile/);
   });
 });
+
+// --- Round primitives as FEATURES (§4.11) ------------------------------------
+//
+// The kernel gained cylinder/sphere/cone/torus; these pin the evaluator wiring
+// that makes them reachable from a document — the step §4.11 would otherwise be
+// missing in exactly the way §2.9's addMatePick was (implemented, unreachable).
+
+describe("round primitive features", () => {
+  // `oc` is scoped to the suite above, so this block initialises its own (the
+  // engine is memoized, so this resolves to the same instance, not a second load).
+  let oc: Occt;
+  beforeAll(async () => {
+    oc = await initOcct();
+  }, INIT_TIMEOUT_MS);
+
+  it("builds a cylinder with the exact analytic volume", () => {
+    const doc: CadDocument = {
+      features: [
+        { id: "f1", type: "cylinder", params: { radius: mm(10), height: mm(20) }, data: { op: "join" } },
+      ],
+      params: {},
+    };
+    const solid = rebuildDocument(oc, doc);
+    expect(solid).not.toBeNull();
+    expect(solidVolume(oc, solid!)).toBeCloseTo(Math.PI * mm(10) ** 2 * mm(20), 12);
+    solid!.delete();
+  });
+
+  it("bores a block with a cutting cylinder — round geometry with NO sketch feature", () => {
+    // The §4.11 payoff: this document contains no sketch at all, so it is immune
+    // to every defect in the severed sketcher (§2.6/§2.7).
+    const doc: CadDocument = {
+      features: [
+        { id: "f1", type: "box", params: { dx: mm(40), dy: mm(40), dz: mm(20) } },
+        {
+          id: "f2",
+          type: "cylinder",
+          params: {
+            radius: mm(8),
+            height: mm(60),
+            ox: mm(20),
+            oy: mm(20),
+            oz: mm(-20),
+            ax: 0,
+            ay: 0,
+            az: 1,
+          },
+          data: { op: "cut" },
+        },
+      ],
+      params: {},
+    };
+    const solid = rebuildDocument(oc, doc);
+    expect(solid).not.toBeNull();
+    expect(solidVolume(oc, solid!)).toBeCloseTo(
+      mm(40) * mm(40) * mm(20) - Math.PI * mm(8) ** 2 * mm(20),
+      10,
+    );
+    solid!.delete();
+  });
+
+  it("joins a cylindrical boss onto a block by default", () => {
+    const doc: CadDocument = {
+      features: [
+        { id: "f1", type: "box", params: { dx: mm(40), dy: mm(40), dz: mm(10) } },
+        {
+          id: "f2",
+          type: "cylinder",
+          params: { radius: mm(5), height: mm(10), ox: mm(20), oy: mm(20), oz: mm(10) },
+          data: { op: "join" },
+        },
+      ],
+      params: {},
+    };
+    const solid = rebuildDocument(oc, doc);
+    expect(solid).not.toBeNull();
+    expect(solidVolume(oc, solid!)).toBeCloseTo(
+      mm(40) * mm(40) * mm(10) + Math.PI * mm(5) ** 2 * mm(10),
+      10,
+    );
+    solid!.delete();
+  });
+
+  it("honours a non-default axis (a cylinder lying along +X)", () => {
+    const doc: CadDocument = {
+      features: [
+        {
+          id: "f1",
+          type: "cylinder",
+          params: { radius: mm(5), height: mm(30), ax: 1, ay: 0, az: 0 },
+          data: { op: "new" },
+        },
+      ],
+      params: {},
+    };
+    const solid = rebuildDocument(oc, doc);
+    expect(solid).not.toBeNull();
+    const bb = solid!.boundingBox();
+    expect(bb.max[0]).toBeCloseTo(mm(30), 6); // extends along X, not Z
+    expect(bb.max[2]).toBeCloseTo(mm(5), 6);
+    solid!.delete();
+  });
+
+  it("angle >= 2π means a FULL solid, not a degenerate wedge (the ribbon default)", () => {
+    // The ribbon bakes angle: 2π so the panel can edit it; that must build the
+    // complete cylinder, not select OCCT's partial-sweep ctor.
+    const doc: CadDocument = {
+      features: [
+        {
+          id: "f1",
+          type: "cylinder",
+          params: { radius: mm(10), height: mm(20), angle: 2 * Math.PI },
+          data: { op: "new" },
+        },
+      ],
+      params: {},
+    };
+    const solid = rebuildDocument(oc, doc);
+    expect(solid).not.toBeNull();
+    expect(solidVolume(oc, solid!)).toBeCloseTo(Math.PI * mm(10) ** 2 * mm(20), 12);
+    solid!.delete();
+  });
+
+  it("builds sphere, cone and torus with exact volumes", () => {
+    const cases: [string, Record<string, number>, number][] = [
+      ["sphere", { radius: mm(10) }, (4 / 3) * Math.PI * mm(10) ** 3],
+      [
+        "cone",
+        { radius1: mm(10), radius2: mm(5), height: mm(20) },
+        ((Math.PI * mm(20)) / 3) * (mm(10) ** 2 + mm(10) * mm(5) + mm(5) ** 2),
+      ],
+      ["torus", { majorRadius: mm(20), minorRadius: mm(5) }, 2 * Math.PI ** 2 * mm(20) * mm(5) ** 2],
+    ];
+    for (const [type, params, expected] of cases) {
+      const doc: CadDocument = {
+        features: [{ id: "f1", type, params, data: { op: "new" } }],
+        params: {},
+      };
+      const solid = rebuildDocument(oc, doc);
+    expect(solid).not.toBeNull();
+      expect(solidVolume(oc, solid!), `${type} volume`).toBeCloseTo(expected, 12);
+      solid!.delete();
+    }
+  });
+
+  it("a degenerate primitive fails LOUDLY, naming its feature", () => {
+    const doc: CadDocument = {
+      features: [
+        { id: "f1", type: "torus", params: { majorRadius: mm(5), minorRadius: mm(10) }, data: {} },
+      ],
+      params: {},
+    };
+    expect(() => rebuildDocument(oc, doc)).toThrow(/self-intersect/);
+  });
+});

@@ -9,6 +9,10 @@ import { mm, deg, toMm, toDeg } from "@plastiq/cad";
 /** Every feature type the rebuild evaluator supports (rebuild.ts switch). */
 export const FEATURE_TYPES = [
   "box",
+  "cylinder",
+  "sphere",
+  "cone",
+  "torus",
   "sketch",
   "extrude",
   "revolve",
@@ -32,6 +36,13 @@ export type FeatureType = (typeof FEATURE_TYPES)[number];
 /** Numeric params that are LENGTHS (mm <-> m), per feature type. */
 export const LENGTH_PARAMS: Record<string, readonly string[]> = {
   box: ["dx", "dy", "dz"],
+  // Round primitives (§4.11). Their placement origin (ox,oy,oz) is a length, like
+  // revolve's/mirror's, so mm authoring converts; the axis (ax,ay,az) is a unitless
+  // DIRECTION and is deliberately absent from both tables (a scalar).
+  cylinder: ["radius", "height", "ox", "oy", "oz"],
+  sphere: ["radius", "ox", "oy", "oz"],
+  cone: ["radius1", "radius2", "height", "ox", "oy", "oz"],
+  torus: ["majorRadius", "minorRadius", "ox", "oy", "oz"],
   extrude: ["height", "back"],
   cut: ["depth", "back"],
   fillet: ["radius", "radius2"],
@@ -51,6 +62,11 @@ export const LENGTH_PARAMS: Record<string, readonly string[]> = {
 
 /** Numeric params that are ANGLES (deg <-> rad), per feature type. */
 export const ANGLE_PARAMS: Record<string, readonly string[]> = {
+  // Round primitives' partial sweep (a pie wedge); 360° = the full solid.
+  cylinder: ["angle"],
+  sphere: ["angle"],
+  cone: ["angle"],
+  torus: ["angle"],
   revolve: ["angle"],
   draft: ["angle"],
   transform: ["angle"],

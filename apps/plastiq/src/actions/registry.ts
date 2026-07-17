@@ -76,6 +76,67 @@ function faceOrigin(face: FaceRef, fallback: V3): V3 {
   return c ? [c[0], c[1], c[2]] : fallback;
 }
 
+/**
+ * Placement params for a round primitive (§4.11), selection-driven per the C6
+ * convention: a picked face gives its centroid as the origin and its normal as
+ * the axis, so "select a face → Cylinder" lands a boss (or, with op:"cut", a
+ * bore) ON that face. With nothing picked it falls back to the world origin, +Z.
+ *
+ * Returns EVERY placement key even at its default — see the §9 note at the
+ * primitive actions: the properties panel can only edit params that creation
+ * baked, so an omitted key is an uneditable one forever.
+ */
+function primitivePlacementParams(ctx: ContextTarget): Record<string, number> {
+  const face = faceRefsFromPicks(ctx.picks, ctx.refs)[0];
+  const axis = face ? unit3(face.normal) : null;
+  const origin = face ? faceOrigin(face, ctx.worldPoint) : ([0, 0, 0] as V3);
+  const a = axis ?? ([0, 0, 1] as V3);
+  return {
+    ox: origin[0],
+    oy: origin[1],
+    oz: origin[2],
+    ax: a[0],
+    ay: a[1],
+    az: a[2],
+    // A full revolution. The evaluator treats angle >= 2π as "no partial sweep"
+    // and selects OCCT's full-solid ctor, so this default is the complete solid
+    // while still being present for the panel to edit down to a wedge.
+    angle: 2 * Math.PI,
+  };
+}
+
+/** The four round-primitive ribbon actions (§4.11). */
+function primitiveActions(): ActionDef[] {
+  const specs: { id: string; type: string; label: string; icon: string; params: Record<string, number> }[] = [
+    // Defaults are SI metres, matching every other registry default (§4.9).
+    { id: "cylinder", type: "cylinder", label: "Cylinder", icon: "⬭", params: { radius: 0.01, height: 0.03 } },
+    { id: "sphere", type: "sphere", label: "Sphere", icon: "●", params: { radius: 0.015 } },
+    { id: "cone", type: "cone", label: "Cone", icon: "▲", params: { radius1: 0.015, radius2: 0, height: 0.03 } },
+    { id: "torus", type: "torus", label: "Torus", icon: "◎", params: { majorRadius: 0.02, minorRadius: 0.006 } },
+  ];
+  return specs.map(({ id, type, label, icon, params }) => ({
+    id,
+    label: () => label,
+    icon,
+    enabled: always,
+    run: (ctx: ContextTarget) => {
+      const face = faceRefsFromPicks(ctx.picks, ctx.refs)[0];
+      cad().addFeature({
+        type,
+        params: { ...params, ...primitivePlacementParams(ctx) },
+        // Join-by-default once a body exists (the extrude convention). Switch to
+        // "cut"/"intersect"/"new" in Properties.
+        data: { op: "join" },
+      });
+      cad().setStatus(
+        face
+          ? `${label}: placed on the selected face (its normal is the axis) — set Op to "cut" in Properties to bore instead`
+          : `${label}: placed at the origin along +Z — select a face first to place it there`,
+      );
+    },
+  }));
+}
+
 function edgeOrigin(edge: EdgeRef, fallback: V3): V3 {
   const m = edge.midpoint;
   return m ? [m[0], m[1], m[2]] : fallback;
@@ -337,6 +398,22 @@ const RIBBON_ONLY: ActionDef[] = [
       );
     },
   },
+  // PRIMITIVES — round solids without the sketcher (§4.11).
+  //
+  // Box was the kernel's only primitive, so every round shape had to come from
+  // extruding a circle sketch — which made the severed sketcher (§2.6/§2.7) a
+  // single point of failure for all round geometry. These place a real analytic
+  // cylinder/sphere/cone/torus, and `data.op` lets one CUT: subtracting a
+  // cylinder is a bore, with no sketch involved at all.
+  //
+  // Every param is baked at creation — including the placement and sweep angle
+  // even when they are at their defaults. That is deliberate: `FeatureEditor`
+  // iterates ONLY `Object.entries(feature.params)`, so a param the creation
+  // action omits can never be added by the panel afterwards (§9). Omitting
+  // ox/oy/oz/ax/ay/az here would repeat exactly the defect that leaves mirror's
+  // ny/nz/oy/oz and revolve's axis permanently unreachable.
+  ...primitiveActions(),
+
   // COMBINE — selection-driven plane / direction / axis when a face or edge is
   // picked (C6). Defaults stay sensible; status explains how to drive them.
   {
