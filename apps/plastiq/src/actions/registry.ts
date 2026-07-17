@@ -105,7 +105,7 @@ function primitivePlacementParams(ctx: ContextTarget): Record<string, number> {
   };
 }
 
-/** The four round-primitive ribbon actions (§4.11). */
+/** The round-primitive ribbon actions, plus Bore (§4.11). */
 function primitiveActions(): ActionDef[] {
   const specs: { id: string; type: string; label: string; icon: string; params: Record<string, number> }[] = [
     // Defaults are SI metres, matching every other registry default (§4.9).
@@ -114,7 +114,7 @@ function primitiveActions(): ActionDef[] {
     { id: "cone", type: "cone", label: "Cone", icon: "▲", params: { radius1: 0.015, radius2: 0, height: 0.03 } },
     { id: "torus", type: "torus", label: "Torus", icon: "◎", params: { majorRadius: 0.02, minorRadius: 0.006 } },
   ];
-  return specs.map(({ id, type, label, icon, params }) => ({
+  const additive: ActionDef[] = specs.map(({ id, type, label, icon, params }) => ({
     id,
     label: () => label,
     icon,
@@ -124,17 +124,73 @@ function primitiveActions(): ActionDef[] {
       cad().addFeature({
         type,
         params: { ...params, ...primitivePlacementParams(ctx) },
-        // Join-by-default once a body exists (the extrude convention). Switch to
-        // "cut"/"intersect"/"new" in Properties.
+        // Join-by-default once a body exists (the extrude convention).
         data: { op: "join" },
       });
       cad().setStatus(
         face
-          ? `${label}: placed on the selected face (its normal is the axis) — set Op to "cut" in Properties to bore instead`
-          : `${label}: placed at the origin along +Z — select a face first to place it there`,
+          ? `${label}: added on the selected face, grown along its outward normal — use Bore to cut INTO a face`
+          : `${label}: added at the origin along +Z — select a face first to place it there`,
       );
     },
   }));
+  return [...additive, boreAction()];
+}
+
+/**
+ * Bore — a cylinder that CUTS INTO the picked face (§4.11).
+ *
+ * This exists because the additive placement above cannot be reused for a cut.
+ * The primitives grow along the face's OUTWARD normal, which is right for a
+ * boss and useless for a hole: the tool sits entirely outside the material, so
+ * flipping Op to "cut" in Properties removes exactly nothing (verified — the
+ * box's volume came back unchanged). An earlier status text here told users to
+ * do precisely that; it was promising an operation the placement could not
+ * perform, which is the same honesty defect as §2.3's fictional sweep editor.
+ *
+ * So the tool is aimed along the INWARD normal instead, and starts slightly
+ * proud of the face: a tool face exactly coincident with the target's is the
+ * classic boolean corner case, and the overshoot costs nothing because the
+ * material above the face is already outside the solid.
+ */
+function boreAction(): ActionDef {
+  const OVERSHOOT = 1e-4; // 0.1 mm proud of the face — well above the 1e-7 fuzz.
+  return {
+    id: "bore",
+    label: () => "Bore",
+    icon: "◍",
+    // A bore is meaningless without a face to cut into: with nothing picked
+    // there is no inward direction to infer, and a silently-misplaced cut is
+    // exactly the "it did nothing" failure this action exists to avoid.
+    enabled: (ctx) => faceRefsFromPicks(ctx.picks, ctx.refs).length > 0,
+    run: (ctx) => {
+      const face = faceRefsFromPicks(ctx.picks, ctx.refs)[0];
+      if (!face) return;
+      const n = unit3(face.normal) ?? ([0, 0, 1] as V3);
+      const o = faceOrigin(face, ctx.worldPoint);
+      const depth = 0.03;
+      cad().addFeature({
+        type: "cylinder",
+        params: {
+          radius: 0.005,
+          // The overshoot is added to the depth too, so the requested depth is
+          // measured from the FACE rather than from the start of the tool.
+          height: depth + OVERSHOOT,
+          ox: o[0] + n[0] * OVERSHOOT,
+          oy: o[1] + n[1] * OVERSHOOT,
+          oz: o[2] + n[2] * OVERSHOOT,
+          ax: -n[0],
+          ay: -n[1],
+          az: -n[2],
+          angle: 2 * Math.PI,
+        },
+        data: { op: "cut" },
+      });
+      cad().setStatus(
+        "Bore: cutting into the selected face along its inward normal — set Radius / Height in Properties",
+      );
+    },
+  };
 }
 
 function edgeOrigin(edge: EdgeRef, fallback: V3): V3 {

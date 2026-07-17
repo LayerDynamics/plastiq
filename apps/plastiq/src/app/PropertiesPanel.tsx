@@ -107,7 +107,21 @@ function FeatureDataFields({
     : d["face"] != null
       ? 1
       : 0;
-  const showOp = type === "extrude" || type === "revolve" || type === "loft" || type === "sweep";
+  /** Round primitives (§4.11) — they carry a data.op like extrude, plus cut/intersect. */
+  const isPrimitive =
+    type === "cylinder" || type === "sphere" || type === "cone" || type === "torus";
+  const showOp =
+    type === "extrude" || type === "revolve" || type === "loft" || type === "sweep" || isPrimitive;
+  /** The ops this feature type actually supports.
+   *
+   * The profile features only ever join or replace. A primitive is also a
+   * ready-made boolean TOOL — cutting one is a bore, which is the whole reason
+   * the round primitives matter — so it offers the subtractive ops too. Listing
+   * them per-type rather than globally keeps the select from offering extrude an
+   * op the evaluator would ignore. */
+  const opChoices = isPrimitive
+    ? (["join", "cut", "intersect", "new"] as const)
+    : (["join", "new"] as const);
   const showShellDir = type === "shell";
   const showBooleanOp = type === "boolean";
   const showLoftRuled = type === "loft";
@@ -139,7 +153,13 @@ function FeatureDataFields({
     return null;
   }
 
-  const op = d["op"] === "new" || d["op"] === "join" ? (d["op"] as string) : "join";
+  // Must accept every op this TYPE supports, not just join/new: a primitive with
+  // data.op === "cut" would otherwise display as "join" — the same lie §9 records
+  // for `boolean` (panel shows one op while the rebuild does another). The
+  // fallback is "join", matching the evaluator's join-by-default.
+  const op = (opChoices as readonly string[]).includes(d["op"] as string)
+    ? (d["op"] as string)
+    : "join";
   const boolOp =
     d["op"] === "union" || d["op"] === "intersect" || d["op"] === "subtract"
       ? (d["op"] as string)
@@ -215,8 +235,11 @@ function FeatureDataFields({
             onChange={(e) => setFeatureData(featureId, { op: e.currentTarget.value })}
             className="rounded border border-[#2a3444] bg-[#0e1219] px-1.5 py-0.5 text-[#cfe] outline-none focus:border-[#4ea1ff]"
           >
-            <option value="join">join</option>
-            <option value="new">new</option>
+            {opChoices.map((choice) => (
+              <option key={choice} value={choice}>
+                {choice}
+              </option>
+            ))}
           </select>
         </label>
       )}

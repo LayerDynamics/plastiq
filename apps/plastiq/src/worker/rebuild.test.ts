@@ -1949,6 +1949,72 @@ describe("round primitive features", () => {
     }
   });
 
+  // The Bore action exists because of this asymmetry, found by asking whether the
+  // RIBBON's placement (not a hand-written one) actually cuts. It does not.
+  it("a cut tool grown along the OUTWARD face normal removes nothing — why Bore exists", () => {
+    // Exactly what the additive ribbon actions bake: origin = face centroid,
+    // axis = outward normal. Correct for a boss; for a cut the tool sits
+    // entirely OUTSIDE the material, so it silently removes nothing. An earlier
+    // status text told users to flip Op to "cut" to bore — promising an
+    // operation this placement cannot perform (the §2.3 honesty defect).
+    const doc: CadDocument = {
+      features: [
+        { id: "f1", type: "box", params: { dx: mm(40), dy: mm(40), dz: mm(20) } },
+        {
+          id: "f2",
+          type: "cylinder",
+          params: {
+            radius: mm(10),
+            height: mm(30),
+            ox: mm(20), oy: mm(20), oz: mm(20), // top-face centroid
+            ax: 0, ay: 0, az: 1,                // OUTWARD normal
+            angle: 2 * Math.PI,
+          },
+          data: { op: "cut" },
+        },
+      ],
+      params: {},
+    };
+    const solid = rebuildDocument(oc, doc);
+    expect(solid).not.toBeNull();
+    // Unchanged: the cut was a no-op.
+    expect(solidVolume(oc, solid!)).toBeCloseTo(mm(40) * mm(40) * mm(20), 12);
+    solid!.delete();
+  });
+
+  it("Bore's placement (INWARD normal, proud of the face) really removes material", () => {
+    // What boreAction() bakes: start OVERSHOOT proud of the face and aim along
+    // the inward normal, so the requested depth is measured from the face.
+    const OVERSHOOT = 1e-4;
+    const depth = mm(20); // straight through the 20 mm plate
+    const doc: CadDocument = {
+      features: [
+        { id: "f1", type: "box", params: { dx: mm(40), dy: mm(40), dz: mm(20) } },
+        {
+          id: "f2",
+          type: "cylinder",
+          params: {
+            radius: mm(5),
+            height: depth + OVERSHOOT,
+            ox: mm(20), oy: mm(20), oz: mm(20) + OVERSHOOT, // proud of the face
+            ax: 0, ay: 0, az: -1,                            // INWARD normal
+            angle: 2 * Math.PI,
+          },
+          data: { op: "cut" },
+        },
+      ],
+      params: {},
+    };
+    const solid = rebuildDocument(oc, doc);
+    expect(solid).not.toBeNull();
+    // A clean through-hole: exactly the cylinder's volume is gone.
+    expect(solidVolume(oc, solid!)).toBeCloseTo(
+      mm(40) * mm(40) * mm(20) - Math.PI * mm(5) ** 2 * mm(20),
+      10,
+    );
+    solid!.delete();
+  });
+
   it("a degenerate primitive fails LOUDLY, naming its feature", () => {
     const doc: CadDocument = {
       features: [

@@ -27,3 +27,32 @@ describe("FeatureTree", () => {
     expect(useCadStore.getState().selectedFeatureId).toBe("f1");
   });
 });
+
+// --- Round primitives render through the REAL React path (§4.11) -------------
+//
+// The evaluator tests prove a cylinder BUILDS; they say nothing about whether it
+// is reachable. A new feature type is exactly where a per-type icon/label lookup
+// renders blank or throws — which would leave the feature unreachable while the
+// geometry tests stayed green (§2.9's addMatePick shape of defect).
+
+describe("round primitive features in the tree", () => {
+  it("renders a row with the type's own icon for cylinder/sphere/cone/torus", () => {
+    useCadStore.getState().loadDocument({
+      features: [
+        { id: "f1", type: "cylinder", name: "Cylinder1", params: { radius: 0.01, height: 0.03 } },
+        { id: "f2", type: "sphere", name: "Sphere1", params: { radius: 0.015 } },
+        { id: "f3", type: "cone", name: "Cone1", params: { radius1: 0.015, radius2: 0, height: 0.03 } },
+        { id: "f4", type: "torus", name: "Torus1", params: { majorRadius: 0.02, minorRadius: 0.006 } },
+      ],
+      params: {},
+    });
+    render(<FeatureTree />);
+    expect(screen.getAllByTestId("feature-row").length).toBe(4);
+    // Each shows its OWN glyph, not the "•" unknown-type fallback.
+    const text = screen.getByTestId("feature-tree").textContent ?? "";
+    for (const glyph of ["⬭", "●", "▲", "◎"]) {
+      expect(text, `missing icon ${glyph}`).toContain(glyph);
+    }
+    expect(text).toContain("Cylinder1");
+  });
+});

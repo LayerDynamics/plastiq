@@ -12,6 +12,11 @@ import { editSketchFeature } from "../sketch/editFeature.js";
 
 const ICONS: Record<string, string> = {
   box: "▢",
+  // Round primitives (§4.11) — same glyphs as their ribbon buttons.
+  cylinder: "⬭",
+  sphere: "●",
+  cone: "▲",
+  torus: "◎",
   sketch: "✎",
   extrude: "⬆",
   cut: "⬇",

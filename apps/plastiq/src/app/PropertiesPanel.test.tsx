@@ -218,3 +218,76 @@ describe("PropertiesPanel", () => {
     expect(f?.data?.["faces"]).toEqual([faceA, faceB]);
   });
 });
+
+// --- Round primitives are EDITABLE (§4.11 / §9) ------------------------------
+//
+// §9's core mechanism: FeatureEditor iterates only Object.entries(feature.params),
+// so a param creation omits can never be added later. The ribbon therefore bakes
+// every placement key — these assert the panel actually surfaces them, and that
+// the op select offers the subtractive ops a primitive supports.
+
+describe("round primitive properties", () => {
+  const cylinder = (data: Record<string, unknown> = { op: "join" }) => {
+    useCadStore.getState().loadDocument({
+      features: [
+        {
+          id: "c1",
+          type: "cylinder",
+          params: {
+            radius: 0.01,
+            height: 0.03,
+            ox: 0, oy: 0, oz: 0,
+            ax: 0, ay: 0, az: 1,
+            angle: 2 * Math.PI,
+          },
+          data,
+        },
+      ],
+      params: {},
+    });
+    useCadStore.setState({ selectedFeatureId: "c1" });
+  };
+
+  it("surfaces every baked param — including the placement, so it is editable", () => {
+    cylinder();
+    render(<PropertiesPanel />);
+    const text = screen.getByTestId("feature-editor").textContent ?? "";
+    // Placement keys must be present: an omitted param is an uneditable one (§9).
+    for (const key of ["radius", "height", "ox", "oy", "oz", "ax", "ay", "az", "angle"]) {
+      expect(text, `param '${key}' is not editable in the panel`).toContain(key);
+    }
+  });
+
+  it("offers cut/intersect in the op select — a primitive is also a boolean tool", () => {
+    cylinder();
+    render(<PropertiesPanel />);
+    const sel = screen.getByTestId("feature-op") as HTMLSelectElement;
+    const values = [...sel.options].map((o) => o.value);
+    expect(values).toEqual(["join", "cut", "intersect", "new"]);
+
+    fireEvent.change(sel, { target: { value: "cut" } });
+    expect(useCadStore.getState().features.find((f) => f.id === "c1")?.data?.["op"]).toBe("cut");
+  });
+
+  it("DISPLAYS cut rather than silently showing join (the §9 boolean-op lie)", () => {
+    cylinder({ op: "cut" });
+    render(<PropertiesPanel />);
+    expect((screen.getByTestId("feature-op") as HTMLSelectElement).value).toBe("cut");
+  });
+
+  it("extrude still offers only join/new — ops are per-type, not global", () => {
+    useCadStore.getState().loadDocument({
+      features: [
+        { id: "s1", type: "sketch", data: { profile: { kind: "circle", center: [0, 0], radius: 0.01 } } },
+        { id: "e1", type: "extrude", params: { height: 0.02 }, data: { op: "join" }, deps: ["s1"] },
+      ],
+      params: {},
+    });
+    useCadStore.setState({ selectedFeatureId: "e1" });
+    render(<PropertiesPanel />);
+    const values = [...(screen.getByTestId("feature-op") as HTMLSelectElement).options].map(
+      (o) => o.value,
+    );
+    expect(values).toEqual(["join", "new"]);
+  });
+});
