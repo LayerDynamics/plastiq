@@ -20,6 +20,18 @@ export function revolve(
   if (!Number.isFinite(angle) || angle === 0) {
     throw new Error("revolve: angle must be non-zero");
   }
+  // Reject a request beyond a full turn (§4.8 N6). OCCT's MakeRevol takes the
+  // angle MODULO 2π WITHOUT warning, so a 3π request silently produced exactly
+  // half a turn's volume as a "valid" solid. A revolution past 2π overlaps
+  // itself and is never what the user meant; fail loudly instead of returning
+  // quietly wrong geometry. Negative angles are legal (they revolve the other
+  // way — §4.9), so the bound is on the magnitude, with a tiny epsilon so a
+  // floating-point 2π (e.g. 2*Math.PI) still counts as a full turn.
+  if (Math.abs(angle) > 2 * Math.PI + 1e-9) {
+    throw new Error(
+      `revolve: angle ${angle} exceeds a full turn (±2π); OCCT would silently wrap it modulo 2π`,
+    );
+  }
   // Validate the axis BEFORE allocating anything: a zero (or non-finite) axis
   // makes gp_Dir_4 raise an opaque Standard_Failure after `face`/`o` exist,
   // which would leak them. Failing here means there is nothing to clean up.

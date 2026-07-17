@@ -35,4 +35,22 @@ describe("pattern — smoke", () => {
     }
     box.delete();
   });
+
+  // §4.6 — a degenerate step (zero spacing / zero angle) places every copy on
+  // top of the base, and the caller's fuse then collapses them back to the base:
+  // the pattern silently "did nothing". These must fail LOUDLY instead.
+  it("rejects zero spacing / zero angle for count > 1 (the silent no-op)", () => {
+    const box = makeBox(oc, mm(10), mm(10), mm(10));
+    expect(() => linearPattern(oc, box, [1, 0, 0], 0, 3)).toThrow(/spacing must be non-zero/);
+    expect(() => linearPattern(oc, box, [1, 0, 0], NaN, 3)).toThrow(/spacing must be non-zero/);
+    expect(() => circularPattern(oc, box, [0, 0, 0], [0, 0, 1], 4, 0)).toThrow(
+      /angle must be non-zero/,
+    );
+    // count === 1 is just the base, so a missing spacing/angle is fine.
+    const one = linearPattern(oc, box, [1, 0, 0], 0, 1);
+    expect(one).toHaveLength(1);
+    expect(one[0]!.volume()).toBeGreaterThan(0);
+    one.forEach((s) => s.delete());
+    box.delete();
+  });
 });

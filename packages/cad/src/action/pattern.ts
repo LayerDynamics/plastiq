@@ -18,6 +18,13 @@ export function linearPattern(
   count: number,
 ): Solid[] {
   if (count < 1) throw new Error("linearPattern: count must be ≥ 1");
+  // Zero spacing places every copy on top of the base (§4.6): the subsequent
+  // fuse collapses them back to the base, so the pattern silently "does nothing".
+  // Reject it rather than return a lie — a single copy is `count: 1`, which needs
+  // no spacing. (Non-finite is rejected for the same reason.)
+  if (count > 1 && (!Number.isFinite(spacing) || spacing === 0)) {
+    throw new Error("linearPattern: spacing must be non-zero for count > 1");
+  }
   const unit = normalize(dir);
   const copies: Solid[] = [];
   for (let i = 0; i < count; i++) {
@@ -49,6 +56,12 @@ export function circularPattern(
   angle: number,
 ): Solid[] {
   if (count < 1) throw new Error("circularPattern: count must be ≥ 1");
+  // A zero total angle gives step 0 → every copy coincident with the base (§4.6),
+  // which the fuse collapses back to the base: the pattern silently does nothing.
+  // Reject for count > 1 (count 1 is just the base and needs no angle).
+  if (count > 1 && (!Number.isFinite(angle) || angle === 0)) {
+    throw new Error("circularPattern: angle must be non-zero for count > 1");
+  }
   const FULL_TURN = 2 * Math.PI;
   // angle is (within tolerance) a non-zero multiple of 2π → a closed full turn.
   const closesFullTurn = angle !== 0 && Math.abs(((angle % FULL_TURN) + FULL_TURN) % FULL_TURN) < 1e-9;

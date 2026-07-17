@@ -312,7 +312,7 @@ Genuinely strong (true trim, plane extension, curved-coverage witness, exact-vol
 
 ### 4.6 pattern (`action/pattern.ts`)
 
-- **P2** `circularPattern(angle=0, count>1)` → step 0 → N coincident copies, fuse yields the base, "pattern did nothing" silently (`pattern.ts:43-61`); same for `linearPattern(spacing=0)` (`pattern.ts:23-25`).
+- ~~**P2** `circularPattern(angle=0, count>1)` → step 0 → N coincident copies…~~ ✅ **FIXED (2026-07-17).** Both `circularPattern` (angle=0) and `linearPattern` (spacing=0) now throw for `count > 1` — a degenerate step placed every copy on the base, and the fuse collapsed them back, so the pattern silently did nothing. `count === 1` (just the base) still needs no spacing/angle. Tests in `pattern.smoke.test.ts`.
 - **P1** Patterns duplicate the whole body, not a feature (`toolFeatures` subtree at `rebuild.ts:687-707` is the partial workaround); no 2-direction grid; no instance suppression.
 - **P2** Default-axis inconsistency: rebuild's revolve default axis is +Y (`rebuild.ts:323`) but circularPattern's is +Z (`rebuild.ts:722`).
 
@@ -334,7 +334,7 @@ Genuinely strong (true trim, plane extension, curved-coverage witness, exact-vol
 | N3 | P1 | On-face sketch frame spins 90° when the face normal's X component crosses the hard 0.9 threshold | `faceFrame.ts:35-36` (verified); repro: 25°→27° tilt flips xAxis, dot = 0.0 |
 | N4 | P1 | AI boolean legacy dims can never build + are never unit-converted (`data` vs `params` split) | `schema.ts:224-233` (verified) vs `rebuild.ts:754-761`; `convData` `schema.ts:351-356` |
 | N5 | P1 | XZ datum plane maps sketch v to **−Z** (normal +Y, xAxis +X → yAxis [0,0,−1]) | `env/plane.ts:24-26,39-41` (verified); repro: rect v∈[0,10] extrudes z∈[−10,0]; XY/YZ fine; interactive sketcher self-consistent (`sketch/worldMap.ts`) but document/AI authoring gets mirrored geometry; prompt documents nothing about plane axes |
-| N6 | P2 | Revolve angle wraps mod 2π silently (3π → half volume, valid, no warning) | `revolve.ts:12-56` |
+| N6 | ✅ FIXED | Revolve now REJECTS |angle| > 2π (was: silent mod-2π wrap, 3π → half volume). Full turn accepted, negative legal | `revolve.ts:20-31`; `revolve.smoke.test.ts` |
 | N7 | P2 | Sweep `transformed` transition on 90° corner → self-intersecting solid as success | repro volumes: right 4712.4 / round 4676.6 / transformed 2356.2 mm³ |
 | N8 | P2 | Axis-crossing revolve profile throws raw wasm exception, message `undefined` | `revolve.ts:41` |
 | N9 | P2 | Draft sign semantics undocumented (+ removes material) | `dressup.ts:232-240`; measured ±787.40 mm³ wedge |
