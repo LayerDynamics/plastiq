@@ -48,6 +48,7 @@ import {
   tessellateTagged,
   translate,
   union,
+  unionAll,
   type ShellOptions,
   type EdgeRef,
   type FaceRef,
@@ -141,17 +142,18 @@ function cutProfileHoles(
 /**
  * Fuse pattern copies into one independent solid (the caller still owns + deletes
  * the input `copies`). Always returns a fresh solid, even for a single copy.
+ *
+ * Delegates to the kernel's N-ary fuse: this used to fold the copies PAIRWISE,
+ * re-running OCCT's intersection machinery against the ever-growing accumulator
+ * once per copy (§2.2). One call hands OCCT every operand at once — a single
+ * intersection pass, and no intermediate accumulator that can land in a
+ * degenerate state the next fuse then fails on.
  */
-function unionAll(oc: Occt, copies: readonly Solid[], featureId: string): Solid {
+function fusePatternCopies(oc: Occt, copies: readonly Solid[], featureId: string): Solid {
   if (copies.length === 0) throw new Error(`feature '${featureId}': pattern produced no copies`);
-  let acc = translate(oc, copies[0]!, [0, 0, 0]); // own an independent copy
-  for (let i = 1; i < copies.length; i++) {
-    const r = union(oc, acc, copies[i]!);
-    acc.delete();
-    if (!r.ok) throw new Error(`feature '${featureId}' (pattern union): ${r.error}`);
-    acc = r.solid;
-  }
-  return acc;
+  const r = unionAll(oc, copies);
+  if (!r.ok) throw new Error(`feature '${featureId}' (pattern union): ${r.error}`);
+  return r.solid;
 }
 
 /** Dress-up edge selection: explicit EdgeRef[] if given, else resolve a selector
@@ -820,7 +822,7 @@ function evaluateDocument(oc: Occt, doc: CadDocument, isolate: boolean): Isolate
         } else {
           const copies = linearPattern(oc, base, dir, spacing, count);
           try {
-            replace(unionAll(oc, copies, f.id));
+            replace(fusePatternCopies(oc, copies, f.id));
           } finally {
             for (const c of copies) c.delete();
           }
@@ -841,7 +843,7 @@ function evaluateDocument(oc: Occt, doc: CadDocument, isolate: boolean): Isolate
           opt(f, "angle", Math.PI * 2),
         );
         try {
-          replace(unionAll(oc, copies, f.id));
+          replace(fusePatternCopies(oc, copies, f.id));
         } finally {
           for (const c of copies) c.delete();
         }

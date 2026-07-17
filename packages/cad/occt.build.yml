@@ -49,9 +49,34 @@ mainBuild:
     - symbol: gp_Circ
     - symbol: gp_Trsf
     # Primitives + extrude/revolve (solid/primitives.ts, action/extrude.ts, revolve.ts)
+    #
+    # Box was long the ONLY primitive (§4.11 P1), which made the sketcher a single
+    # point of failure for ALL round geometry: a cylinder could only be had by
+    # extruding a circle sketch, so every defect in the sketch path took round
+    # solids down with it. These give the kernel analytic round primitives whose
+    # faces carry exact cylinder/sphere/cone/torus surfaces — which is also what
+    # §2.1's per-surface-type FaceRefs identify them by.
     - symbol: BRepPrimAPI_MakeBox
+    - symbol: BRepPrimAPI_MakeCylinder
+    - symbol: BRepPrimAPI_MakeSphere
+    - symbol: BRepPrimAPI_MakeCone
+    - symbol: BRepPrimAPI_MakeTorus
+    # Base of all four round primitives above. A derived class cannot be
+    # CONSTRUCTED unless its whole base chain is bound — listing MakeCylinder
+    # alone still throws "UnboundTypeError: … unbound types: 23BRepPrimAPI_
+    # MakeOneAxis" at first call. (MakeBox needs no entry here: it derives from
+    # BRepBuilderAPI_MakeShape, which is already bound.)
+    - symbol: BRepPrimAPI_MakeOneAxis
     - symbol: BRepPrimAPI_MakePrism
     - symbol: BRepPrimAPI_MakeRevol
+    # BOPAlgo_ArgumentAnalyzer's base chain (analyzer → Algo → Options), for
+    # §2.2's boolean pre-check. Binding the chain is necessary but may not be
+    # sufficient: the analyzer's mode flags are Standard_Boolean& in C++ and
+    # embind exposes them as READ-ONLY getters, while OCCT defaults every mode to
+    # False — so Perform() may check nothing regardless. oc/bindings.test.ts
+    # probes this and records the empirical answer either way.
+    - symbol: BOPAlgo_Algo
+    - symbol: BOPAlgo_Options
     # Wire/face building for sketch profiles (sketch/sketch.ts, sketch/spine.ts)
     - symbol: BRepBuilderAPI_MakeEdge
     - symbol: BRepBuilderAPI_MakeWire

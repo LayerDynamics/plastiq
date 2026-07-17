@@ -70,29 +70,75 @@ beforeEach(() => {
   vi.clearAllMocks();
 });
 
-describe("boolean finish() frees the null Shape() handle on the failure return", () => {
-  it("union returns {ok:false} and deletes the null shape, the op, and the progress range", () => {
-    const op = {
-      HasErrors: () => false,
-      IsDone: () => true,
-      Shape: () => nullShape(),
-      delete: del("op"),
-    };
+describe("boolean runBoolean() frees the null Shape() handle on the failure return", () => {
+  /** A fake un-built boolean op. §2.2 moved the kernel off the convenience ctor
+   * (`BRepAlgoAPI_Fuse_3(a, b, range)`, which BUILDS inside the constructor and
+   * so silently ignores any later SetFuzzyValue/SetNonDestructive) onto the
+   * default ctor + SetArguments/SetTools/Build. That widened the set of owned
+   * handles by the two TopTools_ListOfShape operand lists, which this asserts. */
+  const fakeOp = (): Record<string, unknown> => ({
+    SetArguments: () => {},
+    SetTools: () => {},
+    SetFuzzyValue: () => {},
+    SetNonDestructive: () => {},
+    Build: () => {},
+    HasErrors: () => false,
+    IsDone: () => true,
+    Shape: () => nullShape(),
+    delete: del("op"),
+  });
+
+  it("union returns {ok:false} and deletes the null shape, op, range, and BOTH operand lists", () => {
+    let lists = 0;
     const oc = {
       Message_ProgressRange_1: function () {
         return { delete: del("range") };
       },
-      BRepAlgoAPI_Fuse_3: function () {
-        return op;
+      TopTools_ListOfShape_1: function () {
+        // Two lists are allocated per boolean (arguments + tools); label them
+        // distinctly so a fix that frees only one cannot pass.
+        const label = lists++ === 0 ? "argList" : "toolList";
+        return { Append_1: () => {}, delete: del(label) };
+      },
+      BRepAlgoAPI_Fuse_1: function () {
+        return fakeOp();
       },
     } as unknown as Occt;
 
     const r = union(oc, fakeSolid(), fakeSolid());
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.error).toMatch(/empty shape/);
-    // The fix: the null Shape() handle is freed (it leaked before).
+    // The original fix: the null Shape() handle is freed (it leaked before).
     expect(deleted).toContain("shape");
-    expect(deleted).toEqual(expect.arrayContaining(["shape", "op", "range"]));
+    expect(deleted).toEqual(
+      expect.arrayContaining(["shape", "op", "range", "argList", "toolList"]),
+    );
+  });
+
+  it("frees the op, range, and both operand lists when Build() throws a Standard_Failure", () => {
+    let lists = 0;
+    const oc = {
+      Message_ProgressRange_1: function () {
+        return { delete: del("range") };
+      },
+      TopTools_ListOfShape_1: function () {
+        const label = lists++ === 0 ? "argList" : "toolList";
+        return { Append_1: () => {}, delete: del(label) };
+      },
+      BRepAlgoAPI_Fuse_1: function () {
+        return {
+          ...fakeOp(),
+          Build: () => {
+            throw new Error("Standard_Failure: unsupported operands");
+          },
+        };
+      },
+    } as unknown as Occt;
+
+    // A raw kernel throw must not bypass cleanup: `union` does not catch, so the
+    // throw propagates, but every temporary it owns is still freed on the way out.
+    expect(() => union(oc, fakeSolid(), fakeSolid())).toThrow(/Standard_Failure/);
+    expect(deleted).toEqual(expect.arrayContaining(["op", "range", "argList", "toolList"]));
   });
 });
 

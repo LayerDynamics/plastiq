@@ -1353,6 +1353,82 @@ export declare class BRepPrimAPI_MakeBox extends BRepBuilderAPI_MakeShape {
     constructor(Axes: gp_Ax2, dx: Standard_Real, dy: Standard_Real, dz: Standard_Real);
   }
 
+export declare class BRepPrimAPI_MakeCone extends BRepPrimAPI_MakeOneAxis {
+  OneAxis(): Standard_Address;
+  Cone(): BRepPrim_Cone;
+  delete(): void;
+}
+
+  export declare class BRepPrimAPI_MakeCone_1 extends BRepPrimAPI_MakeCone {
+    constructor(R1: Standard_Real, R2: Standard_Real, H: Standard_Real);
+  }
+
+  export declare class BRepPrimAPI_MakeCone_2 extends BRepPrimAPI_MakeCone {
+    constructor(R1: Standard_Real, R2: Standard_Real, H: Standard_Real, angle: Standard_Real);
+  }
+
+  export declare class BRepPrimAPI_MakeCone_3 extends BRepPrimAPI_MakeCone {
+    constructor(Axes: gp_Ax2, R1: Standard_Real, R2: Standard_Real, H: Standard_Real);
+  }
+
+  export declare class BRepPrimAPI_MakeCone_4 extends BRepPrimAPI_MakeCone {
+    constructor(Axes: gp_Ax2, R1: Standard_Real, R2: Standard_Real, H: Standard_Real, angle: Standard_Real);
+  }
+
+export declare class BRepPrimAPI_MakeSphere extends BRepPrimAPI_MakeOneAxis {
+  OneAxis(): Standard_Address;
+  Sphere(): BRepPrim_Sphere;
+  delete(): void;
+}
+
+  export declare class BRepPrimAPI_MakeSphere_1 extends BRepPrimAPI_MakeSphere {
+    constructor(R: Standard_Real);
+  }
+
+  export declare class BRepPrimAPI_MakeSphere_2 extends BRepPrimAPI_MakeSphere {
+    constructor(R: Standard_Real, angle: Standard_Real);
+  }
+
+  export declare class BRepPrimAPI_MakeSphere_3 extends BRepPrimAPI_MakeSphere {
+    constructor(R: Standard_Real, angle1: Standard_Real, angle2: Standard_Real);
+  }
+
+  export declare class BRepPrimAPI_MakeSphere_4 extends BRepPrimAPI_MakeSphere {
+    constructor(R: Standard_Real, angle1: Standard_Real, angle2: Standard_Real, angle3: Standard_Real);
+  }
+
+  export declare class BRepPrimAPI_MakeSphere_5 extends BRepPrimAPI_MakeSphere {
+    constructor(Center: gp_Pnt, R: Standard_Real);
+  }
+
+  export declare class BRepPrimAPI_MakeSphere_6 extends BRepPrimAPI_MakeSphere {
+    constructor(Center: gp_Pnt, R: Standard_Real, angle: Standard_Real);
+  }
+
+  export declare class BRepPrimAPI_MakeSphere_7 extends BRepPrimAPI_MakeSphere {
+    constructor(Center: gp_Pnt, R: Standard_Real, angle1: Standard_Real, angle2: Standard_Real);
+  }
+
+  export declare class BRepPrimAPI_MakeSphere_8 extends BRepPrimAPI_MakeSphere {
+    constructor(Center: gp_Pnt, R: Standard_Real, angle1: Standard_Real, angle2: Standard_Real, angle3: Standard_Real);
+  }
+
+  export declare class BRepPrimAPI_MakeSphere_9 extends BRepPrimAPI_MakeSphere {
+    constructor(Axis: gp_Ax2, R: Standard_Real);
+  }
+
+  export declare class BRepPrimAPI_MakeSphere_10 extends BRepPrimAPI_MakeSphere {
+    constructor(Axis: gp_Ax2, R: Standard_Real, angle: Standard_Real);
+  }
+
+  export declare class BRepPrimAPI_MakeSphere_11 extends BRepPrimAPI_MakeSphere {
+    constructor(Axis: gp_Ax2, R: Standard_Real, angle1: Standard_Real, angle2: Standard_Real);
+  }
+
+  export declare class BRepPrimAPI_MakeSphere_12 extends BRepPrimAPI_MakeSphere {
+    constructor(Axis: gp_Ax2, R: Standard_Real, angle1: Standard_Real, angle2: Standard_Real, angle3: Standard_Real);
+  }
+
 export declare class BRepPrimAPI_MakeRevol extends BRepPrimAPI_MakeSweep {
   Revol(): BRepSweep_Revol;
   Build(theRange: Message_ProgressRange): void;
@@ -1373,6 +1449,44 @@ export declare class BRepPrimAPI_MakeRevol extends BRepPrimAPI_MakeSweep {
 
   export declare class BRepPrimAPI_MakeRevol_2 extends BRepPrimAPI_MakeRevol {
     constructor(S: TopoDS_Shape, A: gp_Ax1, Copy: Standard_Boolean);
+  }
+
+export declare class BRepPrimAPI_MakeTorus extends BRepPrimAPI_MakeOneAxis {
+  OneAxis(): Standard_Address;
+  Torus(): BRepPrim_Torus;
+  delete(): void;
+}
+
+  export declare class BRepPrimAPI_MakeTorus_1 extends BRepPrimAPI_MakeTorus {
+    constructor(R1: Standard_Real, R2: Standard_Real);
+  }
+
+  export declare class BRepPrimAPI_MakeTorus_2 extends BRepPrimAPI_MakeTorus {
+    constructor(R1: Standard_Real, R2: Standard_Real, angle: Standard_Real);
+  }
+
+  export declare class BRepPrimAPI_MakeTorus_3 extends BRepPrimAPI_MakeTorus {
+    constructor(R1: Standard_Real, R2: Standard_Real, angle1: Standard_Real, angle2: Standard_Real);
+  }
+
+  export declare class BRepPrimAPI_MakeTorus_4 extends BRepPrimAPI_MakeTorus {
+    constructor(R1: Standard_Real, R2: Standard_Real, angle1: Standard_Real, angle2: Standard_Real, angle: Standard_Real);
+  }
+
+  export declare class BRepPrimAPI_MakeTorus_5 extends BRepPrimAPI_MakeTorus {
+    constructor(Axes: gp_Ax2, R1: Standard_Real, R2: Standard_Real);
+  }
+
+  export declare class BRepPrimAPI_MakeTorus_6 extends BRepPrimAPI_MakeTorus {
+    constructor(Axes: gp_Ax2, R1: Standard_Real, R2: Standard_Real, angle: Standard_Real);
+  }
+
+  export declare class BRepPrimAPI_MakeTorus_7 extends BRepPrimAPI_MakeTorus {
+    constructor(Axes: gp_Ax2, R1: Standard_Real, R2: Standard_Real, angle1: Standard_Real, angle2: Standard_Real);
+  }
+
+  export declare class BRepPrimAPI_MakeTorus_8 extends BRepPrimAPI_MakeTorus {
+    constructor(Axes: gp_Ax2, R1: Standard_Real, R2: Standard_Real, angle1: Standard_Real, angle2: Standard_Real, angle: Standard_Real);
   }
 
 export declare class BRepPrimAPI_MakePrism extends BRepPrimAPI_MakeSweep {
@@ -1400,6 +1514,37 @@ export declare class BRepPrimAPI_MakeSweep extends BRepBuilderAPI_MakeShape {
   LastShape(): TopoDS_Shape;
   delete(): void;
 }
+
+export declare class BRepPrimAPI_MakeOneAxis extends BRepBuilderAPI_MakeShape {
+  OneAxis(): Standard_Address;
+  Build(theRange: Message_ProgressRange): void;
+  Face(): TopoDS_Face;
+  Shell(): TopoDS_Shell;
+  Solid(): TopoDS_Solid;
+  delete(): void;
+}
+
+export declare class BRepPrimAPI_MakeCylinder extends BRepPrimAPI_MakeOneAxis {
+  OneAxis(): Standard_Address;
+  Cylinder(): BRepPrim_Cylinder;
+  delete(): void;
+}
+
+  export declare class BRepPrimAPI_MakeCylinder_1 extends BRepPrimAPI_MakeCylinder {
+    constructor(R: Standard_Real, H: Standard_Real);
+  }
+
+  export declare class BRepPrimAPI_MakeCylinder_2 extends BRepPrimAPI_MakeCylinder {
+    constructor(R: Standard_Real, H: Standard_Real, Angle: Standard_Real);
+  }
+
+  export declare class BRepPrimAPI_MakeCylinder_3 extends BRepPrimAPI_MakeCylinder {
+    constructor(Axes: gp_Ax2, R: Standard_Real, H: Standard_Real);
+  }
+
+  export declare class BRepPrimAPI_MakeCylinder_4 extends BRepPrimAPI_MakeCylinder {
+    constructor(Axes: gp_Ax2, R: Standard_Real, H: Standard_Real, Angle: Standard_Real);
+  }
 
 export declare class BRepAdaptor_Curve extends Adaptor3d_Curve {
   static get_type_name(): Standard_Character;
@@ -2012,6 +2157,11 @@ export declare class BOPAlgo_ListOfCheckResult extends NCollection_BaseList {
     constructor(theOther: BOPAlgo_ListOfCheckResult);
   }
 
+export declare class BOPAlgo_Algo extends BOPAlgo_Options {
+  Perform(theRange: Message_ProgressRange): void;
+  delete(): void;
+}
+
 export declare type BOPAlgo_CheckStatus = {
   BOPAlgo_CheckUnknown: {};
   BOPAlgo_BadType: {};
@@ -2026,6 +2176,38 @@ export declare type BOPAlgo_CheckStatus = {
   BOPAlgo_InvalidCurveOnSurface: {};
   BOPAlgo_NotValid: {};
 }
+
+export declare class BOPAlgo_Options {
+  Allocator(): Handle_NCollection_BaseAllocator;
+  Clear(): void;
+  AddError(theAlert: Handle_Message_Alert): void;
+  AddWarning(theAlert: Handle_Message_Alert): void;
+  HasErrors(): Standard_Boolean;
+  HasError(theType: Handle_Standard_Type): Standard_Boolean;
+  HasWarnings(): Standard_Boolean;
+  HasWarning(theType: Handle_Standard_Type): Standard_Boolean;
+  GetReport(): Handle_Message_Report;
+  DumpErrors(theOS: Standard_OStream): void;
+  DumpWarnings(theOS: Standard_OStream): void;
+  ClearWarnings(): void;
+  static GetParallelMode(): Standard_Boolean;
+  static SetParallelMode(theNewMode: Standard_Boolean): void;
+  SetRunParallel(theFlag: Standard_Boolean): void;
+  RunParallel(): Standard_Boolean;
+  SetFuzzyValue(theFuzz: Standard_Real): void;
+  FuzzyValue(): Standard_Real;
+  SetUseOBB(theUseOBB: Standard_Boolean): void;
+  UseOBB(): Standard_Boolean;
+  delete(): void;
+}
+
+  export declare class BOPAlgo_Options_1 extends BOPAlgo_Options {
+    constructor();
+  }
+
+  export declare class BOPAlgo_Options_2 extends BOPAlgo_Options {
+    constructor(theAllocator: Handle_NCollection_BaseAllocator);
+  }
 
 export declare class BOPAlgo_CheckResult {
   constructor()
@@ -3589,13 +3771,46 @@ export type OpenCascadeInstance = {FS: typeof FS} & {
   BRepPrimAPI_MakeBox_3: typeof BRepPrimAPI_MakeBox_3;
   BRepPrimAPI_MakeBox_4: typeof BRepPrimAPI_MakeBox_4;
   BRepPrimAPI_MakeBox_5: typeof BRepPrimAPI_MakeBox_5;
+  BRepPrimAPI_MakeCone: typeof BRepPrimAPI_MakeCone;
+  BRepPrimAPI_MakeCone_1: typeof BRepPrimAPI_MakeCone_1;
+  BRepPrimAPI_MakeCone_2: typeof BRepPrimAPI_MakeCone_2;
+  BRepPrimAPI_MakeCone_3: typeof BRepPrimAPI_MakeCone_3;
+  BRepPrimAPI_MakeCone_4: typeof BRepPrimAPI_MakeCone_4;
+  BRepPrimAPI_MakeSphere: typeof BRepPrimAPI_MakeSphere;
+  BRepPrimAPI_MakeSphere_1: typeof BRepPrimAPI_MakeSphere_1;
+  BRepPrimAPI_MakeSphere_2: typeof BRepPrimAPI_MakeSphere_2;
+  BRepPrimAPI_MakeSphere_3: typeof BRepPrimAPI_MakeSphere_3;
+  BRepPrimAPI_MakeSphere_4: typeof BRepPrimAPI_MakeSphere_4;
+  BRepPrimAPI_MakeSphere_5: typeof BRepPrimAPI_MakeSphere_5;
+  BRepPrimAPI_MakeSphere_6: typeof BRepPrimAPI_MakeSphere_6;
+  BRepPrimAPI_MakeSphere_7: typeof BRepPrimAPI_MakeSphere_7;
+  BRepPrimAPI_MakeSphere_8: typeof BRepPrimAPI_MakeSphere_8;
+  BRepPrimAPI_MakeSphere_9: typeof BRepPrimAPI_MakeSphere_9;
+  BRepPrimAPI_MakeSphere_10: typeof BRepPrimAPI_MakeSphere_10;
+  BRepPrimAPI_MakeSphere_11: typeof BRepPrimAPI_MakeSphere_11;
+  BRepPrimAPI_MakeSphere_12: typeof BRepPrimAPI_MakeSphere_12;
   BRepPrimAPI_MakeRevol: typeof BRepPrimAPI_MakeRevol;
   BRepPrimAPI_MakeRevol_1: typeof BRepPrimAPI_MakeRevol_1;
   BRepPrimAPI_MakeRevol_2: typeof BRepPrimAPI_MakeRevol_2;
+  BRepPrimAPI_MakeTorus: typeof BRepPrimAPI_MakeTorus;
+  BRepPrimAPI_MakeTorus_1: typeof BRepPrimAPI_MakeTorus_1;
+  BRepPrimAPI_MakeTorus_2: typeof BRepPrimAPI_MakeTorus_2;
+  BRepPrimAPI_MakeTorus_3: typeof BRepPrimAPI_MakeTorus_3;
+  BRepPrimAPI_MakeTorus_4: typeof BRepPrimAPI_MakeTorus_4;
+  BRepPrimAPI_MakeTorus_5: typeof BRepPrimAPI_MakeTorus_5;
+  BRepPrimAPI_MakeTorus_6: typeof BRepPrimAPI_MakeTorus_6;
+  BRepPrimAPI_MakeTorus_7: typeof BRepPrimAPI_MakeTorus_7;
+  BRepPrimAPI_MakeTorus_8: typeof BRepPrimAPI_MakeTorus_8;
   BRepPrimAPI_MakePrism: typeof BRepPrimAPI_MakePrism;
   BRepPrimAPI_MakePrism_1: typeof BRepPrimAPI_MakePrism_1;
   BRepPrimAPI_MakePrism_2: typeof BRepPrimAPI_MakePrism_2;
   BRepPrimAPI_MakeSweep: typeof BRepPrimAPI_MakeSweep;
+  BRepPrimAPI_MakeOneAxis: typeof BRepPrimAPI_MakeOneAxis;
+  BRepPrimAPI_MakeCylinder: typeof BRepPrimAPI_MakeCylinder;
+  BRepPrimAPI_MakeCylinder_1: typeof BRepPrimAPI_MakeCylinder_1;
+  BRepPrimAPI_MakeCylinder_2: typeof BRepPrimAPI_MakeCylinder_2;
+  BRepPrimAPI_MakeCylinder_3: typeof BRepPrimAPI_MakeCylinder_3;
+  BRepPrimAPI_MakeCylinder_4: typeof BRepPrimAPI_MakeCylinder_4;
   BRepAdaptor_Curve: typeof BRepAdaptor_Curve;
   BRepAdaptor_Curve_1: typeof BRepAdaptor_Curve_1;
   BRepAdaptor_Curve_2: typeof BRepAdaptor_Curve_2;
@@ -3647,7 +3862,11 @@ export type OpenCascadeInstance = {FS: typeof FS} & {
   BOPAlgo_ListOfCheckResult_1: typeof BOPAlgo_ListOfCheckResult_1;
   BOPAlgo_ListOfCheckResult_2: typeof BOPAlgo_ListOfCheckResult_2;
   BOPAlgo_ListOfCheckResult_3: typeof BOPAlgo_ListOfCheckResult_3;
+  BOPAlgo_Algo: typeof BOPAlgo_Algo;
   BOPAlgo_CheckStatus: BOPAlgo_CheckStatus;
+  BOPAlgo_Options: typeof BOPAlgo_Options;
+  BOPAlgo_Options_1: typeof BOPAlgo_Options_1;
+  BOPAlgo_Options_2: typeof BOPAlgo_Options_2;
   BOPAlgo_CheckResult: typeof BOPAlgo_CheckResult;
   gp_Cone: typeof gp_Cone;
   gp_Cone_1: typeof gp_Cone_1;

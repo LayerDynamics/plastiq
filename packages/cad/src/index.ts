@@ -18,7 +18,15 @@ export { initOcct, type Occt } from "./oc/init.js";
 export { describeOcctError, isRawOcctFailure } from "./oc/error.js";
 export { mm, cm, m, inch, deg, rad, toMm, toDeg } from "./unit/index.js";
 export { Solid } from "./solid/solid.js";
-export { makeBox, makeBoxAt } from "./solid/primitives.js";
+export {
+  makeBox,
+  makeBoxAt,
+  makeCylinder,
+  makeSphere,
+  makeCone,
+  makeTorus,
+  type AxisPlacement,
+} from "./solid/primitives.js";
 export {
   type DatumPlane,
   planeXY,
@@ -56,6 +64,7 @@ export {
   type BooleanResult,
   type ExtrudeOptions,
   union,
+  unionAll,
   subtract,
   intersect,
   cut,

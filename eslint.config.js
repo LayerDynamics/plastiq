@@ -8,6 +8,12 @@ export default tseslint.config(
       "e2e/**",
       "**/vendor/**",
       "**/dist/**",
+      // `just cad-occt` staging dir: the OCCT builder emits plastiq-occt.js
+      // (a minified ~260 KB bundle) here before the recipe copies the products
+      // into packages/cad/vendor/occt/. Generated output, never lintable source
+      // — linting it is ~345 errors and a red CI. Gitignored too, but .gitignore
+      // is not ESLint's ignore list, so it must be named here as well.
+      "**/build/occt/**",
       // Rust build output of the Tauri desktop shell (apps/desktop/src-tauri) —
       // generated JS shims land under target/, never lintable source.
       "**/src-tauri/target/**",

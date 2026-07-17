@@ -10,7 +10,7 @@
 
 import { beforeAll, describe, expect, it } from "vitest";
 import { initOcct, type Occt } from "./init.js";
-import { makeBox } from "../solid/primitives.js";
+import { makeBox, makeCone, makeCylinder, makeSphere, makeTorus } from "../solid/primitives.js";
 import { shapeEnums } from "../mesh/normals.js";
 
 let oc: Occt;
@@ -36,9 +36,68 @@ describe("trimmed-wasm bindings the kernel requires", () => {
     expect(oc.GeomAbs_SurfaceType.GeomAbs_Torus).toBeDefined();
   });
 
-  it("binds ShapeUpgrade_UnifySameDomain + BOPAlgo_ArgumentAnalyzer (§2.2 boolean robustness)", () => {
+  it("binds ShapeUpgrade_UnifySameDomain — and it CONSTRUCTS (§2.2 boolean robustness)", () => {
+    // `typeof oc.X === "function"` is NOT proof: embind exposes the constructor
+    // for an under-listed class and only throws UnboundTypeError when it is
+    // actually called. This test used to assert only the typeof for
+    // BOPAlgo_ArgumentAnalyzer and PASSED while `new` threw — false assurance of
+    // exactly the kind this file exists to prevent. So: construct it.
     expect(typeof oc.ShapeUpgrade_UnifySameDomain_2).toBe("function");
-    expect(typeof oc.BOPAlgo_ArgumentAnalyzer).toBe("function");
+    const box = makeBox(oc, 0.01, 0.01, 0.01);
+    const usd = new oc.ShapeUpgrade_UnifySameDomain_2(box.shape, true, true, false);
+    usd.SetSafeInputMode(true);
+    usd.Build();
+    const merged = usd.Shape();
+    expect(merged.IsNull()).toBe(false);
+    merged.delete();
+    usd.delete();
+    box.delete();
+  });
+
+  /**
+   * §2.2's ArgumentAnalyzer pre-check is IMPOSSIBLE through this build, and this
+   * records why so it is not attempted again as a silent no-op.
+   *
+   * The class needed its whole base chain (BOPAlgo_Algo → BOPAlgo_Options) added
+   * to occt.build.yml before `new` stopped throwing UnboundTypeError. But OCCT
+   * exposes each check mode as `Standard_Boolean&` (C++ callers write
+   * `analyzer.SelfInterMode() = Standard_True`), and embind degrades a
+   * reference-returning accessor to a READ-ONLY getter: the only setters bound
+   * are SetShape1/SetShape2. Since OCCT defaults EVERY mode to false, a
+   * `Perform()` here would analyse nothing and cheerfully report no faults —
+   * strictly worse than no pre-check, because it looks like validation.
+   */
+  it("BOPAlgo_ArgumentAnalyzer constructs but has NO mode setters — the pre-check cannot work", () => {
+    const an = new oc.BOPAlgo_ArgumentAnalyzer();
+    try {
+      const proto = Object.getOwnPropertyNames(Object.getPrototypeOf(an));
+      // Shapes can be set; the check MODES cannot.
+      expect(proto).toContain("SetShape1");
+      expect(proto.filter((p) => /^Set.*Mode$/.test(p))).toEqual([]);
+      // And every mode is off by default, so Perform() would check nothing.
+      expect(an.SelfInterMode()).toBe(false);
+      expect(an.ArgumentTypeMode()).toBe(false);
+    } finally {
+      an.delete();
+    }
+  });
+
+  it("binds the round primitives' full base chain (§4.11 — round geometry without a sketcher)", () => {
+    // BRepPrimAPI_MakeCylinder/Sphere/Cone/Torus all derive from
+    // BRepPrimAPI_MakeOneAxis; listing the leaf class alone still throws
+    // "UnboundTypeError: … unbound types: 23BRepPrimAPI_MakeOneAxis" on `new`.
+    const c = makeCylinder(oc, 0.01, 0.02);
+    expect(c.volume()).toBeCloseTo(Math.PI * 1e-4 * 0.02, 12);
+    c.delete();
+    const s = makeSphere(oc, 0.01);
+    expect(s.volume()).toBeCloseTo((4 / 3) * Math.PI * 1e-6, 12);
+    s.delete();
+    const k = makeCone(oc, 0.01, 0.005, 0.02);
+    expect(k.volume()).toBeGreaterThan(0);
+    k.delete();
+    const t = makeTorus(oc, 0.02, 0.005);
+    expect(t.volume()).toBeCloseTo(2 * Math.PI ** 2 * 0.02 * 0.005 ** 2, 12);
+    t.delete();
   });
 
   /**
