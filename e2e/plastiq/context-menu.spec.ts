@@ -157,23 +157,21 @@ test("right-clicking in the sketcher offers the applicable constraints", async (
     st().setSelection([line.id]);
   });
 
-  // Right-click the sketch surface → sketch context menu. In a sketch the only
-  // applicable category is Sketch, so it auto-expands and its constraint/finish
-  // actions are directly on the outer ring.
+  // Right-click the sketch surface → sketch context menu. The sketch overlay's
+  // own <svg> is pointer-events-none (ADR-0014: the 3D canvas receives orbit +
+  // plane picks), so a real right-click passes THROUGH it to the WebGL canvas,
+  // where useCanvasRightClick resolves the sketch target and opens the live
+  // world-anchored menu (`canvas-context-menu`). Drive that with a real mouse
+  // right-click at the sketch surface's centre, not a synthetic event on the
+  // pointer-events-none svg (which no real click ever reaches). In a sketch the
+  // only applicable category is Sketch, so it auto-expands and its
+  // constraint/finish actions are on the outer ring.
   const svg = page.getByTestId("sketch-svg");
   const box = (await svg.boundingBox())!;
-  await page.evaluate(
-    ([x, y]) => {
-      document
-        .querySelector('[data-testid="sketch-svg"]')!
-        .dispatchEvent(
-          new MouseEvent("contextmenu", { clientX: x, clientY: y, bubbles: true, cancelable: true }),
-        );
-    },
-    [box.x + box.width / 2, box.y + box.height / 2],
-  );
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2, { button: "right" });
 
-  await expect(page.getByTestId("sketch-context-menu")).toBeVisible();
+  await expect(page.getByTestId("canvas-context-menu")).toBeVisible();
   await expect(page.getByTestId("ctx-sk-constraint-horizontal")).toBeVisible();
   await expect(page.getByTestId("ctx-sk-finish")).toBeVisible();
 

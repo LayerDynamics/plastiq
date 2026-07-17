@@ -22,8 +22,11 @@ test("Extrude with a profile rebuilds cleanly", async ({ page }) => {
   await page.goto("/");
   await expect(page.getByTestId("status")).toHaveText("ready", { timeout: 240_000 });
 
-  // Quick-add Sketch injects a default rectangle profile without the sketcher.
-  await page.getByTestId("feature-menu").getByText("Sketch", { exact: true }).click();
+  // "Rectangle" (the sample-rect action) injects a default rectangle profile
+  // WITHOUT opening the sketcher — targeted by testid so it survives label
+  // changes. ("Sketch" now opens the sketcher; the old menu item this spec was
+  // written against no longer exists — the profile-injector moved to this button.)
+  await page.getByTestId("act-sample-rect").click();
   await page.getByTestId("add-extrude").click();
   await expect(page.getByTestId("status")).toHaveText("ready", { timeout: 240_000 });
 });

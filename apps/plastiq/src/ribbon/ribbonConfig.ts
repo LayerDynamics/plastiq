@@ -39,6 +39,9 @@ export const RIBBON: Record<Workspace, RibbonTab[]> = {
           items: [
             w("sketchLauncher"),
             a("sketch-rect"),
+            // Quick starter sketch — a rectangle profile without opening the
+            // sketcher (the action was previously wired nowhere).
+            a("sample-rect"),
             a("extrude"),
             a("cut"),
             a("revolve"),

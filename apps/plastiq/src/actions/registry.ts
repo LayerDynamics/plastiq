@@ -360,13 +360,19 @@ const RIBBON_ONLY: ActionDef[] = [
     },
   },
   {
+    // A one-click starter sketch: injects a real, editable 30×20 mm rectangle
+    // profile WITHOUT opening the sketcher (the sketcher, "Sketch", is for
+    // drawing your own). The registry long described this as "a separate
+    // discoverability path", but it was wired into NO ribbon panel or menu —
+    // dead, unreachable code. It is a legitimate CAD affordance (a quick
+    // rectangle to extrude), so it is surfaced rather than deleted.
     id: "sample-rect",
-    label: () => "Sample rect sketch",
+    label: () => "Rectangle",
     icon: "▭",
     enabled: always,
     run: () => {
       cad().addFeature({ type: "sketch", data: { profile: DEFAULT_RECT } });
-      cad().setStatus("Sample rect sketch inserted");
+      cad().setStatus("Rectangle sketch inserted — extrude it, or edit its profile");
     },
   },
   {

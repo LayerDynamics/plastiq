@@ -16,8 +16,11 @@ test("ARIA roles + keyboard-operable feature tree (NFR-5)", async ({ page }) => 
   await expect(page.getByRole("toolbar", { name: "Editor toolbar" })).toBeVisible();
   await expect(page.getByRole("tree", { name: "Feature tree" })).toBeVisible();
 
-  // Add a Sketch → two features, each a treeitem.
-  await page.getByTestId("feature-menu").getByText("Sketch", { exact: true }).click();
+  // Add a feature via a one-click ribbon action (Rectangle = the sample-rect
+  // profile injector; targeted by testid). This must ADD a feature to the tree,
+  // not open the sketcher — "Sketch" now opens the sketcher, which is why the
+  // old getByText("Sketch") locator left the tree at one row.
+  await page.getByTestId("act-sample-rect").click();
   await expect(page.getByTestId("feature-row")).toHaveCount(2);
   await expect(page.getByRole("treeitem")).toHaveCount(2);
 

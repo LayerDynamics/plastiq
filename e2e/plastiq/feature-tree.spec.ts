@@ -38,7 +38,9 @@ test("add sketch+cut → pocket; rollback and suppress re-evaluate the kernel", 
 
   // Add a Sketch then a Cut via the real toolbar menu.
   const fm = page.getByTestId("feature-menu");
-  await fm.getByText("Sketch", { exact: true }).click();
+  // "Rectangle" (sample-rect) injects a profile WITHOUT opening the sketcher, so
+  // the following Cut has a profile to pocket. "Sketch" now opens the sketcher.
+  await fm.getByTestId("act-sample-rect").click();
   await fm.getByText("Cut", { exact: true }).click();
 
   // Three features now; the cut pockets the box → more than 6 faces.
@@ -74,7 +76,9 @@ test("right-click context menu: unsuppress then delete a feature (FR-27)", async
   await waitReady(page);
   // Build box → sketch → cut as before.
   const fm = page.getByTestId("feature-menu");
-  await fm.getByText("Sketch", { exact: true }).click();
+  // "Rectangle" (sample-rect) injects a profile WITHOUT opening the sketcher, so
+  // the following Cut has a profile to pocket. "Sketch" now opens the sketcher.
+  await fm.getByTestId("act-sample-rect").click();
   await fm.getByText("Cut", { exact: true }).click();
   await expect(page.getByTestId("feature-row")).toHaveCount(3);
   await waitReady(page);

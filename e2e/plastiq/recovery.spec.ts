@@ -15,7 +15,10 @@ test("recovers an unsaved (untitled) document after a reload (FR-40)", async ({ 
   const before = await page.getByTestId("feature-row").count();
 
   // Edit the untitled document: add a feature → the recovery snapshot is written.
-  await page.getByTestId("feature-menu").getByText("Sketch", { exact: true }).click();
+  // "Rectangle" (sample-rect) adds a sketch feature in one click without opening
+  // the sketcher; targeted by testid. The old getByText("Sketch") opened the
+  // sketcher instead, adding no feature.
+  await page.getByTestId("act-sample-rect").click();
   await expect(page.getByTestId("feature-row")).toHaveCount(before + 1);
 
   // The recovery snapshot is debounced — wait until it has actually been written

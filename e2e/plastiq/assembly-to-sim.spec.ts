@@ -83,7 +83,14 @@ test("mate two parts → lower the assembly → the real sim spawns + steps it",
     { groundedId, freeId },
   );
 
-  expect(result.count).toBe(2); // both instances spawned as sim bodies
+  // Three sim bodies: the two instances PLUS the static ground slab that the
+  // DEFAULT experiment (kind "drop-test", ground: true — see
+  // sim/experiments.ts DEFAULT_SIM_EXPERIMENT) injects under the lowest body via
+  // applyExperiment(). __plastiqLower returns the RAW 2-body manifest (asserted
+  // above); the simulate path runs it through applyExperiment first, which is why
+  // the spawned count is one greater. Both instances are individually confirmed
+  // present by their non-null poses below.
+  expect(result.count).toBe(3);
   expect(result.freeZ0).not.toBeNull();
   expect(result.groundedZ0).not.toBeNull();
   // The free body fell under gravity (−Z); the grounded body (instance 0, `fixed`)

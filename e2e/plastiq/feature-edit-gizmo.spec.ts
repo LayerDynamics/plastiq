@@ -141,6 +141,14 @@ async function selectFirstEdge(page: Page): Promise<void> {
 async function drawTriangleAndExtrude(page: Page): Promise<void> {
   await page.goto("/");
   await expect(page.getByTestId("status")).toHaveText("ready", { timeout: 240_000 });
+  // Empty document so the extrude yields the prism ALONE (5 faces). The seeded
+  // box would otherwise swallow a z=0 triangle via join-by-default (§2.4/C1) —
+  // the union stays the box and faceCount never reaches 5.
+  await page.evaluate(() =>
+    (globalThis as { __cadStore?: { getState: () => { loadDocument: (d: unknown) => void } } })
+      .__cadStore!.getState()
+      .loadDocument({ features: [], params: {} }),
+  );
   await page.getByTestId("enter-sketch").click();
   await expect(page.getByTestId("sketcher")).toBeVisible();
   await page.evaluate(() => {
@@ -197,14 +205,17 @@ test("typing a new height in the gizmo previews the real solid live", async ({ p
   expect(await page.evaluate(() => faceCount())).toBe(5); // prism still there
 });
 
-test("cancel (✕) removes the just-created extrude — back to the seeded box", async ({ page }) => {
+test("cancel (✕) removes the just-created extrude — back to the bare sketch", async ({ page }) => {
+  // drawTriangleAndExtrude starts from an EMPTY document (so the prism is
+  // isolated at 5 faces), so cancelling the extrude leaves ONLY the sketch —
+  // which builds no solid (faceCount 0), not the old seeded box.
   await drawTriangleAndExtrude(page);
   await expect.poll(() => editActive(page)).toBe(true);
 
   await page.getByTestId("feature-edit-cancel").click();
   await expect.poll(() => editActive(page)).toBe(false);
-  // The extrude feature is gone → the build falls back to the seeded box (6 faces).
-  await page.waitForFunction(() => faceCount() === 6, undefined, { timeout: 240_000 });
+  // The extrude feature is gone → only the profile sketch remains → no solid.
+  await page.waitForFunction(() => faceCount() === 0, undefined, { timeout: 240_000 });
   expect(await extrudeHeight(page)).toBe(0); // no extrude feature remains
 });
 

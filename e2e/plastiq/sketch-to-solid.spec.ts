@@ -33,6 +33,22 @@ test("draw a triangle → Finish → Extrude → a 5-faced prism", async ({ page
   await expect(page.getByTestId("status")).toHaveText("ready", { timeout: 240_000 });
   expect(await page.evaluate(() => faceCount())).toBe(6); // seeded box
 
+  // Start from an EMPTY document so the extrude produces the prism in isolation.
+  // The default session seeds a starter box; because extrude now joins the
+  // current body by default (§2.4/C1), a triangle drawn at z=0 extrudes UP into
+  // the box and merges invisibly — the union is still the box (faceCount stays 6,
+  // the prism vanishes). Removing the incidental seed makes this test the
+  // "user's first feature" flow it is named for. (The join-onto-seed behaviour
+  // itself is tracked in FablesFindings under §2.4.)
+  await page.evaluate(() =>
+    (globalThis as { __cadStore?: { getState: () => { loadDocument: (d: unknown) => void } } })
+      .__cadStore!.getState()
+      .loadDocument({ features: [], params: {} }),
+  );
+  // An empty document builds no solid → the status reads "empty", not "ready".
+  await expect(page.getByTestId("status")).toHaveText("empty", { timeout: 240_000 });
+  expect(await page.evaluate(() => faceCount())).toBe(0);
+
   // Enter sketch mode via the real toolbar button.
   await page.getByTestId("enter-sketch").click();
   await expect(page.getByTestId("sketcher")).toBeVisible();
@@ -60,7 +76,7 @@ test("draw a triangle → Finish → Extrude → a 5-faced prism", async ({ page
   await expect(page.getByTestId("sketch-finish")).toBeEnabled();
   await page.getByTestId("sketch-finish").click();
   await expect(page.getByTestId("sketcher")).toHaveCount(0);
-  await expect(page.getByTestId("feature-row")).toHaveCount(2); // box + sketch
+  await expect(page.getByTestId("feature-row")).toHaveCount(1); // just the sketch (empty doc)
 
   // Extrude the active profile → a triangular prism.
   await page.getByTestId("feature-menu").getByText("Extrude", { exact: true }).click();

@@ -268,15 +268,41 @@ test("two-sided cut pockets the seeded-style box (G5 back)", async ({ page }) =>
   expect(vol!).toBeCloseTo(full - pocket, 7);
 });
 
-test("ribbon loft + sweep actions append demo features and rebuild cleanly (G10)", async ({
+test("ribbon loft + sweep build from real sketch profiles and rebuild cleanly (G10)", async ({
   page,
 }) => {
   await page.goto("/");
   await waitReady(page);
 
-  // Seed starts with one box feature. Ribbon Loft/Sweep inject demo geometry;
-  // status guidance is transient (rebuild immediately returns to "ready"), so we
-  // assert the feature tree + a successful rebuild instead.
+  // C4 REMOVED the demo loft/sweep injectors: the ribbon Loft is disabled until
+  // ≥2 finished sketch profiles exist, and Sweep until ≥1 (registry `enabled`).
+  // This spec used to click those buttons expecting demo geometry — the button
+  // was simply disabled, and the click waited out its 240 s timeout (W3). Seed
+  // the REAL preconditions instead: two rectangle profiles on parallel planes at
+  // different offsets (coplanar sections would loft to zero volume).
+  await page.evaluate(() => {
+    const rect = (o: number) => ({
+      id: `s${o}`,
+      type: "sketch",
+      data: {
+        profile: {
+          kind: "loop",
+          start: [0.01, 0.01],
+          segments: [
+            { kind: "line", to: [0.04, 0.01] },
+            { kind: "line", to: [0.04, 0.03] },
+            { kind: "line", to: [0.01, 0.03] },
+          ],
+        },
+        plane: { base: "XY", offset: o },
+      },
+    });
+    (globalThis as { __cadStore?: CadApi }).__cadStore!.getState().loadDocument({
+      features: [rect(0), rect(0.05)],
+      params: {},
+    });
+  });
+
   await page.getByTestId("feature-menu").getByText("Loft", { exact: true }).click();
   await waitReady(page);
   await page.waitForFunction(
