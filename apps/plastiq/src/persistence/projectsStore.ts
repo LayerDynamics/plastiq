@@ -40,6 +40,9 @@ import {
 const AUTOSAVE_DELAY_MS = 1500;
 const RECOVERY_DELAY_MS = 500;
 let recoveryTimer: ReturnType<typeof setTimeout> | undefined;
+// Module scope, NOT wireAutosave's closure: a project switch must be able to cancel
+// a pending autosave from outside (§2.12.4).
+let autosaveTimer: ReturnType<typeof setTimeout> | undefined;
 
 /** Surface a failed recovery-snapshot write on the status line (Review #13).
  * Quota exhaustion means crash recovery is NOT protecting the current work, so
@@ -70,6 +73,30 @@ function cancelPendingRecovery(): void {
   if (recoveryTimer) {
     clearTimeout(recoveryTimer);
     recoveryTimer = undefined;
+  }
+}
+
+/**
+ * Cancel EVERY pending persistence timer — the debounced dirty snapshot and the
+ * debounced autosave — before switching what "the current project" means
+ * (§2.12.4).
+ *
+ * Both thunks read the LIVE state when they fire, not when they were scheduled:
+ * the recovery thunk snapshots `liveDocument()` under `currentId`/`currentName`,
+ * and the autosave thunk calls `save()`. So a project switch inside the debounce
+ * window (1.5 s) made a pending timer describe the WRONG project — it dropped
+ * the old project's un-persisted edits and then snapshotted the freshly-opened
+ * project as dirty, or saved the new document under the old one's id.
+ *
+ * Cancelling is correct rather than lossy: `open()`/`newProject()` replace the
+ * live document wholesale, so a timer scheduled for the outgoing document can no
+ * longer read it — there is nothing left to persist by the time it would fire.
+ */
+function cancelPendingPersistence(): void {
+  cancelPendingRecovery();
+  if (autosaveTimer) {
+    clearTimeout(autosaveTimer);
+    autosaveTimer = undefined;
   }
 }
 
@@ -140,7 +167,6 @@ let autosaveWired = false;
 function wireAutosave(get: () => ProjectsState): void {
   if (autosaveWired) return;
   autosaveWired = true;
-  let timer: ReturnType<typeof setTimeout> | undefined;
   // Shared reaction to a live document edit (parametric or voxel): schedule the
   // debounced dirty crash-recovery snapshot — capturing even an untitled document
   // so a reload/crash before any named save can still be recovered (FR-40); the
@@ -155,8 +181,8 @@ function wireAutosave(get: () => ProjectsState): void {
       savedAt: Date.now(),
     }));
     if (!get().currentId) return; // untitled → no named project to autosave (yet)
-    if (timer) clearTimeout(timer);
-    timer = setTimeout(() => void get().save(), AUTOSAVE_DELAY_MS);
+    if (autosaveTimer) clearTimeout(autosaveTimer);
+    autosaveTimer = setTimeout(() => void get().save(), AUTOSAVE_DELAY_MS);
   };
   useCadStore.subscribe((s, prev) => {
     if (s.features === prev.features && s.params === prev.params && s.assembly === prev.assembly) {
@@ -274,6 +300,7 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
   setThumbnailProvider: (provider) => set({ thumbnail: provider }),
 
   newProject: () => {
+    cancelPendingPersistence(); // §2.12.4: the outgoing document's timers are stale
     set({ busy: true });
     useVoxelStore.getState().close(); // a new parametric doc leaves voxel mode
     syncWorkspace(false);
@@ -283,6 +310,7 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
   },
 
   newVoxelProject: () => {
+    cancelPendingPersistence(); // §2.12.4
     set({ busy: true });
     useVoxelStore.getState().open(defaultVoxelDoc());
     syncWorkspace(true);
@@ -314,6 +342,9 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
       set({ status: "project not found" });
       return;
     }
+    // §2.12.4: drop the outgoing project's pending timers BEFORE the swap — they
+    // read live state at fire time and would describe the incoming project.
+    cancelPendingPersistence();
     set({ busy: true });
     if (isMeshDoc(project.doc)) {
       // A generated mesh project (decision 20): held as activeMeshDoc and rendered
@@ -433,6 +464,7 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
   recover: () => {
     const snap = get().recoverable;
     if (!snap) return;
+    cancelPendingPersistence(); // §2.12.4: the pre-recover document's timers are stale
     set({ busy: true });
     const voxel = voxelOfRecoveryDoc(snap.doc);
     const mesh = meshOfRecoveryDoc(snap.doc);

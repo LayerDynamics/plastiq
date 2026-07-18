@@ -150,6 +150,31 @@ describe("projectsStore — mesh edits drive the debounced recovery snapshot + a
     expect(readRecovery()!.dirty).toBe(true);
   });
 
+  it("§2.12.4: switching projects inside the debounce window cancels the OLD project's timers", async () => {
+    vi.useFakeTimers();
+    await useProjectsStore.getState().init();
+
+    // A named mesh project with an edit in flight — both timers armed (recovery
+    // at 500ms, autosave at 1500ms), neither fired yet.
+    useProjectsStore.setState({ activeMeshDoc: MESH, currentId: "p1", currentName: "Blob" });
+    await vi.advanceTimersByTimeAsync(1700);
+    saveSpy.mockClear();
+    clearRecovery();
+    editMesh("R0xCaW4tZmxpZ2h0");
+    await vi.advanceTimersByTimeAsync(100); // inside BOTH debounce windows
+
+    // The user starts a new document mid-window.
+    useProjectsStore.getState().newProject();
+    await vi.advanceTimersByTimeAsync(2000); // well past both delays
+
+    // Neither stale timer fired: no autosave wrote the new document under the old
+    // project's id, and no snapshot recorded the fresh document as dirty work.
+    expect(saveSpy).not.toHaveBeenCalled();
+    expect(readRecovery()).toBeNull();
+    expect(useProjectsStore.getState().currentId).toBeNull();
+    expect(useProjectsStore.getState().status).toBe("new document");
+  });
+
   it("leaving mesh mode (doc → null) is not an edit", async () => {
     vi.useFakeTimers();
     await useProjectsStore.getState().init();
