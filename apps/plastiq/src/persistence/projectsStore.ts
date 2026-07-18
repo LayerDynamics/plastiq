@@ -173,6 +173,21 @@ function wireAutosave(get: () => ProjectsState): void {
     if (get().busy) return;
     onEdit();
   });
+  // Mesh-document edits (§2.12.3). For a generated/sculpted mesh project the MESH
+  // *is* the document — it lives in this store's `activeMeshDoc`, not the cad or
+  // voxel store — so without this subscription sculpt edits were never autosaved
+  // and never snapshotted for crash recovery: close the tab and they were gone.
+  // liveDocument()/toRecoveryDoc() already handle a MeshDoc, so onEdit just works.
+  //
+  // Guards: a null doc is LEAVING mesh mode, not an edit; `busy` covers recover();
+  // and `prev.busy` covers open(), which clears busy in the SAME atomic set that
+  // installs the opened doc (so checking only `s.busy` would read false and treat
+  // the load's tail as an edit).
+  useProjectsStore.subscribe((s, prev) => {
+    if (s.activeMeshDoc === prev.activeMeshDoc || !s.activeMeshDoc) return;
+    if (s.busy || prev.busy) return;
+    onEdit();
+  });
 }
 
 export interface ProjectsState {

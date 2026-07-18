@@ -6,6 +6,9 @@
 // (persistence/projectsStore.ts: wireAutosave):
 //   • dirty  — a document-affecting cad-store change (features/params/assembly)
 //     while the projects store is not busy loading (a load is not a user edit);
+//   • dirty  — a mesh-document edit (§2.12.3): for a generated/sculpted mesh
+//     project the MESH is the document, and it lives in the projects store's
+//     `activeMeshDoc` rather than the cad store, so it needs its own watcher;
 //   • clean  — the projects status flips to a state where the on-disk project
 //     IS the in-memory document ("saved", "opened", "new document");
 //   • dirty — "recovered unsaved work": recover() clears the recovery snapshot,
@@ -42,6 +45,16 @@ export function installUnsavedGuard(win: Window = window): () => void {
     dirty = true;
   });
   const unsubProjects = useProjectsStore.subscribe((s, prev) => {
+    // A mesh-document edit is a document edit (§2.12.3): for a generated/sculpted
+    // mesh project the mesh IS the document, so sculpting must arm the prompt
+    // exactly like a parametric edit does. Checked BEFORE the status branch so a
+    // single set() carrying both an edited doc and a status still marks dirty.
+    // Same guards as the autosave wiring: a null doc is leaving mesh mode, and
+    // `busy`/`prev.busy` cover recover() and open()'s atomic busy-clearing set.
+    if (s.activeMeshDoc !== prev.activeMeshDoc && s.activeMeshDoc && !s.busy && !prev.busy) {
+      dirty = true;
+      return;
+    }
     if (s.status === prev.status) return;
     if (CLEAN_STATUSES.has(s.status)) dirty = false;
     else if (s.status === "recovered unsaved work") dirty = true;

@@ -13,6 +13,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { installUnsavedGuard, hasUnsavedChanges } from "./unsavedGuard.js";
 import { useCadStore } from "../store/store.js";
 import { useProjectsStore } from "../persistence/projectsStore.js";
+import type { MeshDoc } from "../store/types.js";
 
 let dispose: (() => void) | null = null;
 
@@ -28,13 +29,13 @@ function editDocument(): void {
 }
 
 beforeEach(() => {
-  useProjectsStore.setState({ busy: false, status: "" });
+  useProjectsStore.setState({ busy: false, status: "", activeMeshDoc: null });
   dispose = installUnsavedGuard();
 });
 afterEach(() => {
   dispose?.();
   dispose = null;
-  useProjectsStore.setState({ busy: false, status: "" });
+  useProjectsStore.setState({ busy: false, status: "", activeMeshDoc: null });
 });
 
 describe("installUnsavedGuard", () => {
@@ -85,6 +86,42 @@ describe("installUnsavedGuard", () => {
     useProjectsStore.setState({ busy: false });
     expect(hasUnsavedChanges()).toBe(false);
     expect(fireBeforeUnload().defaultPrevented).toBe(false);
+  });
+
+  it("§2.12.3: a mesh-document edit arms the prompt (the mesh IS the document)", () => {
+    const mesh: MeshDoc = { kind: "mesh", name: "Blob", glb: "R0xC", source: { mode: "text3d", providerId: "fal:tripo" } };
+    useProjectsStore.setState({ activeMeshDoc: mesh, busy: false });
+    expect(hasUnsavedChanges()).toBe(true);
+    expect(fireBeforeUnload().defaultPrevented).toBe(true);
+
+    // A save cleans it; sculpting again re-arms.
+    useProjectsStore.setState({ status: "saved" });
+    expect(hasUnsavedChanges()).toBe(false);
+    useProjectsStore.setState({ activeMeshDoc: { ...mesh, glb: "R0xCZWRpdGVk" } });
+    expect(hasUnsavedChanges()).toBe(true);
+  });
+
+  it("§2.12.3: opening/recovering a mesh project is NOT an edit", () => {
+    const mesh: MeshDoc = { kind: "mesh", name: "Blob", glb: "R0xC", source: { mode: "text3d", providerId: "fal:tripo" } };
+    // recover(): busy stays true across the doc install.
+    useProjectsStore.setState({ busy: true });
+    useProjectsStore.setState({ activeMeshDoc: mesh });
+    expect(hasUnsavedChanges()).toBe(false);
+
+    // open(): busy is cleared in the SAME set that installs the doc.
+    useProjectsStore.setState({ activeMeshDoc: null, busy: true });
+    useProjectsStore.setState({ activeMeshDoc: mesh, status: "opened", busy: false });
+    expect(hasUnsavedChanges()).toBe(false);
+    expect(fireBeforeUnload().defaultPrevented).toBe(false);
+  });
+
+  it("§2.12.3: leaving mesh mode (doc → null) is not an edit", () => {
+    const mesh: MeshDoc = { kind: "mesh", name: "Blob", glb: "R0xC", source: { mode: "text3d", providerId: "fal:tripo" } };
+    useProjectsStore.setState({ activeMeshDoc: mesh, busy: true });
+    useProjectsStore.setState({ busy: false, status: "saved" });
+    expect(hasUnsavedChanges()).toBe(false);
+    useProjectsStore.setState({ activeMeshDoc: null }); // converted to CAD / closed
+    expect(hasUnsavedChanges()).toBe(false);
   });
 
   it("the disposer removes the listener", () => {
