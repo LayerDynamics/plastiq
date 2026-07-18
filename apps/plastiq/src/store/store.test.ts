@@ -357,6 +357,37 @@ describe("CAD Studio store — assembly (FR-33/FR-34 / M4)", () => {
     s().redo();
     expect(s().assembly.instances).toHaveLength(1);
   });
+
+  it("§2.11.5: a mate solve re-anchors joint frames to the moved parent", () => {
+    s().setSelectionRefs({ faces: { 1: { normal: [1, 0, 0] } }, edges: {} });
+    const i0 = s().addInstance(); // ground (fixed) at the origin
+    const i1 = s().addInstance(); // free, offset +X
+    const i2 = s().addInstance(); // free, further +X — the joint PARENT
+
+    // A joint anchored on i2 at its current pose (world frame baked at creation).
+    s().setMateMode(true);
+    s().addMatePick({ instanceId: i2, faceId: 1, worldPoint: [0.16, 0, 0] });
+    s().addMatePick({ instanceId: i1, faceId: 1, worldPoint: [0.08, 0, 0] });
+    s().applyJoint("revolute");
+    const before = s().assembly.joints[0]!;
+    const parentBefore = s().assembly.instances.find((i) => i.id === i2)!.pose.position[0];
+    expect(before.parent).toBe(i2);
+
+    // Now mate the joint's PARENT (i2) to the ground, which moves it.
+    s().addMate({
+      id: "m-solve",
+      kind: "coincident",
+      a: { instance: i0, point: [0, 0, 0] },
+      b: { instance: i2, point: [0, 0, 0] },
+    });
+    const parentAfter = s().assembly.instances.find((i) => i.id === i2)!.pose.position[0];
+    expect(parentAfter).not.toBeCloseTo(parentBefore, 6); // the solve really moved it
+
+    // The joint frame rode along: its origin shifted by the same delta, so the
+    // lowered constraint still attaches to the same physical point on the part.
+    const after = s().assembly.joints[0]!;
+    expect(after.origin[0]).toBeCloseTo(before.origin[0] + (parentAfter - parentBefore), 6);
+  });
 });
 
 describe("CAD Studio store — document I/O (FR-39 reproducible reload)", () => {

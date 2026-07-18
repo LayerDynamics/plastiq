@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 import { solveMates } from "@plastiq/cad";
 import {
   applyJointDrives,
+  axisAngleQuat,
   driveJoint,
+  reanchorJoints,
   toAssemblyInput,
   type AssemblyJoint,
   type AssemblyModel,
@@ -137,5 +139,63 @@ describe("joint kinematics — drive preview (M4.3/M4.4)", () => {
     expect(out[1]!.pose.position[1]).toBeCloseTo(0.1, 6); // child rotated
     // Pure: the source instances are not mutated.
     expect(instances[1]!.pose.position[1]).toBe(0);
+  });
+});
+
+describe("reanchorJoints — joint frames follow the re-posed parent (§2.11.5)", () => {
+  const inst = (id: string, pose: ComponentInstance["pose"]): ComponentInstance => ({
+    id,
+    name: id,
+    pose,
+  });
+  const joint = (parent: string, child: string): AssemblyJoint => ({
+    id: "j0",
+    kind: "revolute",
+    parent,
+    child,
+    origin: [0.09, 0, 0.01], // baked world frame: a point on the parent
+    axis: [0, 0, 1],
+  });
+
+  it("a translated parent translates the joint origin; the axis is unchanged", () => {
+    const before = [inst("p", { position: [0.08, 0, 0], orientation: [0, 0, 0, 1] }), inst("c", { position: [0.2, 0, 0], orientation: [0, 0, 0, 1] })];
+    const after = [inst("p", { position: [0, 0, 0], orientation: [0, 0, 0, 1] }), before[1]!];
+    const [j] = reanchorJoints([joint("p", "c")], before, after);
+    expect(j!.origin[0]).toBeCloseTo(0.01, 9); // 0.09 − 0.08
+    expect(j!.origin[2]).toBeCloseTo(0.01, 9);
+    expect(j!.axis).toEqual([0, 0, 1]);
+  });
+
+  it("a rotated parent orbits the origin about the parent and rotates the axis", () => {
+    const before = [inst("p", { position: [0, 0, 0], orientation: [0, 0, 0, 1] })];
+    // Parent re-posed: rotated 90° about world Y at its own position.
+    const q = axisAngleQuat([0, 1, 0], Math.PI / 2);
+    const after = [inst("p", { position: [0, 0, 0], orientation: q })];
+    const j0: AssemblyJoint = { id: "j0", kind: "revolute", parent: "p", child: "c", origin: [0.1, 0, 0], axis: [0, 0, 1] };
+    const [j] = reanchorJoints([j0], before, after);
+    // Ry(90°): (x,y,z) → (z, y, −x) — origin (0.1,0,0) → (0,0,−0.1); axis (0,0,1) → (1,0,0).
+    expect(j!.origin[0]).toBeCloseTo(0, 9);
+    expect(j!.origin[2]).toBeCloseTo(-0.1, 9);
+    expect(j!.axis[0]).toBeCloseTo(1, 9);
+    expect(j!.axis[2]).toBeCloseTo(0, 9);
+  });
+
+  it("an unmoved parent (bit-equal pose) returns the joint object unchanged", () => {
+    const pose = { position: [0.05, 0, 0] as Vec3, orientation: [0, 0, 0, 1] as Quat };
+    const before = [inst("p", pose)];
+    const after = [inst("p", { position: [0.05, 0, 0], orientation: [0, 0, 0, 1] })];
+    const j0 = joint("p", "c");
+    const [j] = reanchorJoints([j0], before, after);
+    expect(j).toBe(j0); // same reference — no float churn on repeated solves
+  });
+
+  it("a child-only move and an unknown parent leave the frame untouched", () => {
+    const before = [inst("p", { position: [0, 0, 0], orientation: [0, 0, 0, 1] }), inst("c", { position: [0.1, 0, 0], orientation: [0, 0, 0, 1] })];
+    const after = [before[0]!, inst("c", { position: [0.3, 0, 0], orientation: [0, 0, 0, 1] })];
+    const [j1] = reanchorJoints([joint("p", "c")], before, after);
+    expect(j1!.origin).toEqual([0.09, 0, 0.01]); // frame is attached to the PARENT
+
+    const [j2] = reanchorJoints([joint("ghost", "c")], before, after);
+    expect(j2!.origin).toEqual([0.09, 0, 0.01]);
   });
 });

@@ -11,6 +11,7 @@ import {
   emptyAssembly,
   localToWorld,
   quatRotate,
+  reanchorJoints,
   toAssemblyInput,
   worldToLocal,
   IDENTITY_POSE,
@@ -18,6 +19,7 @@ import {
   type AssemblyMate,
   type AssemblyModel,
   type ComponentInstance,
+  type Quat,
   type Vec3,
 } from "../assembly/model.js";
 import {
@@ -802,18 +804,31 @@ export const useCadStore = create<CadStore>((set, get) => ({
     const input = toAssemblyInput(assembly);
     const result = solveMates(input.components, input.mates);
     // Write solved poses back as the new seed (mirrors the sketch solve).
-    set((s) => ({
-      assemblyResult: result,
-      assembly: {
-        ...s.assembly,
-        instances: s.assembly.instances.map((inst, i) => {
-          const p = result.poses[i];
-          return p
-            ? { ...inst, pose: { position: [...p.position], orientation: [...p.orientation] } }
-            : inst;
-        }),
-      },
-    }));
+    set((s) => {
+      const instances: ComponentInstance[] = s.assembly.instances.map((inst, i) => {
+        const p = result.poses[i];
+        return p
+          ? {
+              ...inst,
+              pose: {
+                position: [...p.position] as Vec3,
+                orientation: [...p.orientation] as Quat,
+              },
+            }
+          : inst;
+      });
+      return {
+        assemblyResult: result,
+        assembly: {
+          ...s.assembly,
+          instances,
+          // §2.11.5: joint frames are world coords baked from the parent's pose
+          // at creation — when the solve re-poses the parent, the frame rides
+          // along, so lowered constraints attach where the parts actually are.
+          joints: reanchorJoints(s.assembly.joints, s.assembly.instances, instances),
+        },
+      };
+    });
   },
 
   undo: () =>

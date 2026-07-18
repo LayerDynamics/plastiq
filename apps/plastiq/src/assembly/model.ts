@@ -112,6 +112,58 @@ export function quatMul(a: Quat, b: Quat): Quat {
   ];
 }
 
+/** Conjugate — the inverse rotation for a unit quaternion. */
+export function quatConj(q: Quat): Quat {
+  return [-q[0], -q[1], -q[2], q[3]];
+}
+
+function samePose(a: InstancePose, b: InstancePose): boolean {
+  return (
+    a.position[0] === b.position[0] &&
+    a.position[1] === b.position[1] &&
+    a.position[2] === b.position[2] &&
+    a.orientation[0] === b.orientation[0] &&
+    a.orientation[1] === b.orientation[1] &&
+    a.orientation[2] === b.orientation[2] &&
+    a.orientation[3] === b.orientation[3]
+  );
+}
+
+/**
+ * Re-anchor joint frames after instances move (§2.11.5). A joint's world-frame
+ * origin/axis is baked from its PARENT instance's pose at creation; when the
+ * parent is re-posed (mate solve), the frame is physically attached to the
+ * parent and must ride along: express it in the old parent's local frame, then
+ * re-world it under the new pose. Joints whose parent did not move (bit-equal
+ * pose — no float churn on repeated solves) or is not in either instance list
+ * are returned unchanged. Pure: never mutates the input joints.
+ */
+export function reanchorJoints(
+  joints: readonly AssemblyJoint[],
+  oldInstances: readonly ComponentInstance[],
+  newInstances: readonly ComponentInstance[],
+): AssemblyJoint[] {
+  const oldById = new Map(oldInstances.map((i) => [i.id, i.pose]));
+  const newById = new Map(newInstances.map((i) => [i.id, i.pose]));
+  return joints.map((j) => {
+    const oldPose = oldById.get(j.parent);
+    const newPose = newById.get(j.parent);
+    if (!oldPose || !newPose || samePose(oldPose, newPose)) return j;
+    const inv = quatConj(oldPose.orientation);
+    const localOrigin = quatRotate(inv, [
+      j.origin[0] - oldPose.position[0],
+      j.origin[1] - oldPose.position[1],
+      j.origin[2] - oldPose.position[2],
+    ]);
+    const localAxis = quatRotate(inv, j.axis);
+    return {
+      ...j,
+      origin: localToWorld(newPose, localOrigin),
+      axis: quatRotate(newPose.orientation, localAxis),
+    };
+  });
+}
+
 /**
  * Drive a joint's child to a coordinate, relative to its neutral pose — the
  * design-time motion preview (FR-36). Revolute rotates about (origin,axis);

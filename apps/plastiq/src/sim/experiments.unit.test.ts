@@ -128,6 +128,64 @@ describe("applyExperiment", () => {
     expect(m.bodies.find((b) => b.id === "body0")!.com[2]).toBeCloseTo(0.1 + 0.05, 9);
     expect(m.bodies.some((b) => b.id === "__experiment_ground")).toBe(true);
   });
+
+  it("ground height honours the body's ORIENTATION (§2.11.5 — rotated hull extents)", () => {
+    // A tall slab: ±0.01 in x/y, ±0.10 in z. Standing, it reaches 0.10 below the
+    // COM; laid on its side (90° about +X) it reaches only 0.01 below. The ground
+    // must sit under the ROTATED extent, not the unrotated one.
+    const slab = (orientation: [number, number, number, number]): SimManifest => ({
+      version: 1,
+      source: "test:slab",
+      gravity: [0, 0, -9.81],
+      constraints: [],
+      bodies: [
+        {
+          id: "body0",
+          mass: 1,
+          com: [0, 0, 0.5],
+          orientation,
+          colliders: [
+            {
+              points: [
+                -0.01, -0.01, -0.1, 0.01, -0.01, -0.1, 0.01, 0.01, -0.1, -0.01, 0.01, -0.1,
+                -0.01, -0.01, 0.1, 0.01, -0.01, 0.1, 0.01, 0.01, 0.1, -0.01, 0.01, 0.1,
+              ],
+              faces: [
+                [0, 3, 2],
+                [0, 2, 1],
+                [4, 5, 6],
+                [4, 6, 7],
+                [0, 1, 5],
+                [0, 5, 4],
+                [3, 7, 6],
+                [3, 6, 2],
+                [0, 4, 7],
+                [0, 7, 3],
+                [1, 2, 6],
+                [1, 6, 5],
+              ],
+            },
+          ],
+        },
+      ],
+    });
+    const cfg = { ...DEFAULT_SIM_EXPERIMENT, kind: "rest" as const, dropHeight: 0, ground: true };
+    const groundTopOf = (m: SimManifest): number => {
+      const g = m.bodies.find((b) => b.id === "__experiment_ground")!;
+      // The slab's ground body is a box collider; its top is com.z + max local z.
+      let maxZ = -Infinity;
+      for (const c of g.colliders) {
+        for (let i = 2; i < c.points.length; i += 3) if (c.points[i]! > maxZ) maxZ = c.points[i]!;
+      }
+      return g.com[2] + maxZ;
+    };
+
+    // Standing: lowest extent = 0.5 − 0.10 = 0.40, ground top 5 mm below.
+    expect(groundTopOf(applyExperiment(slab([0, 0, 0, 1]), cfg))).toBeCloseTo(0.4 - 0.005, 9);
+    // On its side (90° about +X maps local ±z → ∓y): lowest extent = 0.5 − 0.01.
+    const sideways: [number, number, number, number] = [Math.sin(Math.PI / 4), 0, 0, Math.cos(Math.PI / 4)];
+    expect(groundTopOf(applyExperiment(slab(sideways), cfg))).toBeCloseTo(0.49 - 0.005, 9);
+  });
 });
 
 describe("buildTelemetry", () => {

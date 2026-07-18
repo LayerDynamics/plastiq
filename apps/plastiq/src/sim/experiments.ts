@@ -4,6 +4,7 @@
 // ground, zero-g — without hand-authoring manifests.
 
 import type { SimManifest, ManifestBody, HullCollider } from "@plastiq/sim";
+import { quatRotate, type Quat, type Vec3 } from "../assembly/model.js";
 
 export type SimExperimentKind = "free-fall" | "drop-test" | "rest" | "zero-g";
 
@@ -98,12 +99,19 @@ function asVec3(g: readonly number[] | undefined): [number, number, number] {
 }
 
 function bodyMinMaxZ(b: ManifestBody): { min: number; max: number } {
-  // Approximate vertical extent from hull points + COM.
+  // Vertical extent from hull points + COM. Collider points are COM-local, so
+  // each point is rotated by the body's spawn orientation before its world z is
+  // read (§2.11.5 — the unrotated extent was wrong for any rotated instance:
+  // a tall part lying on its side got the standing part's ground height).
+  const [qx, qy, qz, qw] = b.orientation;
+  const identity = qx === 0 && qy === 0 && qz === 0 && qw === 1;
+  const q = b.orientation as Quat;
   let min = Infinity;
   let max = -Infinity;
   for (const c of b.colliders) {
     for (let i = 2; i < c.points.length; i += 3) {
-      const z = b.com[2] + c.points[i]!;
+      const local: Vec3 = [c.points[i - 2]!, c.points[i - 1]!, c.points[i]!];
+      const z = b.com[2] + (identity ? local[2] : quatRotate(q, local)[2]);
       if (z < min) min = z;
       if (z > max) max = z;
     }
