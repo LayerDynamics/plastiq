@@ -1,7 +1,8 @@
 import { beforeAll, describe, expect, it } from "vitest";
-import { exportStep, initOcct, makeBox, mm, type Occt, type Solid } from "@plastiq/cad";
+import { exportStep, importStep, initOcct, makeBox, mm, type Occt, type Solid } from "@plastiq/cad";
 import type { CadDocument, EditorFeature } from "../store/types.js";
 import type { Profile } from "../sketch/profile.js";
+import type { TopAbs_ShapeEnum } from "opencascade.js";
 import {
   rebuildDocument,
   rebuildDocumentIsolated,
@@ -26,6 +27,25 @@ function solidVolume(oc: Occt, solid: Solid): number {
   } finally {
     props.delete();
   }
+}
+
+/** How many separate BODIES a solid holds — 1 for a plain solid, N for a
+ * multi-body compound (§2.4 `op:"new"`). */
+function bodyCount(oc: Occt, solid: Solid): number {
+  // The kernel's own cast: embind types the enum object loosely (mesh/normals.ts
+  // shapeEnums does the same), so name the members through it.
+  const S = oc.TopAbs_ShapeEnum as unknown as {
+    TopAbs_SOLID: TopAbs_ShapeEnum;
+    TopAbs_SHAPE: TopAbs_ShapeEnum;
+  };
+  const exp = new oc.TopExp_Explorer_2(solid.shape, S.TopAbs_SOLID, S.TopAbs_SHAPE);
+  let n = 0;
+  while (exp.More()) {
+    n++;
+    exp.Next();
+  }
+  exp.delete();
+  return n;
 }
 
 /** Z of a solid's volume centroid. */
@@ -317,8 +337,13 @@ describe("CAD Studio rebuild (SPEC-5 M0.4)", () => {
     ]);
     // Box 60×40×30 mm: its +Z top face sits at z = 30 mm. A sketch resolved on that
     // face (via its FaceRef) then extruded must build at z≈30 mm — NOT the XY plane
-    // (which would put the solid's centroid near z≈10 mm).
-    const comZ = (faceOffset: number): number => {
+    // (which would put the pad inside the box, leaving the top at 30 mm).
+    //
+    // Measured via the built solid's TOP (max Z) rather than its centroid: since
+    // §2.4 `op:"new"` correctly KEEPS the box as a separate body, a centroid now
+    // averages both bodies. The top is a sharper probe of the same thing anyway
+    // — it moves exactly with the sketch plane.
+    const topZ = (faceOffset: number): number => {
       const doc: CadDocument = {
         features: [
           { id: "f1", type: "box", params: { dx: m(60), dy: m(40), dz: m(30) } },
@@ -328,19 +353,25 @@ describe("CAD Studio rebuild (SPEC-5 M0.4)", () => {
             deps: ["f1"],
             data: { profile: rect, plane: { kind: "face", face: { normal: [0, 0, 1] }, offset: faceOffset } },
           },
-          // op:"new" so COM measures the pad alone (plane resolution), not the
-          // joined box+pad mass which dilutes a 10 mm offset under join-by-default (C1).
+          // op:"new" keeps the pad a SEPARATE body (§2.4) so join-by-default can't
+          // merge it into the box and blur where the sketch plane actually landed.
           { id: "f3", type: "extrude", deps: ["f2"], params: { height: m(20) }, data: { op: "new" } },
         ],
         params: {},
       };
-      return rebuildTaggedWithProps(oc, doc, { linearDeflection: mm(0.5) })!.com[2];
+      const solid = rebuildDocument(oc, doc)!;
+      try {
+        return solid.boundingBox().max[2];
+      } finally {
+        solid.delete();
+      }
     };
-    const onFace = comZ(0);
-    expect(onFace).toBeGreaterThan(m(15)); // on the 30 mm top face, not the XY plane (~10)
-    expect(onFace).toBeLessThan(m(45));
-    // A 10 mm face offset lifts the solid a further 10 mm along the face normal.
-    expect(comZ(m(10)) - onFace).toBeCloseTo(m(10), 6);
+    // Built on the 30 mm top face, a 20 mm pad reaches 50 mm. Built on the XY
+    // plane it would sit INSIDE the box and the top would still read 30 mm.
+    const onFace = topZ(0);
+    expect(onFace).toBeCloseTo(m(50), 6);
+    // A 10 mm face offset lifts the pad a further 10 mm along the face normal.
+    expect(topZ(m(10)) - onFace).toBeCloseTo(m(10), 6);
   });
 
   it("cut with back produces a two-sided pocket tool (G5)", () => {
@@ -1299,7 +1330,7 @@ describe("CAD Studio rebuild (SPEC-5 M0.4)", () => {
     expect(built!.volume).toBeGreaterThan(baseVol);
   });
 
-  it("extrude with data.op new replaces the existing body (C1)", () => {
+  it("§2.4: extrude with data.op new KEEPS the prior body and adds a separate one", () => {
     const m = (x: number): number => mm(x);
     const doc: CadDocument = {
       features: [
@@ -1330,8 +1361,112 @@ describe("CAD Studio rebuild (SPEC-5 M0.4)", () => {
     const built = rebuildTaggedWithProps(oc, doc, { linearDeflection: mm(0.5) });
     expect(built).not.toBeNull();
     const bossVol = m(20) * m(20) * m(15);
-    // Pad only — the prior box is discarded.
-    expect(built!.volume).toBeCloseTo(bossVol, 7);
+    const boxVol = m(40) * m(40) * m(10);
+    // "New body" used to DELETE the part (§2.4). Both bodies survive: the volume
+    // is the sum, and nothing was welded — the boss did not fuse into the box.
+    expect(built!.volume).toBeCloseTo(boxVol + bossVol, 7);
+    const solid = rebuildDocument(oc, doc)!;
+    expect(bodyCount(oc, solid), "box + boss as two separate bodies").toBe(2);
+    solid.delete();
+  });
+
+  describe("§2.4 multi-body documents: \"new body\" no longer destroys the part", () => {
+    const m = (x: number): number => mm(x);
+
+    /** Box, then a second box as a NEW body offset clear of the first. */
+    const twoBoxes = (): CadDocument => ({
+      features: [
+        { id: "f1", type: "box", params: { dx: m(40), dy: m(40), dz: m(10) } },
+        {
+          id: "f2",
+          type: "cylinder",
+          params: { radius: m(5), height: m(20), ox: m(100), oy: 0, oz: 0 },
+          data: { op: "new" },
+        },
+      ],
+      params: {},
+    });
+
+    it("a primitive with op:new is added as a separate body, not a replacement", () => {
+      const solid = rebuildDocument(oc, twoBoxes())!;
+      try {
+        expect(bodyCount(oc, solid)).toBe(2);
+        const boxVol = m(40) * m(40) * m(10);
+        const cylVol = Math.PI * m(5) ** 2 * m(20);
+        expect(solidVolume(oc, solid)).toBeCloseTo(boxVol + cylVol, 9);
+        // Separate bodies, not a weld: a fuse of disjoint solids would give the
+        // same volume, so also assert they stayed individually addressable.
+        expect(solid.isValid()).toBe(true);
+      } finally {
+        solid.delete();
+      }
+    });
+
+    it("both bodies reach the viewport tessellation (nothing is silently dropped)", () => {
+      const mesh = rebuildTagged(oc, twoBoxes(), { linearDeflection: mm(0.5) })!;
+      // 6 box faces + the cylinder's (wall + 2 caps) — every face of BOTH bodies.
+      expect(mesh.faceGroups.length).toBeGreaterThanOrEqual(9);
+      // The far body's geometry is really in the buffer: some vertex is out at x≈100 mm.
+      let maxX = -Infinity;
+      for (let i = 0; i < mesh.vertices.length; i += 3) maxX = Math.max(maxX, mesh.vertices[i]!);
+      expect(maxX).toBeGreaterThan(m(90));
+    });
+
+    it("both bodies survive a STEP export", () => {
+      const solid = rebuildDocument(oc, twoBoxes())!;
+      try {
+        const step = exportStep(oc, solid);
+        expect(step).toContain("ISO-10303");
+        // Re-import and confirm the file carries BOTH bodies at full volume.
+        const back = importStep(oc, step);
+        try {
+          expect(bodyCount(oc, back)).toBe(2);
+          expect(solidVolume(oc, back)).toBeCloseTo(solidVolume(oc, solid), 9);
+        } finally {
+          back.delete();
+        }
+      } finally {
+        solid.delete();
+      }
+    });
+
+    it("a later feature dresses an edge of the SECOND body (per-body edges stay addressable)", () => {
+      // Pick a real edge belonging to the far cylinder (x ≈ 100 mm), then fillet
+      // it: dress-up must resolve and operate through the compound, and the
+      // untouched first body must come through unchanged.
+      const mesh = rebuildTagged(oc, twoBoxes(), { linearDeflection: mm(0.5) })!;
+      const farEdge = mesh.edges.find((e) => e.midpoint[0] > m(90));
+      expect(farEdge, "an edge on the second body").toBeDefined();
+
+      const doc: CadDocument = {
+        features: [
+          ...twoBoxes().features,
+          {
+            id: "f3",
+            type: "fillet",
+            params: { radius: m(1) },
+            data: { edges: [{ faceNormals: farEdge!.faceNormals, midpoint: farEdge!.midpoint }] },
+          },
+        ],
+        params: {},
+      };
+      const built = rebuildDocumentIsolated(oc, doc);
+      const failed = built.statuses.filter((st) => st.status === "error");
+      expect(failed, JSON.stringify(failed)).toHaveLength(0);
+      expect(built.solid).not.toBeNull();
+      try {
+        expect(bodyCount(oc, built.solid!), "still two bodies after the fillet").toBe(2);
+        // The fillet removed material from the cylinder only, so the total drops
+        // slightly below the un-filleted sum — proof it actually ran on that body.
+        const boxVol = m(40) * m(40) * m(10);
+        const cylVol = Math.PI * m(5) ** 2 * m(20);
+        const total = solidVolume(oc, built.solid!);
+        expect(total).toBeLessThan(boxVol + cylVol);
+        expect(total).toBeGreaterThan(boxVol + cylVol * 0.95);
+      } finally {
+        built.solid!.delete();
+      }
+    });
   });
 
   it("a loft with per-section planes (not only XY+z) builds a solid (G6)", () => {
@@ -1541,8 +1676,10 @@ describe("CAD Studio rebuild (SPEC-5 M0.4)", () => {
     expect(vertical).toBeDefined();
     const edgeRef = { faceNormals: vertical!.faceNormals };
 
-    // 4 mm square profile swept along the picked edge; `op: "new"` leaves ONLY the
-    // pipe so its volume is measurable on its own.
+    // 4 mm square profile swept along the picked edge. `op: "new"` keeps the pipe
+    // a SEPARATE body from the box (§2.4), so the built volume is box + pipe and
+    // the pipe's own volume is that total minus the (known) box — which also
+    // proves the box survived "new body" instead of being deleted.
     const doc = (dz: number): CadDocument => ({
       features: [
         { id: "f1", type: "box", params: { dx: m(40), dy: m(30), dz } },
@@ -1565,13 +1702,17 @@ describe("CAD Studio rebuild (SPEC-5 M0.4)", () => {
       params: {},
     });
 
+    /** The box body's own volume at a given height. */
+    const boxVol = (dz: number): number => m(40) * m(30) * dz;
+
     // The spine is the picked edge itself: a 4x4 mm profile over a 20 mm edge.
     const a = rebuildDocument(oc, doc(m(20)));
-    let volA: number;
+    let pipeA: number;
     try {
       expect(a!.isValid()).toBe(true);
-      volA = solidVolume(oc, a!);
-      expect(volA).toBeCloseTo(m(4) * m(4) * m(20), 9);
+      expect(bodyCount(oc, a!), "box + pipe as two separate bodies").toBe(2);
+      pipeA = solidVolume(oc, a!) - boxVol(m(20));
+      expect(pipeA).toBeCloseTo(m(4) * m(4) * m(20), 9);
     } finally {
       a!.delete();
     }
@@ -1582,8 +1723,9 @@ describe("CAD Studio rebuild (SPEC-5 M0.4)", () => {
     const b = rebuildDocument(oc, doc(m(40)));
     try {
       expect(b!.isValid()).toBe(true);
-      expect(solidVolume(oc, b!)).toBeCloseTo(m(4) * m(4) * m(40), 9);
-      expect(solidVolume(oc, b!)).toBeGreaterThan(volA * 1.9);
+      const pipeB = solidVolume(oc, b!) - boxVol(m(40));
+      expect(pipeB).toBeCloseTo(m(4) * m(4) * m(40), 9);
+      expect(pipeB).toBeGreaterThan(pipeA * 1.9);
     } finally {
       b!.delete();
     }

@@ -33,6 +33,7 @@ import {
   makeSphere,
   makeCone,
   makeTorus,
+  makeCompound,
   type AxisPlacement,
   mirror,
   offsetPlane,
@@ -168,19 +169,45 @@ function fusePatternCopies(oc: Occt, copies: readonly Solid[], featureId: string
 }
 
 /**
+ * "New body" (§2.4): keep everything built so far and add `fresh` alongside it as
+ * a SEPARATE body, instead of destroying the prior geometry.
+ *
+ * This is the whole of §2.4's user-visible defect: `op: "new"` used to install the
+ * fresh solid over the accumulator, and the accumulator's `replace()` deletes what
+ * it replaces — so "New body" deleted your part. A compound keeps both: no boolean
+ * runs, so nothing is welded and each body keeps its own faces, edges and volume,
+ * while the rest of the pipeline still sees one `Solid` (tessellation, booleans,
+ * dress-up, mass properties and STEP/IGES/glTF export all accept a compound —
+ * verified against real OCCT, not assumed).
+ *
+ * Consumes `fresh` (the compound holds its own reference to its shape). `prior`
+ * stays owned by the caller — the accumulator's `replace()` frees it, which is
+ * safe for the same reason: OCCT shapes are refcounted, so the compound outlives
+ * the wrapper it was built from.
+ */
+function newBody(oc: Occt, prior: Solid, fresh: Solid): Solid {
+  try {
+    return makeCompound(oc, [prior, fresh]);
+  } finally {
+    fresh.delete();
+  }
+}
+
+/**
  * Combine a freshly-built primitive with the current body per `data.op` (§4.11).
  *
  * Mirrors the extrude convention — join-by-default once a body exists, explicit
- * `"new"` replaces — and adds `"cut"`/`"intersect"`, which is what makes the round
- * primitives immediately useful: subtracting a cylinder IS a bore, with the
- * sketcher (§2.6/§2.7) out of the loop entirely.
+ * `"new"` starts a SEPARATE body (§2.4) — and adds `"cut"`/`"intersect"`, which is
+ * what makes the round primitives immediately useful: subtracting a cylinder IS a
+ * bore, with the sketcher (§2.6/§2.7) out of the loop entirely.
  *
  * Takes ownership of `tool`: it is always freed, and the returned solid is the
  * one the caller should install.
  */
 function combinePrimitive(oc: Occt, current: Solid | null, tool: Solid, f: EditorFeature): Solid {
   const op = f.data?.["op"];
-  if (!current || op === "new") return tool;
+  if (!current) return tool;
+  if (op === "new") return newBody(oc, current, tool);
   try {
     const r =
       op === "cut"
@@ -531,7 +558,8 @@ function evaluateDocument(oc: Occt, doc: CadDocument, isolate: boolean): Isolate
               pad.delete();
             }
           } else {
-            replace(pad);
+            // §2.4: `op:"new"` keeps the prior geometry as a SEPARATE body.
+            replace(solid ? newBody(oc, solid, pad) : pad);
           }
         }
         break;
@@ -597,7 +625,8 @@ function evaluateDocument(oc: Occt, doc: CadDocument, isolate: boolean): Isolate
             body.delete();
           }
         } else {
-          replace(body);
+          // §2.4: `op:"new"` keeps the prior geometry as a SEPARATE body.
+          replace(solid ? newBody(oc, solid, body) : body);
         }
         break;
       }
@@ -650,7 +679,8 @@ function evaluateDocument(oc: Occt, doc: CadDocument, isolate: boolean): Isolate
               body.delete();
             }
           } else {
-            replace(body);
+            // §2.4: `op:"new"` keeps the prior geometry as a SEPARATE body.
+            replace(solid ? newBody(oc, solid, body) : body);
           }
         }
         break;
@@ -734,7 +764,8 @@ function evaluateDocument(oc: Occt, doc: CadDocument, isolate: boolean): Isolate
               body.delete();
             }
           } else {
-            replace(body);
+            // §2.4: `op:"new"` keeps the prior geometry as a SEPARATE body.
+            replace(solid ? newBody(oc, solid, body) : body);
           }
         }
         break;

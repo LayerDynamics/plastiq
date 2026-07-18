@@ -76,3 +76,37 @@ export class Solid {
     return { min, max };
   }
 }
+
+/**
+ * Assemble several solids into ONE multi-body shape (a `TopoDS_Compound`).
+ *
+ * This is the representation a MULTI-BODY document needs (§2.4): the bodies stay
+ * separate — no boolean runs, so nothing is welded and each keeps its own faces,
+ * edges and volume — while the rest of the kernel still sees a single
+ * {@link Solid}. That is what makes it a drop-in for the rebuild accumulator:
+ * `Solid` wraps a generic `TopoDS_Shape`, and volume/bbox/validity/tessellation/
+ * booleans/dress-up/STEP export all accept a compound (measured, not assumed).
+ *
+ * Contrast with `unionAll`, which FUSES its inputs into one body — correct for a
+ * pattern that should become a single solid, wrong for "new body".
+ *
+ * The inputs are NOT consumed: the compound holds its own references to their
+ * underlying (refcounted) shapes, so the caller still owns and frees each input,
+ * and the compound stays valid afterwards. A single input yields a compound
+ * wrapping just that body, so callers get uniform ownership either way.
+ */
+export function makeCompound(oc: Occt, solids: readonly Solid[]): Solid {
+  if (solids.length === 0) throw new Error("makeCompound: no solids to assemble");
+  const builder = new oc.BRep_Builder();
+  const compound = new oc.TopoDS_Compound();
+  try {
+    builder.MakeCompound(compound);
+    for (const s of solids) builder.Add(compound, s.shape);
+  } catch (e) {
+    compound.delete();
+    throw e;
+  } finally {
+    builder.delete();
+  }
+  return new Solid(oc, compound);
+}

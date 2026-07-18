@@ -17,7 +17,7 @@ export const CAD_KERNEL_VERSION = "0.1.0" as const;
 export { initOcct, type Occt } from "./oc/init.js";
 export { describeOcctError, isRawOcctFailure } from "./oc/error.js";
 export { mm, cm, m, inch, deg, rad, toMm, toDeg } from "./unit/index.js";
-export { Solid } from "./solid/solid.js";
+export { Solid, makeCompound } from "./solid/solid.js";
 export {
   makeBox,
   makeBoxAt,
