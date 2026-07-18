@@ -48,6 +48,15 @@ mainBuild:
     - symbol: gp_Pln
     - symbol: gp_Circ
     - symbol: gp_Trsf
+    # Quaternion rotations (§2.11.2). gp_Quaternion appeared in the trimmed .d.ts
+    # only as a PARAMETER/RETURN type (gp_Trsf.SetRotation_2 / SetTransformation_3
+    # / GetRotation_2) with no constructor, so the whole quaternion API on gp_Trsf
+    # was unreachable and transformRigid() had to hand-build a rotation matrix for
+    # SetValues. Poses are quaternions end-to-end everywhere else in the product
+    # (solver ↔ three.js ↔ SimManifest ↔ .assy), so the kernel boundary was the one
+    # place that had to convert. Binding it lets that boundary speak quaternions:
+    #   new oc.gp_Quaternion_2(x, y, z, w)  →  trsf.SetRotation_2(q)
+    - symbol: gp_Quaternion
     # Primitives + extrude/revolve (solid/primitives.ts, action/extrude.ts, revolve.ts)
     #
     # Box was long the ONLY primitive (§4.11 P1), which made the sketcher a single
@@ -131,6 +140,20 @@ mainBuild:
     - symbol: TopoDS_Edge
     - symbol: TopoDS_Wire
     - symbol: TopoDS_Vertex
+    # Compound assembly (§2.11.2). TopoDS_Compound appeared in the trimmed .d.ts
+    # only as the RETURN type of TopoDS.Compound_1 (a downcast helper) — it was not
+    # constructible, and the builder that fills a compound was absent entirely, so
+    # a multi-body shape could not be assembled at all. That forced assembly export
+    # through repeated STEPControl_Writer.Transfer / IGESControl_Writer.AddShape.
+    # That route is still the right one for interchange FILES (it keeps per-body
+    # identity, where fusing would weld mated parts into one solid), but a real
+    # compound is the correct in-memory representation of a multi-body result and
+    # is what any future multi-body op (pattern-as-compound, assembly booleans,
+    # multi-solid tessellation) needs. Binding the pair makes it available:
+    #   BRep_Builder.MakeCompound(c) → Add(c, shape) …  (TopoDS_Builder is its base)
+    - symbol: TopoDS_Compound
+    - symbol: TopoDS_Builder # base of BRep_Builder — MakeCompound/Add live here
+    - symbol: BRep_Builder
     - symbol: TopLoc_Location
     - symbol: TopTools_ListOfShape
     - symbol: TopTools_IndexedDataMapOfShapeListOfShape
@@ -217,12 +240,20 @@ mainBuild:
     - symbol: Handle_Geom_BoundedCurve
     - symbol: Handle_Geom_TrimmedCurve
     - symbol: Handle_Geom_BSplineCurve
-    # Exception decoding (oc/error.ts). OCCT throws Standard_Failure; with the
-    # class UNBOUND it unwinds to JS as a raw pointer (a plain number) with no
-    # readable text, so a failed fillet/revolve/sweep can only be reported
-    # generically. Binding it lets describeOcctError() read GetMessageString()
-    # and surface OCCT's own diagnosis. Takes effect only after `just cad-occt`
-    # regenerates vendor/occt/ — until then oc/error.ts degrades honestly.
+    # Exception decoding (oc/error.ts). OCCT throws Standard_Failure, which
+    # unwinds to JS as a raw pointer (a plain number) with no readable text, so a
+    # failed fillet/revolve/sweep can only be reported generically.
+    #
+    # CORRECTION (2026-07-18, measured): binding this class was expected to let
+    # describeOcctError() read GetMessageString() — it does NOT. After the rebuild
+    # that added it, an OCCT throw STILL arrives as a raw pointer: it is not an
+    # embind-wrapped Standard_Failure, `instanceof` is false, and no
+    # `___cxa_begin_catch` is exported to adjust the pointer with. Binding makes a
+    # class constructible; it does not change how a C++ throw crosses into JS.
+    # The remaining route is `-sEXPORT_EXCEPTION_HANDLING_HELPERS`, i.e. an
+    # emccFlags change (see the note at the bottom of this file), not a symbol.
+    # Kept bound — it costs little, the class is legitimately usable, and
+    # oc/bindings.test.ts pins the measured limitation so this is not retried.
     - symbol: Standard_Failure
 
 # emccFlags is intentionally OMITTED so the builder's known-good DEFAULTS apply.

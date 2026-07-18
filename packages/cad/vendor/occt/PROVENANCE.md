@@ -25,15 +25,22 @@ just cad-occt   # docker run donalffons/opencascade.js:<pinned> occt.build.yml
 
 Requires Docker with **≥ ~12 GB memory** — the final link does monolithic LTO
 over the whole OCCT object tree and OOMs on the 8 GB default (it ran here on amd64
-under QEMU emulation on Apple Silicon). Output (`plastiq-occt.js/.wasm/.d.ts`) is
-written to `packages/cad/`; move it here, overwriting these files.
+under QEMU emulation on Apple Silicon).
+
+The recipe is fully automated: it copies `occt.build.yml` into the gitignored
+staging dir `packages/cad/build/occt/`, runs the builder there (the image writes
+to its own working directory, so mounting `packages/cad` directly would litter
+the package root), and copies `plastiq-occt.{js,wasm,d.ts}` into THIS directory,
+overwriting these files. Commit the result, then run
+`npx vitest run packages/cad/src/oc/bindings.test.ts` to confirm the new trim
+still binds every required symbol.
 
 ## The symbol list (occt.build.yml) — three layers
 
 `occt.build.yml` lists every symbol that must be bound. It was derived and then
-**verified by running the full test suite against the trimmed wasm** (1474
-unit/integration + 69 browser E2E as of 2026-07-03), which surfaces any missing
-symbol as an embind `UnboundTypeError`. Three layers are required:
+**verified by running the full test suite against the trimmed wasm** (2080
+unit/integration as of 2026-07-18, plus the browser E2E), which surfaces any
+missing symbol as an embind `UnboundTypeError`. Three layers are required:
 
 1. **Leaf API classes/enums** the kernel calls via `oc.X` or holds as a return
    value (`BRepPrimAPI_MakeBox`, `gp_Pnt`, `Poly_Triangulation`, the STEP/IGES

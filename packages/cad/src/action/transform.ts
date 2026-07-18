@@ -36,15 +36,17 @@ function applied(oc: Occt, shape: TopoDS_Shape, trsf: gp_Trsf): TopoDS_Shape {
  * (or a body placement) carries, so posing a local-frame solid into world space
  * is a single call rather than a chain of axis-angle rotations.
  *
- * gp_Trsf's quaternion setters (`SetRotation_2` / `SetTransformation_3`) are
- * unusable here: `gp_Quaternion` binds only as a parameter/return TYPE in the
- * trimmed wasm — there is no constructor to call (pinned by
- * oc/bindings.test.ts). `SetValues` takes the general 3×4 affine instead, so
- * the rotation matrix is built from the quaternion here and handed over whole.
+ * Poses are quaternions end-to-end across the product (mate solver ↔ three.js ↔
+ * SimManifest ↔ `.assy`), and this hands that quaternion straight to OCCT:
+ * `SetRotation_2` takes a gp_Quaternion, `SetTranslationPart` adds the offset.
+ * (`gp_Quaternion` was bound for exactly this — it previously existed in the
+ * trimmed wasm only as a parameter/return TYPE with no constructor, which made
+ * the whole quaternion API on gp_Trsf unreachable and forced a hand-built
+ * rotation matrix through `SetValues`.)
  *
- * The quaternion is normalized first: `SetValues` checks the 3×3 block is
- * orthogonal within tolerance and raises Standard_ConstructionError on drift,
- * and a solver-produced pose can accumulate a little.
+ * The quaternion is normalized first: a non-unit quaternion yields a rotation
+ * matrix that also SCALES, silently resizing the body, and a solver-produced
+ * pose can drift a little from unit length.
  */
 export function transformRigid(
   oc: Occt,
@@ -56,22 +58,27 @@ export function transformRigid(
   if (!Number.isFinite(n) || n === 0) {
     throw new Error("transformRigid: orientation must be a non-zero quaternion");
   }
-  const x = orientation[0] / n;
-  const y = orientation[1] / n;
-  const z = orientation[2] / n;
-  const w = orientation[3] / n;
-  // Standard quaternion → rotation matrix (column-vector convention, matching
-  // the app's quatRotate and three.js).
-  const trsf = new oc.gp_Trsf_1();
+  const trash: Array<{ delete(): void }> = [];
   try {
-    trsf.SetValues(
-      1 - 2 * (y * y + z * z), 2 * (x * y - w * z),     2 * (x * z + w * y),     translation[0],
-      2 * (x * y + w * z),     1 - 2 * (x * x + z * z), 2 * (y * z - w * x),     translation[1],
-      2 * (x * z - w * y),     2 * (y * z + w * x),     1 - 2 * (x * x + y * y), translation[2],
+    const q = new oc.gp_Quaternion_2(
+      orientation[0] / n,
+      orientation[1] / n,
+      orientation[2] / n,
+      orientation[3] / n,
     );
+    trash.push(q);
+    const trsf = new oc.gp_Trsf_1();
+    trash.push(trsf);
+    // Rotation about the local origin, then the translation: SetRotation_2 makes
+    // the transform a PURE rotation (zero translation part), which
+    // SetTranslationPart then fills in — so the composite is p ↦ R·p + T.
+    trsf.SetRotation_2(q);
+    const v = new oc.gp_Vec_4(translation[0], translation[1], translation[2]);
+    trash.push(v);
+    trsf.SetTranslationPart(v);
     return new Solid(oc, applied(oc, solid.shape, trsf));
   } finally {
-    trsf.delete();
+    for (let i = trash.length - 1; i >= 0; i--) trash[i]!.delete();
   }
 }
 

@@ -104,9 +104,10 @@ export function placementParams(p: Placement): Record<string, number> {
   return { ...p };
 }
 
-/** Read a placement from a `placement` feature's params, defaulting to identity. */
-export function placementFromFeature(feature: EditorFeature | undefined): Placement {
-  const p = feature?.params ?? {};
+/** Read a placement out of a flat param record — the inverse of {@link placementParams},
+ * defaulting every missing component to identity. */
+export function placementFromParams(params: Record<string, number> | undefined): Placement {
+  const p = params ?? {};
   return {
     tx: p["tx"] ?? 0,
     ty: p["ty"] ?? 0,
@@ -115,6 +116,11 @@ export function placementFromFeature(feature: EditorFeature | undefined): Placem
     ry: p["ry"] ?? 0,
     rz: p["rz"] ?? 0,
   };
+}
+
+/** Read a placement from a `placement` feature's params, defaulting to identity. */
+export function placementFromFeature(feature: EditorFeature | undefined): Placement {
+  return placementFromParams(feature?.params);
 }
 
 /** Find the single placement feature in a feature list, if any. */

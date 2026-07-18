@@ -116,6 +116,32 @@ describe("CAD Studio store — placement (FR-11 gizmo write-back)", () => {
     expect(placements()[0]!.params).toMatchObject({ tx: 0.02, rz: 1 });
   });
 
+  it("an identity write-back creates NO feature (the gizmo fires on every mouse-up)", () => {
+    s().addFeature({ type: "box", params: { dx: 0.06, dy: 0.04, dz: 0.03 } });
+    const pastBefore = s().past.length;
+    const seqBefore = s().nextSeq;
+
+    // A click that moved nothing: the gizmo still writes back an identity pose.
+    s().upsertPlacement({ tx: 0, ty: 0, tz: 0, rx: 0, ry: 0, rz: 0 });
+    expect(s().features.filter((f) => f.type === "placement")).toHaveLength(0);
+    expect(s().past).toHaveLength(pastBefore); // no undo step that undoes nothing
+    expect(s().nextSeq).toBe(seqBefore); // no id burned
+
+    // A real move still creates it.
+    s().upsertPlacement({ tx: 0, ty: 0, tz: 0.5, rx: 0, ry: 0, rz: 0 });
+    expect(s().features.filter((f) => f.type === "placement")).toHaveLength(1);
+  });
+
+  it("returning an EXISTING placement to the origin is a real change (still written)", () => {
+    s().addFeature({ type: "box", params: { dx: 0.06, dy: 0.04, dz: 0.03 } });
+    s().upsertPlacement({ tx: 0.02, ty: 0, tz: 0, rx: 0, ry: 0, rz: 0 });
+    // Dragging the body back to the origin must zero the feature, not be skipped.
+    s().upsertPlacement({ tx: 0, ty: 0, tz: 0, rx: 0, ry: 0, rz: 0 });
+    const placements = s().features.filter((f) => f.type === "placement");
+    expect(placements).toHaveLength(1);
+    expect(placements[0]!.params).toMatchObject({ tx: 0 });
+  });
+
   it("setGizmoMode switches the transform-gizmo mode", () => {
     expect(s().gizmoMode).toBe("translate");
     s().setGizmoMode("rotate");

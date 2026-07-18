@@ -12,7 +12,9 @@ import { beforeAll, describe, expect, it } from "vitest";
 import { initOcct, type Occt } from "./init.js";
 import { makeBox, makeCone, makeCylinder, makeSphere, makeTorus } from "../solid/primitives.js";
 import { shapeEnums } from "../mesh/normals.js";
-import { transformRigid } from "../action/transform.js";
+import { transformRigid, translate } from "../action/transform.js";
+import { Solid } from "../solid/solid.js";
+import { describeOcctError, isRawOcctFailure } from "./error.js";
 import { massProperties } from "../lower/massprops.js";
 
 let oc: Occt;
@@ -121,27 +123,61 @@ describe("trimmed-wasm bindings the kernel requires", () => {
   });
 
   /**
-   * §2.11.2 — assembly export cannot build a compound, and cannot pose by
-   * quaternion. Both facts are pinned here so the export path is not "improved"
-   * back into a call that doesn't exist:
-   *   • `BRep_Builder`/`TopoDS_Builder` are absent, so an empty TopoDS_Compound
-   *     cannot be built and filled — multi-body export goes through repeated
-   *     STEPControl_Writer.Transfer / IGESControl_Writer.AddShape instead (which
-   *     is also the semantically right answer: fusing bodies would WELD mated
-   *     parts into one solid).
-   *   • `gp_Quaternion` binds only as a parameter/return TYPE, so gp_Trsf's
-   *     SetRotation_2/SetTransformation_3 are unreachable — transformRigid()
-   *     builds the rotation matrix itself and calls SetValues.
+   * §2.11.2 — the multi-body + quaternion surface. All three were MISSING from
+   * the trim until the 2026-07-18 rebuild: `gp_Quaternion` and `TopoDS_Compound`
+   * existed only as parameter/return TYPES (no constructor), and the builder that
+   * fills a compound was absent entirely, so gp_Trsf's whole quaternion API was
+   * unreachable and a multi-body shape could not be assembled at all.
+   *
+   * NOTE this does NOT change how assemblies are EXPORTED: interchange files
+   * still go through repeated STEPControl_Writer.Transfer / IGESControl_Writer
+   * .AddShape, which keeps each body's identity. Fusing into one shape would
+   * WELD mated parts into a single solid — a compound is the right in-memory
+   * representation, not a substitute for per-body transfer.
    */
-  it("has no compound builder and no constructible gp_Quaternion (§2.11.2 export route)", () => {
-    expect(oc.BRep_Builder).toBeUndefined();
-    expect(oc.TopoDS_Builder).toBeUndefined();
-    expect(oc.gp_Quaternion).toBeUndefined();
-    // The route that IS available: a general 3×4 affine on gp_Trsf.
+  it("binds a constructible gp_Quaternion + compound builder (§2.11.2)", () => {
+    // Quaternion → gp_Trsf, the route transformRigid() takes.
+    const q = new oc.gp_Quaternion_2(0, 0, Math.SQRT1_2, Math.SQRT1_2);
     const trsf = new oc.gp_Trsf_1();
-    expect(typeof trsf.SetValues).toBe("function");
+    trsf.SetRotation_2(q);
+    // Rz(90°) maps +X to +Y — proves the quaternion actually reached the matrix.
+    const p = new oc.gp_Pnt_3(1, 0, 0);
+    p.Transform(trsf);
+    expect(p.X()).toBeCloseTo(0, 9);
+    expect(p.Y()).toBeCloseTo(1, 9);
+    p.delete();
     trsf.delete();
-    // ...and accumulating writers for multi-body files.
+    q.delete();
+
+    // A real compound: build one, add two disjoint boxes, and confirm the
+    // assembled shape carries both (volume sums, and it explores as 2 solids).
+    const a = makeBox(oc, 0.02, 0.02, 0.02);
+    const b = translate(oc, a, [0.1, 0, 0]);
+    const builder = new oc.BRep_Builder();
+    const compound = new oc.TopoDS_Compound();
+    builder.MakeCompound(compound);
+    builder.Add(compound, a.shape);
+    builder.Add(compound, b.shape);
+    const assembled = new Solid(oc, compound);
+    try {
+      expect(massProperties(oc, assembled, 1).volume).toBeCloseTo(2 * 0.02 ** 3, 12);
+      const S = shapeEnums(oc);
+      const exp = new oc.TopExp_Explorer_2(assembled.shape, S.TopAbs_SOLID, S.TopAbs_SHAPE);
+      let solids = 0;
+      while (exp.More()) {
+        solids++;
+        exp.Next();
+      }
+      exp.delete();
+      expect(solids, "the compound holds both bodies, unwelded").toBe(2);
+    } finally {
+      assembled.delete(); // owns `compound`
+      builder.delete();
+      b.delete();
+      a.delete();
+    }
+
+    // The accumulating writers the export path actually uses stay available.
     const step = new oc.STEPControl_Writer_1();
     expect(typeof step.Transfer).toBe("function");
     step.delete();
@@ -150,7 +186,7 @@ describe("trimmed-wasm bindings the kernel requires", () => {
     iges.delete();
   });
 
-  it("transformRigid poses a solid by quaternion + translation (SetValues route)", () => {
+  it("transformRigid poses a solid by quaternion + translation", () => {
     // A 90° rotation about +Z then a lift: the box's centroid must land at the
     // rotated-then-translated point, proving the hand-built matrix is correct.
     const box = makeBox(oc, 0.04, 0.03, 0.02); // corner at origin → centroid (0.02,0.015,0.01)
@@ -166,6 +202,39 @@ describe("trimmed-wasm bindings the kernel requires", () => {
       posed.delete();
       box.delete();
     }
+  });
+
+  /**
+   * §2.5 item 4 — the CORRECTION. `Standard_Failure` is now BOUND (2026-07-18
+   * rebuild), and binding it was expected to let describeOcctError() read OCCT's
+   * own text via GetMessageString(). Measured: it does NOT. An OCCT throw still
+   * unwinds to JS as a raw C++ exception POINTER (a plain number) — it is not an
+   * embind-wrapped Standard_Failure, `instanceof oc.Standard_Failure` is false,
+   * and the module exposes no `___cxa_begin_catch` to adjust the pointer with.
+   * Binding a class makes it constructible; it does not change how a C++ throw
+   * crosses into JS.
+   *
+   * The remaining route is Emscripten's `getExceptionMessage` helper, which needs
+   * `-sEXPORT_EXCEPTION_HANDLING_HELPERS` — and occt.build.yml documents that
+   * overriding `emccFlags` REPLACES the builder's known-good defaults. So
+   * describeOcctError() keeps degrading honestly, and this test pins WHY, so the
+   * "just bind Standard_Failure" idea is not tried a third time.
+   */
+  it("Standard_Failure binds but an OCCT throw still arrives as a raw pointer (§2.5)", () => {
+    expect(typeof oc.Standard_Failure).toBe("function"); // bound + constructible now
+    let caught: unknown;
+    try {
+      const d = new oc.gp_Dir_4(0, 0, 0); // null direction → Standard_ConstructionError
+      d.delete();
+    } catch (e) {
+      caught = e;
+    }
+    expect(typeof caught, "OCCT still throws a raw pointer, not an object").toBe("number");
+    expect(caught instanceof (oc.Standard_Failure as never)).toBe(false);
+    expect((caught as { GetMessageString?: unknown }).GetMessageString).toBeUndefined();
+    // …so the honest generic message is what the user gets.
+    expect(describeOcctError(caught)).toMatch(/geometry kernel rejected this operation/);
+    expect(isRawOcctFailure(caught)).toBe(true);
   });
 
   it("classifies a real face through BRepAdaptor_Surface.GetType() (the §2.1 keystone)", () => {

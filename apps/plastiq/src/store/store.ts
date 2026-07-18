@@ -32,6 +32,7 @@ import {
   type Workspace,
 } from "./types.js";
 import type { SectionAnalysis } from "../viewport/section.js";
+import { isIdentityPlacement, placementFromParams } from "../viewport/placement.js";
 import {
   DEFAULT_SIM_EXPERIMENT,
   type SimExperimentConfig,
@@ -549,6 +550,13 @@ export const useCadStore = create<CadStore>((set, get) => ({
           ),
         };
       }
+      // Nothing placed yet AND the pose is identity: the gizmo fires this on every
+      // mouse-up, including a click that moved nothing, so creating a feature here
+      // would put a no-op "Placement" in the tree, burn an undo step that undoes
+      // nothing visible, and persist/export a pose that says the part is where it
+      // already is. An EXISTING placement is still written above — returning a
+      // moved body to the origin is a real change.
+      if (isIdentityPlacement(placementFromParams(params))) return {};
       const seq = s.nextSeq;
       const feature: EditorFeature = {
         id: `f${seq}`,
