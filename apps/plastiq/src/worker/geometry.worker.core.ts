@@ -30,6 +30,7 @@ export function toTransfer(
   t: TaggedMesh,
   volume: number,
   com: [number, number, number],
+  bodyVolumes: number[] = [],
 ): TransferMesh {
   return {
     vertices: Float32Array.from(t.vertices),
@@ -46,6 +47,7 @@ export function toTransfer(
     vertexPositions: Float32Array.from(t.vertexPoints.flatMap((v) => [...v.position])),
     volume,
     com,
+    bodyVolumes,
   };
 }
 
@@ -220,7 +222,7 @@ export async function handleRequest(
     const { part, statuses } = buildDocumentIsolated(oc, req.doc, {
       linearDeflection: req.deflection,
     });
-    const mesh = part ? toTransfer(part.mesh, part.volume, part.com) : null;
+    const mesh = part ? toTransfer(part.mesh, part.volume, part.com, part.bodyVolumes) : null;
     const transfer: Transferable[] = mesh
       ? [
           mesh.vertices.buffer,

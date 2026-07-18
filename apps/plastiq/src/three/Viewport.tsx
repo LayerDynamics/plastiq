@@ -279,7 +279,7 @@ export function Viewport(): React.JSX.Element {
           }
           store.setMassProps(
             built && built.volume != null && built.com
-              ? { volume: built.volume, com: built.com }
+              ? { volume: built.volume, com: built.com, bodyVolumes: built.bodyVolumes ?? [] }
               : null,
           );
         }

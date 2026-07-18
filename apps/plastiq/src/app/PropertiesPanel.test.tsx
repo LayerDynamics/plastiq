@@ -15,6 +15,31 @@ beforeEach(() => {
 });
 afterEach(cleanup);
 
+describe("PropertiesPanel — multi-body readout (§2.4)", () => {
+  it("lists the body count and each body's volume once a document has more than one", () => {
+    useCadStore.setState({
+      massProps: { volume: 0.000022, com: [0, 0, 0], bodyVolumes: [0.000016, 0.000006] },
+    });
+    render(<PropertiesPanel />);
+    const bodies = screen.getByTestId("mp-bodies");
+    expect(bodies.textContent).toContain("2");
+    // Each body's own volume, in cm³ — the summed total alone cannot show this.
+    expect(bodies.textContent).toContain("16.00");
+    expect(bodies.textContent).toContain("6.00");
+    // The total stays the sum.
+    expect(screen.getByTestId("mp-volume").textContent).toContain("22.00");
+  });
+
+  it("stays hidden for a single-body document (no noise)", () => {
+    useCadStore.setState({
+      massProps: { volume: 0.000016, com: [0, 0, 0], bodyVolumes: [0.000016] },
+    });
+    render(<PropertiesPanel />);
+    expect(screen.queryByTestId("mp-bodies")).toBeNull();
+    expect(screen.getByTestId("mp-volume")).toBeTruthy();
+  });
+});
+
 describe("PropertiesPanel", () => {
   it("smoke: renders the feature editor for the selected feature", () => {
     render(<PropertiesPanel />);

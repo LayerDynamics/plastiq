@@ -121,7 +121,12 @@ export interface CadStore {
   selectionRefs: SelectionRefs;
   /** Volume + centroid of the current build (mass-properties readout), or null
    *  when the document has no geometry. Density-free; mass needs a material. */
-  massProps: { volume: number; com: [number, number, number] } | null;
+  massProps: {
+    volume: number;
+    com: [number, number, number];
+    /** Each body's own volume in m³ (§2.4). Length > 1 ⇒ a multi-body document. */
+    bodyVolumes: number[];
+  } | null;
   /** Section analysis (FR-14 / Fusion-style): clip plane cutting the model, or
    *  null when off. Axis fraction or face-derived plane + optional flip. */
   section: SectionAnalysis | null;
@@ -172,7 +177,9 @@ export interface CadStore {
   /** Replace the persistent-ref lookup for the current build (FR-16). */
   setSelectionRefs: (refs: SelectionRefs) => void;
   /** Publish the current build's volume + centroid (null when no geometry). */
-  setMassProps: (props: { volume: number; com: [number, number, number] } | null) => void;
+  setMassProps: (
+    props: { volume: number; com: [number, number, number]; bodyVolumes: number[] } | null,
+  ) => void;
   /** Enable/adjust the section analysis plane, or disable it (null) (FR-14). */
   setSection: (section: SectionAnalysis | null) => void;
   /** Set the exploded-view factor (0 = assembled) (FR-33). */

@@ -37,6 +37,10 @@ export interface TransferMesh {
   /** Solid volume in m³ — a mass property surfaced in the properties panel.
    *  Always set by a real build; optional so partial test fixtures need not. */
   volume?: number;
+  /** Each BODY's own volume in m³ (§2.4 multi-body): one entry for a plain
+   *  solid, N for a compound. Optional for the same reason as `volume` — partial
+   *  test fixtures need not supply it. */
+  bodyVolumes?: number[];
   /** Geometric centre of mass (centroid) in SI metres (same caveat as `volume`). */
   com?: Vec3;
 }

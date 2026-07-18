@@ -473,6 +473,20 @@ function MassPropertiesSection(): React.JSX.Element | null {
             {(massProps.volume * 1e6).toFixed(2)} cm³
           </dd>
         </div>
+        {massProps.bodyVolumes.length > 1 && (
+          // A multi-body document (§2.4 `op:"new"`) is otherwise indistinguishable
+          // from a single body here — the volume above is the SUM. List the count
+          // and each body's own volume so "new body" has visible confirmation.
+          <div className="flex items-start justify-between gap-2">
+            <dt className="text-[#789]">Bodies</dt>
+            <dd data-testid="mp-bodies" className="text-right tabular-nums text-[#cfe]">
+              {massProps.bodyVolumes.length}
+              <div className="text-[10px] text-[#789]">
+                {massProps.bodyVolumes.map((v) => (v * 1e6).toFixed(2)).join(" · ")} cm³
+              </div>
+            </dd>
+          </div>
+        )}
         <div className="flex items-center justify-between gap-2">
           <dt className="text-[#789]">Centroid</dt>
           <dd data-testid="mp-centroid" className="tabular-nums text-[#cfe]">

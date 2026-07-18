@@ -7,6 +7,7 @@
 
 import type { Occt } from "../oc/init.js";
 import type { TopoDS_Shape } from "opencascade.js";
+import { shapeEnums } from "../mesh/normals.js";
 
 export class Solid {
   /** True once {@link delete} has freed the shape — guards against a double-free. */
@@ -109,4 +110,35 @@ export function makeCompound(oc: Occt, solids: readonly Solid[]): Solid {
     builder.delete();
   }
   return new Solid(oc, compound);
+}
+
+/**
+ * The individual BODIES inside a shape, each as its own owned {@link Solid}.
+ *
+ * A plain solid yields one entry; a multi-body compound (§2.4 `op:"new"`) yields
+ * one per body, in the kernel's own exploration order. This is what lets the
+ * product report "2 bodies" and their separate volumes instead of only a summed
+ * total — a multi-body document is otherwise indistinguishable from a single
+ * body in every readout.
+ *
+ * The returned solids are INDEPENDENT handles the caller must delete; the input
+ * is untouched. A shape with no TopAbs_SOLID inside (e.g. a bare shell) yields
+ * an empty array rather than lying about its contents.
+ */
+export function bodiesOf(oc: Occt, solid: Solid): Solid[] {
+  const S = shapeEnums(oc);
+  const exp = new oc.TopExp_Explorer_2(solid.shape, S.TopAbs_SOLID, S.TopAbs_SHAPE);
+  const out: Solid[] = [];
+  try {
+    while (exp.More()) {
+      out.push(new Solid(oc, oc.TopoDS.Solid_1(exp.Current())));
+      exp.Next();
+    }
+  } catch (e) {
+    for (const b of out) b.delete();
+    throw e;
+  } finally {
+    exp.delete();
+  }
+  return out;
 }

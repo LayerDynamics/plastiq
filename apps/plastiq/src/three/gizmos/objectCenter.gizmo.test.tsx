@@ -18,7 +18,7 @@ describe("ObjectCenterGizmo (R3F scene graph)", () => {
   });
 
   it("renders a centroid marker mesh when a COM is present", async () => {
-    useCadStore.setState({ massProps: { volume: 0.001, com: [0.01, 0.02, 0.03] } });
+    useCadStore.setState({ massProps: { volume: 0.001, com: [0.01, 0.02, 0.03], bodyVolumes: [0.001] } });
     const r = await ReactThreeTestRenderer.create(<ObjectCenterGizmo />);
     expect(r.scene.findAllByType("Mesh").length).toBeGreaterThan(0);
     await r.unmount();

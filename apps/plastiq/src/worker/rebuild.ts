@@ -34,6 +34,7 @@ import {
   makeCone,
   makeTorus,
   makeCompound,
+  bodiesOf,
   type AxisPlacement,
   mirror,
   offsetPlane,
@@ -1191,10 +1192,24 @@ export function rebuildDocumentIsolated(oc: Occt, doc: CadDocument): IsolatedBui
  * (volume + centroid), read off the same build so the panel needs no rebuild. */
 export interface BuiltPart {
   mesh: TaggedMesh;
-  /** Solid volume in m³. */
+  /** Solid volume in m³ (summed across every body). */
   volume: number;
   /** Geometric centre of mass (centroid) in SI metres. */
   com: [number, number, number];
+  /** Each BODY's own volume in m³ (§2.4 multi-body). One entry for a plain
+   * solid, N for a compound — without this a two-body document is
+   * indistinguishable from a single body in every readout. */
+  bodyVolumes: number[];
+}
+
+/** Each body's own volume, freeing the temporary per-body handles (§2.4). */
+function perBodyVolumes(oc: Occt, solid: Solid): number[] {
+  const bodies = bodiesOf(oc, solid);
+  try {
+    return bodies.map((b) => b.volume());
+  } finally {
+    for (const b of bodies) b.delete();
+  }
 }
 
 /** Rebuild + tag the document AND read the solid's volume/centroid before it is
@@ -1208,7 +1223,12 @@ export function rebuildTaggedWithProps(
   if (!solid) return null;
   try {
     const mesh = tessellateTagged(oc, solid, opts);
-    return { mesh, volume: solid.volume(), com: solid.centreOfMass() };
+    return {
+      mesh,
+      volume: solid.volume(),
+      com: solid.centreOfMass(),
+      bodyVolumes: perBodyVolumes(oc, solid),
+    };
   } finally {
     solid.delete();
   }
@@ -1247,7 +1267,12 @@ export function buildDocumentIsolated(
   try {
     const mesh = tessellateTagged(oc, solid, opts);
     return {
-      part: { mesh, volume: solid.volume(), com: solid.centreOfMass() },
+      part: {
+        mesh,
+        volume: solid.volume(),
+        com: solid.centreOfMass(),
+        bodyVolumes: perBodyVolumes(oc, solid),
+      },
       statuses,
     };
   } catch (err) {
