@@ -416,9 +416,24 @@ function evaluateDocument(oc: Occt, doc: CadDocument, isolate: boolean): Isolate
   /** Build one feature into the accumulator. Throws on any failure. */
   function buildFeature(f: EditorFeature): void {
     switch (f.type) {
-      case "box":
-        replace(makeBox(oc, num(f, "dx"), num(f, "dy"), num(f, "dz")));
+      case "box": {
+        // Box goes through the SAME op contract as every other primitive (§2.4):
+        // join-by-default once a body exists, `cut`/`intersect` for the boolean
+        // ops, `new` for a separate body. It previously called `replace()`
+        // unconditionally, so a second box silently DESTROYED the first — §2.4's
+        // defect, surviving in the one primitive the default document seeds.
+        //
+        // It also honours an origin (ox/oy/oz) like the round primitives do, so a
+        // second box can actually be placed somewhere other than on top of the
+        // first; `makeBoxAt` is the corner-placed constructor.
+        const origin = primitivePlacement(f).origin ?? ([0, 0, 0] as Vec3);
+        const box =
+          origin[0] === 0 && origin[1] === 0 && origin[2] === 0
+            ? makeBox(oc, num(f, "dx"), num(f, "dy"), num(f, "dz"))
+            : makeBoxAt(oc, origin, num(f, "dx"), num(f, "dy"), num(f, "dz"));
+        replace(combinePrimitive(oc, currentSolid(), box, f));
         break;
+      }
       // Round primitives (§4.11). Box was the only primitive, which made the
       // sketcher a single point of failure for ALL round geometry.
       case "cylinder":

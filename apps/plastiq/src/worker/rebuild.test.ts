@@ -1491,6 +1491,137 @@ describe("CAD Studio rebuild (SPEC-5 M0.4)", () => {
       }
     });
 
+    it("MIGRATION: a doc saved under the old replace-semantics still resolves its downstream fillet", () => {
+      // The real migration question, MEASURED rather than reasoned about.
+      //
+      // Under the old semantics `op:"new"` DISCARDED the box, so a fillet after it
+      // was authored against the PAD ALONE and its EdgeRef was captured from that
+      // geometry. Under multi-body the same saved document rebuilds as
+      // compound(box, pad), so the fillet now resolves against BOTH bodies' edges.
+      // Does the stored ref still find the pad's edge?
+      const padOnly: CadDocument = {
+        features: [
+          {
+            id: "s1",
+            type: "sketch",
+            data: {
+              profile: loopProfile([
+                [m(10), m(10)],
+                [m(30), m(10)],
+                [m(30), m(30)],
+                [m(10), m(30)],
+              ]),
+              plane: { base: "XY", offset: m(10) },
+            },
+          },
+          { id: "e1", type: "extrude", deps: ["s1"], params: { height: m(15) } },
+        ],
+        params: {},
+      };
+      // The ref exactly as the app captures one: Viewport publishes selection refs
+      // as { faceNormals, midpoint } (three/Viewport.tsx), and the AI path does the
+      // same (ai/tools/inspectGeometry.ts) — so a stored ref carries a midpoint.
+      const padMesh = rebuildTagged(oc, padOnly, { linearDeflection: mm(0.5) })!;
+      const padEdge = padMesh.edges[0]!;
+      const storedRef = { faceNormals: padEdge.faceNormals, midpoint: padEdge.midpoint };
+
+      // The saved document, now rebuilt under multi-body semantics.
+      const migrated: CadDocument = {
+        features: [
+          { id: "f1", type: "box", params: { dx: m(40), dy: m(40), dz: m(10) } },
+          ...padOnly.features.map((f) =>
+            f.id === "e1" ? { ...f, data: { ...f.data, op: "new" } } : f,
+          ),
+          { id: "f3", type: "fillet", params: { radius: m(1) }, data: { edges: [storedRef] } },
+        ],
+        params: {},
+      };
+      const built = rebuildDocumentIsolated(oc, migrated);
+      const failed = built.statuses.filter((st) => st.status === "error");
+      // MEASURED: the midpoint disambiguates, so the stored ref still finds ITS
+      // edge even though the compound now offers the box's edges as candidates.
+      expect(failed, JSON.stringify(failed)).toHaveLength(0);
+      expect(built.solid).not.toBeNull();
+      try {
+        expect(bodyCount(oc, built.solid!)).toBe(2);
+        // The fillet ran on the pad: total is below the un-filleted sum, and the
+        // box's own volume is untouched.
+        const boxVol = m(40) * m(40) * m(10);
+        const padVol = m(20) * m(20) * m(15);
+        const total = solidVolume(oc, built.solid!);
+        expect(total).toBeLessThan(boxVol + padVol);
+        expect(total).toBeGreaterThan(boxVol + padVol * 0.9);
+      } finally {
+        built.solid!.delete();
+      }
+    });
+
+    it("MIGRATION: a midpoint-LESS ref is the residual risk — measured, not assumed", () => {
+      // The EdgeRef schema makes `midpoint` optional (ai/tools/schema.ts), and
+      // resolveEdgeRef falls back to pure normal-agreement scoring without it
+      // (mesh/resolve.ts). A second body contributes edges with IDENTICAL adjacent
+      // normals (both are axis-aligned boxes), so the match is genuinely ambiguous
+      // and "first best score wins" decides it. This measures what actually
+      // happens rather than asserting a guess either way.
+      // Deliberately ADVERSARIAL: a second BOX, axis-aligned exactly like the
+      // first, so it offers edges whose adjacent-face normals are IDENTICAL to the
+      // target's. A curved second body would dodge the ambiguity entirely.
+      const twoBoxDoc: CadDocument = {
+        features: [
+          { id: "f1", type: "box", params: { dx: m(40), dy: m(40), dz: m(10) } },
+          {
+            id: "f2",
+            type: "box",
+            params: { dx: m(40), dy: m(40), dz: m(10), ox: m(100), oy: 0, oz: 0 },
+            data: { op: "new" },
+          },
+        ],
+        params: {},
+      };
+      const single = rebuildTagged(
+        oc,
+        { features: [twoBoxDoc.features[0]!], params: {} },
+        { linearDeflection: mm(0.5) },
+      )!;
+      // A ref with NO midpoint, captured against the box alone.
+      const bare = { faceNormals: single.edges[0]!.faceNormals };
+
+      const built = rebuildDocumentIsolated(oc, {
+        features: [
+          ...twoBoxDoc.features,
+          { id: "f3", type: "fillet", params: { radius: m(1) }, data: { edges: [bare] } },
+        ],
+        params: {},
+      });
+      const failed = built.statuses.filter((st) => st.status === "error");
+      expect(failed, JSON.stringify(failed)).toHaveLength(0);
+      expect(built.solid).not.toBeNull();
+      try {
+        expect(bodyCount(oc, built.solid!)).toBe(2);
+        // MEASURED OUTCOME: the fillet resolves and rounds exactly ONE edge — it
+        // does not error and does not round both bodies. Which of the two
+        // identically-oriented edges wins is decided by explorer order, so a
+        // midpoint-less ref is genuinely ambiguous across a multi-body document:
+        // the material removed is one edge's worth, but WHICH body loses it is
+        // not pinned by the ref. Real picks always carry a midpoint (Viewport /
+        // inspectGeometry), which is what makes them safe.
+        const twoBoxVol = 2 * m(40) * m(40) * m(10);
+        const removed = twoBoxVol - solidVolume(oc, built.solid!);
+        expect(removed).toBeGreaterThan(0);
+        // A 1 mm fillet along ONE edge removes ~(1 - π/4)·r²·L. Length comes from
+        // the picked edge's own polyline, so the assertion holds whichever edge
+        // the tessellation happens to list first.
+        const pts = single.edges[0]!.positions;
+        let len = 0;
+        for (let i = 3; i < pts.length; i += 3) {
+          len += Math.hypot(pts[i]! - pts[i - 3]!, pts[i + 1]! - pts[i - 2]!, pts[i + 2]! - pts[i - 1]!);
+        }
+        expect(removed).toBeCloseTo((1 - Math.PI / 4) * m(1) ** 2 * len, 9);
+      } finally {
+        built.solid!.delete();
+      }
+    });
+
     it("a later feature dresses an edge of the SECOND body (per-body edges stay addressable)", () => {
       // Pick a real edge belonging to the far cylinder (x ≈ 100 mm), then fillet
       // it: dress-up must resolve and operate through the compound, and the
