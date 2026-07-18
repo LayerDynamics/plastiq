@@ -7,15 +7,15 @@
 import {
   decomposerReady,
   describeOcctError,
-  exportGltf,
-  exportIges,
-  exportStep,
+  exportGltfAssembly,
+  exportIgesAssembly,
+  exportStepAssembly,
   faceDatumPlane,
   initDecomposer,
   resolveFaceRef,
-  rotate,
-  translate,
+  transformRigid,
   type Occt,
+  type Placement,
   type Solid,
   type TaggedMesh,
 } from "@plastiq/cad";
@@ -23,12 +23,7 @@ import { buildDocumentIsolated, rebuildDocument } from "./rebuild.js";
 import { lowerAssembly } from "./lower.js";
 import type { AssemblyModel } from "../assembly/model.js";
 import type { CadDocument } from "../store/types.js";
-import {
-  findPlacement,
-  isIdentityPlacement,
-  placementFromFeature,
-  placementPoseOf,
-} from "../viewport/placement.js";
+import { placementPoseOf } from "../viewport/placement.js";
 import type { TransferMesh, WorkerRequest, WorkerResponse } from "./protocol.js";
 
 export function toTransfer(
@@ -79,32 +74,43 @@ export function effectiveAssembly(doc: CadDocument): AssemblyModel {
 }
 
 /**
- * Bake the document's placement pose into the rebuilt solid for file export
- * (§2.11.1 WYSIWYG): the exported body sits exactly where the viewport shows
- * it. The intrinsic-XYZ placement equals fixed-frame rotations about Z, then
- * Y, then X — all about the part's local origin — followed by the translation.
- * Consumes (deletes) the input whenever a transform applies; returns it
- * untouched for an identity placement. A kernel failure mid-chain frees the
- * newest solid before rethrowing, so nothing leaks.
+ * The world poses a document's geometry occupies — the ONE source both Simulate
+ * and file export read (§2.11.1/§2.11.2), so the two can never disagree about
+ * where the part is. Exactly `effectiveAssembly`'s instance poses: N instance
+ * poses for an assembly, or a single body0 at the document's placement for a
+ * bare part. (Matching the viewport: when instances exist the base part's
+ * placement is not applied — the instances carry the poses.)
  */
-export function posePlacementForExport(oc: Occt, solid: Solid, doc: CadDocument): Solid {
-  const p = placementFromFeature(findPlacement(doc.features));
-  if (isIdentityPlacement(p)) return solid;
-  let s = solid;
-  const step = (next: Solid): void => {
-    s.delete();
-    s = next;
-  };
+export function exportPoses(doc: CadDocument): Placement[] {
+  return effectiveAssembly(doc).instances.map((i) => ({
+    position: i.pose.position,
+    orientation: i.pose.orientation,
+  }));
+}
+
+/**
+ * Pose the rebuilt (local-frame) solid into each world placement — the bodies a
+ * file export ships (§2.11.2). Each is an independent copy, so a 3-instance
+ * mated assembly exports as 3 posed bodies instead of one unposed body.
+ * Identity placements copy the solid too, so every returned solid is owned by
+ * the caller and freed uniformly. A kernel failure mid-loop frees the copies
+ * made so far before rethrowing — nothing leaks in the long-lived worker.
+ */
+export function poseSolidsForExport(
+  oc: Occt,
+  solid: Solid,
+  placements: readonly Placement[],
+): Solid[] {
+  const out: Solid[] = [];
   try {
-    if (p.rz !== 0) step(rotate(oc, s, [0, 0, 0], [0, 0, 1], p.rz));
-    if (p.ry !== 0) step(rotate(oc, s, [0, 0, 0], [0, 1, 0], p.ry));
-    if (p.rx !== 0) step(rotate(oc, s, [0, 0, 0], [1, 0, 0], p.rx));
-    if (p.tx !== 0 || p.ty !== 0 || p.tz !== 0) step(translate(oc, s, [p.tx, p.ty, p.tz]));
+    for (const p of placements) {
+      out.push(transformRigid(oc, solid, p.orientation, p.position));
+    }
   } catch (e) {
-    s.delete();
+    for (const s of out) s.delete();
     throw e;
   }
-  return s;
+  return out;
 }
 
 /**
@@ -142,21 +148,35 @@ export async function handleRequest(
     if (req.op === "export") {
       const built = rebuildDocument(oc, req.doc);
       if (!built) throw new Error("export: the document has no geometry");
-      // WYSIWYG (§2.11.1): the file carries the part AT its placement pose.
-      const solid = posePlacementForExport(oc, built, req.doc);
+      // WYSIWYG (§2.11.1/§2.11.2): the file carries EVERY body the viewport
+      // shows, each at its world pose — N assembly instances, or the single
+      // placement-posed part.
+      const placements = exportPoses(req.doc);
+      // B-rep formats need real posed geometry (one solid per body); glTF
+      // instances one shared tessellation through per-node transforms instead,
+      // so it poses from `placements` directly and needs no posed copies.
+      const posed = req.format === "gltf" ? [] : poseSolidsForExport(oc, built, placements);
       try {
         const content =
           req.format === "step"
-            ? exportStep(oc, solid)
+            ? exportStepAssembly(oc, posed)
             : req.format === "iges"
-              ? exportIges(oc, solid)
-              : exportGltf(oc, solid, { linearDeflection: 0.0005 });
+              ? exportIgesAssembly(oc, posed)
+              : exportGltfAssembly(oc, built, placements, { linearDeflection: 0.0005 });
         return {
-          response: { id: req.id, ok: true, op: "export", format: req.format, content },
+          response: {
+            id: req.id,
+            ok: true,
+            op: "export",
+            format: req.format,
+            content,
+            bodyCount: placements.length,
+          },
           transfer: [],
         };
       } finally {
-        solid.delete();
+        for (const s of posed) s.delete();
+        built.delete();
       }
     }
     if (req.op === "facePlane") {

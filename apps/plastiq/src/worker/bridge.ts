@@ -31,6 +31,13 @@ export interface LowerOutcome {
   localCom: [number, number, number];
 }
 
+/** An interchange export: the file text, and how many bodies it carries
+ * (assembly instances, or 1 for a bare part — §2.11.2). */
+export interface ExportResult {
+  content: string;
+  bodyCount: number;
+}
+
 /** A hung OCCT op should fail, not block the UI forever (CADStudio.md §5.6). The
  *  default is generous: the first build also pays the ~50MB OCCT wasm load. */
 const DEFAULT_TIMEOUT_MS = 120_000;
@@ -106,11 +113,12 @@ export class GeometryClient {
     return { manifest: res.manifest, skippedJoints: res.skippedJoints, localCom: res.localCom };
   }
 
-  /** Export the rebuilt part to a neutral interchange string (M6.2/M6.3). */
-  async exportFile(doc: CadDocument, format: ExportFormat): Promise<string> {
+  /** Export the rebuilt part to a neutral interchange string (M6.2/M6.3), with
+   * how many bodies the file carries (§2.11.2) so the UI can report it. */
+  async exportFile(doc: CadDocument, format: ExportFormat): Promise<ExportResult> {
     const res = await this.send({ op: "export", doc, format });
     if (!res.ok || res.op !== "export") throw new Error("export: unexpected worker response");
-    return res.content;
+    return { content: res.content, bodyCount: res.bodyCount };
   }
 
   /** Resolve a picked face on `doc` to a sketch datum frame for the "normal to"

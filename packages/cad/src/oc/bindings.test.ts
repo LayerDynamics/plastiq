@@ -12,6 +12,8 @@ import { beforeAll, describe, expect, it } from "vitest";
 import { initOcct, type Occt } from "./init.js";
 import { makeBox, makeCone, makeCylinder, makeSphere, makeTorus } from "../solid/primitives.js";
 import { shapeEnums } from "../mesh/normals.js";
+import { transformRigid } from "../action/transform.js";
+import { massProperties } from "../lower/massprops.js";
 
 let oc: Occt;
 beforeAll(async () => {
@@ -116,6 +118,54 @@ describe("trimmed-wasm bindings the kernel requires", () => {
     const statics = Object.getOwnPropertyNames(oc.Interface_Static);
     expect(statics).not.toContain("SetCVal");
     expect(statics).not.toContain("CVal");
+  });
+
+  /**
+   * §2.11.2 — assembly export cannot build a compound, and cannot pose by
+   * quaternion. Both facts are pinned here so the export path is not "improved"
+   * back into a call that doesn't exist:
+   *   • `BRep_Builder`/`TopoDS_Builder` are absent, so an empty TopoDS_Compound
+   *     cannot be built and filled — multi-body export goes through repeated
+   *     STEPControl_Writer.Transfer / IGESControl_Writer.AddShape instead (which
+   *     is also the semantically right answer: fusing bodies would WELD mated
+   *     parts into one solid).
+   *   • `gp_Quaternion` binds only as a parameter/return TYPE, so gp_Trsf's
+   *     SetRotation_2/SetTransformation_3 are unreachable — transformRigid()
+   *     builds the rotation matrix itself and calls SetValues.
+   */
+  it("has no compound builder and no constructible gp_Quaternion (§2.11.2 export route)", () => {
+    expect(oc.BRep_Builder).toBeUndefined();
+    expect(oc.TopoDS_Builder).toBeUndefined();
+    expect(oc.gp_Quaternion).toBeUndefined();
+    // The route that IS available: a general 3×4 affine on gp_Trsf.
+    const trsf = new oc.gp_Trsf_1();
+    expect(typeof trsf.SetValues).toBe("function");
+    trsf.delete();
+    // ...and accumulating writers for multi-body files.
+    const step = new oc.STEPControl_Writer_1();
+    expect(typeof step.Transfer).toBe("function");
+    step.delete();
+    const iges = new oc.IGESControl_Writer_1();
+    expect(typeof iges.AddShape).toBe("function");
+    iges.delete();
+  });
+
+  it("transformRigid poses a solid by quaternion + translation (SetValues route)", () => {
+    // A 90° rotation about +Z then a lift: the box's centroid must land at the
+    // rotated-then-translated point, proving the hand-built matrix is correct.
+    const box = makeBox(oc, 0.04, 0.03, 0.02); // corner at origin → centroid (0.02,0.015,0.01)
+    const q: [number, number, number, number] = [0, 0, Math.SQRT1_2, Math.SQRT1_2]; // Rz(90°)
+    const posed = transformRigid(oc, box, q, [0, 0, 0.5]);
+    try {
+      const c = massProperties(oc, posed, 1).com;
+      // Rz(90°): (x,y,z) → (−y,x,z), then +0.5 in z.
+      expect(c[0]).toBeCloseTo(-0.015, 9);
+      expect(c[1]).toBeCloseTo(0.02, 9);
+      expect(c[2]).toBeCloseTo(0.01 + 0.5, 9);
+    } finally {
+      posed.delete();
+      box.delete();
+    }
   });
 
   it("classifies a real face through BRepAdaptor_Surface.GetType() (the §2.1 keystone)", () => {

@@ -30,6 +30,51 @@ function applied(oc: Occt, shape: TopoDS_Shape, trsf: gp_Trsf): TopoDS_Shape {
   }
 }
 
+/**
+ * Apply a full rigid pose — quaternion rotation about the local origin, then
+ * translation — in ONE kernel transform. This is the pose an assembly instance
+ * (or a body placement) carries, so posing a local-frame solid into world space
+ * is a single call rather than a chain of axis-angle rotations.
+ *
+ * gp_Trsf's quaternion setters (`SetRotation_2` / `SetTransformation_3`) are
+ * unusable here: `gp_Quaternion` binds only as a parameter/return TYPE in the
+ * trimmed wasm — there is no constructor to call (pinned by
+ * oc/bindings.test.ts). `SetValues` takes the general 3×4 affine instead, so
+ * the rotation matrix is built from the quaternion here and handed over whole.
+ *
+ * The quaternion is normalized first: `SetValues` checks the 3×3 block is
+ * orthogonal within tolerance and raises Standard_ConstructionError on drift,
+ * and a solver-produced pose can accumulate a little.
+ */
+export function transformRigid(
+  oc: Occt,
+  solid: Solid,
+  orientation: readonly [number, number, number, number],
+  translation: Vec3,
+): Solid {
+  const n = Math.hypot(orientation[0], orientation[1], orientation[2], orientation[3]);
+  if (!Number.isFinite(n) || n === 0) {
+    throw new Error("transformRigid: orientation must be a non-zero quaternion");
+  }
+  const x = orientation[0] / n;
+  const y = orientation[1] / n;
+  const z = orientation[2] / n;
+  const w = orientation[3] / n;
+  // Standard quaternion → rotation matrix (column-vector convention, matching
+  // the app's quatRotate and three.js).
+  const trsf = new oc.gp_Trsf_1();
+  try {
+    trsf.SetValues(
+      1 - 2 * (y * y + z * z), 2 * (x * y - w * z),     2 * (x * z + w * y),     translation[0],
+      2 * (x * y + w * z),     1 - 2 * (x * x + z * z), 2 * (y * z - w * x),     translation[1],
+      2 * (x * z - w * y),     2 * (y * z + w * x),     1 - 2 * (x * x + y * y), translation[2],
+    );
+    return new Solid(oc, applied(oc, solid.shape, trsf));
+  } finally {
+    trsf.delete();
+  }
+}
+
 /** Translate a solid by `delta` (SI metres). */
 export function translate(oc: Occt, solid: Solid, delta: Vec3): Solid {
   const trsf = new oc.gp_Trsf_1();

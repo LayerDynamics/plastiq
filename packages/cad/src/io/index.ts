@@ -34,6 +34,7 @@ import type { STEPControl_StepModelType } from "opencascade.js";
 
 import type { Occt } from "../oc/init.js";
 import { Solid } from "../solid/solid.js";
+import { IDENTITY_PLACEMENT, type Placement } from "../lower/component.js";
 import { scale } from "../action/transform.js";
 import { tessellateTagged } from "../mesh/tessellate.js";
 import type { TessellateOptions } from "../mesh/tagged.js";
@@ -53,31 +54,52 @@ function assertDone(oc: Occt, status: unknown, what: string): void {
 }
 
 /**
- * Export a solid to STEP (AP214) text, in MILLIMETRES (the unit OCCT declares).
+ * Export one or more solids to a single STEP (AP214) text, in MILLIMETRES (the
+ * unit OCCT declares).
  *
- * The solid is scaled m → mm first so the numbers written match the declared
- * unit; the caller's solid is untouched (scale returns an independent copy).
+ * Multi-body is native: `STEPControl_Writer.Transfer` accumulates into the
+ * writer's model, so N calls followed by one `Write` emit N bodies in one file
+ * — each keeping its own identity. (Fusing them into a compound instead would
+ * WELD mated parts into a single solid, which is exactly what an assembly
+ * export must not do; `BRep_Builder`/`TopoDS_Builder` are unbound in the
+ * trimmed wasm anyway, so a hand-built compound is not an option.)
+ *
+ * Each solid is scaled m → mm first so the numbers written match the declared
+ * unit; the callers' solids are untouched (scale returns independent copies).
+ * Solids must already carry their world pose — a uniform scale about the origin
+ * scales the pose translation with the geometry, so the unit contract holds.
  */
-export function exportStep(oc: Occt, solid: Solid): string {
+export function exportStepAssembly(oc: Occt, solids: readonly Solid[]): string {
+  if (solids.length === 0) throw new Error("exportStep: nothing to export (no solids)");
   const writer = new oc.STEPControl_Writer_1();
   const progress = new oc.Message_ProgressRange_1();
-  const mmSolid = scale(oc, solid, M_TO_MM);
   const path = "/plastiq-export.step";
+  // Every scaled copy is freed even if a mid-loop transfer throws (long-lived worker).
+  const mmSolids: Solid[] = [];
   try {
-    const status = writer.Transfer(
-      mmSolid.shape,
-      oc.STEPControl_StepModelType.STEPControl_AsIs as unknown as STEPControl_StepModelType,
-      true,
-      progress,
-    );
-    assertDone(oc, status, "STEP transfer");
+    for (const solid of solids) {
+      const mm = scale(oc, solid, M_TO_MM);
+      mmSolids.push(mm);
+      const status = writer.Transfer(
+        mm.shape,
+        oc.STEPControl_StepModelType.STEPControl_AsIs as unknown as STEPControl_StepModelType,
+        true,
+        progress,
+      );
+      assertDone(oc, status, "STEP transfer");
+    }
     assertDone(oc, writer.Write(path), "STEP write");
     return oc.FS.readFile(path, { encoding: "utf8" });
   } finally {
-    mmSolid.delete();
+    for (const s of mmSolids) s.delete();
     progress.delete();
     writer.delete();
   }
+}
+
+/** Export a single solid to STEP text — `exportStepAssembly` with one body. */
+export function exportStep(oc: Occt, solid: Solid): string {
+  return exportStepAssembly(oc, [solid]);
 }
 
 /**
@@ -121,24 +143,33 @@ export function importStep(oc: Occt, text: string): Solid {
  * Same unit contract as STEP: IGESControl_Writer's default unit is millimetre
  * and it writes raw coordinates, so the shape is scaled m → mm first.
  */
-export function exportIges(oc: Occt, solid: Solid): string {
+export function exportIgesAssembly(oc: Occt, solids: readonly Solid[]): string {
+  if (solids.length === 0) throw new Error("exportIges: nothing to export (no solids)");
   const writer = new oc.IGESControl_Writer_1();
   const progress = new oc.Message_ProgressRange_1();
-  const mmSolid = scale(oc, solid, M_TO_MM);
   const path = "/plastiq-export.igs";
+  const mmSolids: Solid[] = [];
   try {
-    if (!writer.AddShape(mmSolid.shape, progress)) {
-      throw new Error("IGES AddShape failed");
+    // AddShape accumulates, like STEP's Transfer — N bodies, one file.
+    for (const solid of solids) {
+      const mm = scale(oc, solid, M_TO_MM);
+      mmSolids.push(mm);
+      if (!writer.AddShape(mm.shape, progress)) throw new Error("IGES AddShape failed");
     }
     writer.ComputeModel();
     // Write_2(file, fnes) writes to a path in the OCCT virtual FS.
     if (!writer.Write_2(path, false)) throw new Error("IGES write failed");
     return oc.FS.readFile(path, { encoding: "utf8" });
   } finally {
-    mmSolid.delete();
+    for (const s of mmSolids) s.delete();
     progress.delete();
     writer.delete();
   }
+}
+
+/** Export a single solid to IGES text — `exportIgesAssembly` with one body. */
+export function exportIges(oc: Occt, solid: Solid): string {
+  return exportIgesAssembly(oc, [solid]);
 }
 
 function toBase64(bytes: Uint8Array): string {
@@ -154,11 +185,41 @@ function toBase64(bytes: Uint8Array): string {
 }
 
 /**
+ * Export a solid to a self-contained glTF 2.0 document as N posed INSTANCES:
+ * one mesh (a single tessellation of the shared part) referenced by one node
+ * per placement, each carrying its own TRS. glTF's node transform is exactly
+ * the right representation here — the geometry is transmitted once regardless
+ * of instance count, and a viewer sees a real assembly rather than a single
+ * body (§2.11.2). Placements are the instances' WORLD poses, in kernel metres
+ * (glTF is unitless-metres by convention, so no scaling — unlike STEP/IGES).
+ *
+ * `exportGltf` is this with one identity placement.
+ */
+export function exportGltfAssembly(
+  oc: Occt,
+  solid: Solid,
+  placements: readonly Placement[],
+  opts?: TessellateOptions,
+): string {
+  if (placements.length === 0) throw new Error("exportGltf: nothing to export (no placements)");
+  return buildGltf(oc, solid, placements, opts);
+}
+
+/**
  * Export a solid to a self-contained glTF 2.0 document (positions + indices,
  * one mesh, embedded base64 buffer). Triangles come from the tagged
  * tessellation; this is a mesh export, not a B-rep one (use STEP for B-rep).
  */
 export function exportGltf(oc: Occt, solid: Solid, opts?: TessellateOptions): string {
+  return buildGltf(oc, solid, [IDENTITY_PLACEMENT], opts);
+}
+
+function buildGltf(
+  oc: Occt,
+  solid: Solid,
+  placements: readonly Placement[],
+  opts?: TessellateOptions,
+): string {
   const mesh = tessellateTagged(oc, solid, opts);
   // A face that failed to triangulate is omitted from the mesh; exporting the
   // shorter mesh would ship a glTF with a hole as if it were the full part. Refuse
@@ -194,11 +255,23 @@ export function exportGltf(oc: Occt, solid: Solid, opts?: TessellateOptions): st
   }
   const vertexCount = positions.length / 3;
 
+  // One node per placement, all referencing the single shared mesh. A node omits
+  // an identity component so a plain single-body export stays byte-identical to
+  // the pre-assembly emitter.
+  const nodes = placements.map((p) => {
+    const node: { mesh: number; translation?: number[]; rotation?: number[] } = { mesh: 0 };
+    const [px, py, pz] = p.position;
+    if (px !== 0 || py !== 0 || pz !== 0) node.translation = [px, py, pz];
+    const [qx, qy, qz, qw] = p.orientation;
+    if (qx !== 0 || qy !== 0 || qz !== 0 || qw !== 1) node.rotation = [qx, qy, qz, qw];
+    return node;
+  });
+
   const gltf = {
     asset: { version: "2.0", generator: "@plastiq/cad" },
     scene: 0,
-    scenes: [{ nodes: [0] }],
-    nodes: [{ mesh: 0 }],
+    scenes: [{ nodes: nodes.map((_, i) => i) }],
+    nodes,
     meshes: [{ primitives: [{ attributes: { POSITION: 0 }, indices: 1 }] }],
     buffers: [
       {

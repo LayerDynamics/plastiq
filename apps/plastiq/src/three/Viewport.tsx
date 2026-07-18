@@ -10,7 +10,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import * as THREE from "three";
 import { useCadStore } from "../store/store.js";
 import { PLACEMENT_TYPE, type CadDocument, type MeshDoc, type PointCloudDoc } from "../store/types.js";
-import { GeometryClient, type BuildOutcome } from "../worker/bridge.js";
+import { GeometryClient, type BuildOutcome, type ExportResult } from "../worker/bridge.js";
 import { useProjectsStore } from "../persistence/projectsStore.js";
 import { importGltf } from "../mesh/importGltf.js";
 import { meshBodiesToGlbBase64 } from "../mesh/glb.js";
@@ -181,7 +181,7 @@ export function Viewport(): React.JSX.Element {
     (globalThis as { __plastiqLower?: () => Promise<unknown> }).__plastiqLower = () =>
       client.lower(useCadStore.getState().toDocument());
     (
-      globalThis as { __plastiqExport?: (f: "gltf" | "step" | "iges") => Promise<string> }
+      globalThis as { __plastiqExport?: (f: "gltf" | "step" | "iges") => Promise<ExportResult> }
     ).__plastiqExport = (format) =>
       client.exportFile(useCadStore.getState().toDocument(), format);
 

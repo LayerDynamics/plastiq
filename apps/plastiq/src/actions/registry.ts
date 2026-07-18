@@ -218,11 +218,13 @@ async function exportFile(
   label: string,
 ): Promise<void> {
   const exporter = (
-    globalThis as { __plastiqExport?: (f: "gltf" | "step" | "iges") => Promise<string> }
+    globalThis as {
+      __plastiqExport?: (f: "gltf" | "step" | "iges") => Promise<{ content: string; bodyCount: number }>;
+    }
   ).__plastiqExport;
   if (!exporter) return;
   try {
-    const content = await exporter(format);
+    const { content, bodyCount } = await exporter(format);
     const blob = new Blob([content], { type: mime });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -230,7 +232,11 @@ async function exportFile(
     a.download = `part.${ext}`;
     a.click();
     setTimeout(() => URL.revokeObjectURL(url), 100);
-    cad().setStatus(`exported ${label}`);
+    // Report the body count (§2.11.2): "exported STEP" used to be printed even
+    // when an N-instance assembly had been silently reduced to one body.
+    cad().setStatus(
+      bodyCount > 1 ? `exported ${label} — ${bodyCount} bodies` : `exported ${label}`,
+    );
   } catch (e) {
     cad().setStatus(`export failed: ${(e as Error).message}`);
   }

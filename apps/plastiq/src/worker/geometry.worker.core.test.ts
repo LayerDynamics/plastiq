@@ -24,6 +24,25 @@ const placedBoxDoc = (): CadDocument => ({
   params: {},
 });
 
+/** The same box as a 3-instance assembly: a mated row along +X (§2.11.2). */
+const assemblyDoc = (): CadDocument => ({
+  features: [{ id: "f1", type: "box", params: { dx: mm(40), dy: mm(30), dz: mm(20) } }],
+  params: {},
+  assembly: {
+    instances: [
+      { id: "i1", name: "A", pose: { position: [0, 0, 0], orientation: [0, 0, 0, 1] } },
+      { id: "i2", name: "B", pose: { position: [0.1, 0, 0], orientation: [0, 0, 0, 1] } },
+      {
+        id: "i3",
+        name: "C",
+        pose: { position: [0.2, 0, 0], orientation: eulerXYZQuat(0, 0, Math.PI / 2) },
+      },
+    ],
+    mates: [],
+    joints: [],
+  },
+});
+
 const emptyDoc = (): CadDocument => ({ features: [], params: {} });
 
 /** The centre of mass of the solid a STEP string carries (SI metres). */
@@ -32,6 +51,16 @@ const stepCom = (oc: Occt, content: string): [number, number, number] => {
   try {
     const c = massProperties(oc, solid, 1).com;
     return [c[0], c[1], c[2]];
+  } finally {
+    solid.delete();
+  }
+};
+
+/** The total volume of everything a STEP string carries (SI m³). */
+const stepVolume = (oc: Occt, content: string): number => {
+  const solid = importStep(oc, content);
+  try {
+    return massProperties(oc, solid, 1).volume;
   } finally {
     solid.delete();
   }
@@ -173,6 +202,63 @@ describe("handleRequest — export", () => {
     expect(c1[0]).toBeCloseTo(-c0[1], 6);
     expect(c1[1]).toBeCloseTo(c0[0], 6);
     expect(c1[2]).toBeCloseTo(c0[2] + 0.5, 6);
+  });
+
+  it("§2.11.2: a 3-instance assembly exports ALL THREE posed bodies (STEP)", async () => {
+    const one = await handleRequest(oc, { id: 13, op: "export", doc: boxDoc(), format: "step" });
+    const many = await handleRequest(oc, { id: 14, op: "export", doc: assemblyDoc(), format: "step" });
+    if (!one.response.ok || one.response.op !== "export") throw new Error("single export failed");
+    if (!many.response.ok || many.response.op !== "export") throw new Error("assembly export failed");
+
+    // The response says how many bodies shipped — the UI reports this.
+    expect(one.response.bodyCount).toBe(1);
+    expect(many.response.bodyCount).toBe(3);
+
+    // Re-imported, the file carries 3× the volume: the assembly is really there,
+    // not one body with the other two silently dropped.
+    const v1 = stepVolume(oc, one.response.content);
+    const v3 = stepVolume(oc, many.response.content);
+    expect(v1).toBeCloseTo(mm(40) * mm(30) * mm(20), 9);
+    expect(v3).toBeCloseTo(3 * v1, 9);
+
+    // ...and at the right places: the centroid of the three posed copies. The
+    // third is rotated π/2 about Z, so its local centroid (cx,cy,cz) maps to
+    // (−cy, cx, cz) before its +0.2 x offset.
+    const c1 = stepCom(oc, one.response.content);
+    const expectedX = (c1[0] + (c1[0] + 0.1) + (-c1[1] + 0.2)) / 3;
+    const expectedY = (c1[1] + c1[1] + c1[0]) / 3;
+    const c3 = stepCom(oc, many.response.content);
+    expect(c3[0]).toBeCloseTo(expectedX, 6);
+    expect(c3[1]).toBeCloseTo(expectedY, 6);
+    expect(c3[2]).toBeCloseTo(c1[2], 6);
+  });
+
+  it("§2.11.2: glTF exports one shared mesh instanced by N posed nodes", async () => {
+    const { response } = await handleRequest(oc, {
+      id: 15,
+      op: "export",
+      doc: assemblyDoc(),
+      format: "gltf",
+    });
+    expect(response.ok).toBe(true);
+    if (!response.ok || response.op !== "export") throw new Error("expected an export response");
+    expect(response.bodyCount).toBe(3);
+    const gltf = JSON.parse(response.content) as {
+      meshes: unknown[];
+      nodes: { mesh: number; translation?: number[]; rotation?: number[] }[];
+      scenes: { nodes: number[] }[];
+    };
+    // ONE mesh (the geometry is transmitted once), three nodes referencing it.
+    expect(gltf.meshes).toHaveLength(1);
+    expect(gltf.nodes).toHaveLength(3);
+    expect(gltf.scenes[0]!.nodes).toEqual([0, 1, 2]);
+    expect(gltf.nodes.every((n) => n.mesh === 0)).toBe(true);
+    // Node poses match the instances: identity, +0.1 x, +0.2 x with a Z rotation.
+    expect(gltf.nodes[0]!.translation).toBeUndefined(); // identity omitted
+    expect(gltf.nodes[0]!.rotation).toBeUndefined();
+    expect(gltf.nodes[1]!.translation).toEqual([0.1, 0, 0]);
+    expect(gltf.nodes[2]!.translation).toEqual([0.2, 0, 0]);
+    expect(gltf.nodes[2]!.rotation![2]).toBeCloseTo(Math.SQRT1_2, 9);
   });
 
   it("errors on export with no geometry", async () => {

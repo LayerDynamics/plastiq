@@ -107,6 +107,16 @@ export type WorkerResponse =
       skippedJoints: string[];
       localCom: [number, number, number];
     }
-  | { id: number; ok: true; op: "export"; format: ExportFormat; content: string }
+  | {
+      id: number;
+      ok: true;
+      op: "export";
+      format: ExportFormat;
+      content: string;
+      /** How many bodies the file carries — assembly instances, or 1 for a bare
+       * part (§2.11.2). The UI reports it so "exported STEP" can never again
+       * mean "exported one unposed body and silently dropped the assembly". */
+      bodyCount: number;
+    }
   | { id: number; ok: true; op: "facePlane"; plane: PlaneFrame | null }
   | { id: number; ok: false; error: string };

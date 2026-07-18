@@ -56,7 +56,15 @@ export {
 } from "./mesh/resolve.js";
 export { resolveSelector, isSelector, type Selector, type SelectorResult } from "./select/predicates.js";
 export { faceDatumPlane } from "./mesh/faceFrame.js";
-export { exportStep, importStep, exportIges, exportGltf } from "./io/index.js";
+export {
+  exportStep,
+  exportStepAssembly,
+  importStep,
+  exportIges,
+  exportIgesAssembly,
+  exportGltf,
+  exportGltfAssembly,
+} from "./io/index.js";
 
 // R4 — sketch profiles + feature operations.
 export { Sketch } from "./sketch/sketch.js";
@@ -72,6 +80,7 @@ export {
   rotate,
   mirror,
   scale,
+  transformRigid,
   extrude,
   revolve,
   type DraftOptions,
