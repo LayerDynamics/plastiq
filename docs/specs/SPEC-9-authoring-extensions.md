@@ -22,34 +22,53 @@ assembly, plus an automatically-derived bill of materials.
 {
   "name": "bracket-assembly",
   "links": [
-    { "part": "plate" },
+    { "part": "plate", "fixed": true },
     { "part": "bolt", "name": "bolt-1", "location": { "position": [10, 0, 0] } },
     { "part": "bracket-sub", "location": { "axis": [0, 0, 1], "angle": 90 } }
   ],
   "subAssemblies": {
     "bracket-sub": { "links": [ { "part": "bolt" }, { "part": "bolt" } ] }
-  }
+  },
+  "mates": [
+    { "kind": "coincident", "a": { "instance": 0, "point": [0, 0, 0.01] }, "b": { "instance": 1 } },
+    { "kind": "distance", "a": { "instance": 1 }, "b": { "instance": 2 }, "value": 0.05 }
+  ],
+  "joints": [
+    { "kind": "revolute", "parent": 0, "child": 1, "origin": [0.01, 0, 0], "axis": [0, 0, 1],
+      "limits": { "lower": -1.5, "upper": 1.5 } }
+  ]
 }
 ```
 
 - `AssyLocation` = `{ position?, axis?, angle? (deg) }` — a rigid placement.
-- `AssyLink` = `{ part, location?, name? }` — `part` names a leaf part OR a `subAssemblies` key (recursive).
+- `AssyLink` = `{ part, location?, name?, fixed? }` — `part` names a leaf part OR a `subAssemblies`
+  key (recursive); `fixed` grounds every instance the link expands to (a fixed sub-assembly link
+  anchors its whole sub-tree).
+- `AssyMate` = `{ kind, a, b, value? }` and `AssyJoint` = `{ kind, parent, child, origin, axis,
+  limits? }` (§2.11.3) — the constraint graph. Instance references are **indexes into the FLATTENED
+  instance list** in document (depth-first) order — for a flat document, simply the link index.
+  `value` is required for the valued mate kinds (`distance`: metres, `angle`: radians).
 - **`parseAssy(input)`** validates untrusted/AI-authored JSON into a typed `AssyDoc` (throws with a
   descriptive message), including **sub-assembly reference-cycle detection** (`assertAcyclic`): a
   cyclic document that could never realize as written fails at parse time, named by its cycle path
-  (e.g. `a -> b -> a`), rather than silently degrading to a surprising leaf part.
+  (e.g. `a -> b -> a`), rather than silently degrading to a surprising leaf part. Mates/joints are
+  fully validated too (kinds, non-negative integer indexes, `[x,y,z]` shapes, non-zero joint axes,
+  numeric limits, valued-mate `value`).
 - **`realizeAssembly(doc)`** flattens it into the interactive `AssemblyModel`
   (`apps/plastiq/src/assembly/model.ts`), composing each sub-assembly placement with its children
   (`worldPos = parentPos + quatRotate(parentQ, childPos)`, `worldQ = parentQ ∘ childQ`); cycle-guarded,
-  deterministic instance ids.
+  deterministic instance ids. It realizes the document's mates/joints (index → minted id; bounds
+  validated here, where the final instance count is known) and applies `fixed` flags — and when NO
+  link declares `fixed`, it grounds the FIRST instance (matching `addInstance`'s convention) so an
+  imported assembly simulates anchored instead of free-falling (§2.11.3).
 - **`deriveBOM(doc)`** rolls up leaf-part occurrence counts (sub-assemblies expanded), sorted by part.
   Rendered by **`BomPanel.tsx`**.
-- **`assemblyToAssy(model)`** exports an interactively-built assembly back to a flat `.assy`. Round-trip
-  scope is **instances only**: it emits each instance's `part`/`name`/placement, so a realize→export
-  round-trip of a placed-part assembly is faithful. Assembly **mates** and **joints** (`model.ts`
-  `AssemblyMate`/`AssemblyJoint`) and the per-instance **`fixed`** (grounded) flag are not
-  representable in the `.assy` schema and are **dropped on export** — the format describes placements,
-  not the constraint/joint graph.
+- **`assemblyToAssy(model)`** exports an interactively-built assembly back to a flat `.assy`.
+  Round-trip scope is the **whole assembly** (§2.11.3): each instance's `part`/`name`/placement plus
+  its `fixed` flag, and the full mate/joint graph with instance ids mapped to link indexes. A
+  mate/joint referencing an instance the model does not contain throws (named by mate/joint id)
+  rather than silently emitting a broken document. Sub-assembly *structure* is still not recovered —
+  a flat link list is emitted.
 
 **Wired into the app (M4.5).** Both directions are reachable in the product, not just in tests:
 `actions/registry.ts` exposes `import-assy` / `export-assy` actions. The **read** side is

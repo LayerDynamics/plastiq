@@ -306,7 +306,15 @@ export function importAssyText(name: string, text: string): void {
   try {
     const model = realizeAssembly(parseAssy(JSON.parse(text)));
     loadAssemblyModel(model);
-    cad().setStatus(`imported ${name}: ${model.instances.length} instance(s)`);
+    // Honest status (§2.11.3): say what actually loaded, and the multi-part
+    // caveat — every instance renders the currently OPEN part; `.assy` part
+    // names bind no geometry until the multi-part library milestone.
+    const counts = [`${model.instances.length} instance(s)`];
+    if (model.mates.length > 0) counts.push(`${model.mates.length} mate(s)`);
+    if (model.joints.length > 0) counts.push(`${model.joints.length} joint(s)`);
+    cad().setStatus(
+      `imported ${name}: ${counts.join(", ")} — all instances render the open part (part names bind no geometry yet)`,
+    );
   } catch (e) {
     cad().setStatus(`import failed: ${(e as Error).message}`);
   }

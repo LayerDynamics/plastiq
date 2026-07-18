@@ -22,21 +22,34 @@ into the existing `AssemblyModel`, plus an **auto-BOM** derived from it.
   reconciled here, per CLAUDE.md.)
 - **Schema (plain JSON object — no YAML dependency; partcad uses YAML, we keep it dep-free):**
   - `AssyLocation` = `{ position?: [x,y,z], axis?: [x,y,z], angle?: deg }` — a rigid placement.
-  - `AssyLink` = `{ part: string, location?: AssyLocation, name?: string }` — one placed occurrence;
-    `part` names a leaf part OR a key in `subAssemblies` (recursive nesting).
-  - `AssyDoc` = `{ name?, links: AssyLink[], subAssemblies?: Record<string, AssyNode> }`.
+  - `AssyLink` = `{ part: string, location?: AssyLocation, name?: string, fixed?: boolean }` — one
+    placed occurrence; `part` names a leaf part OR a key in `subAssemblies` (recursive nesting);
+    `fixed` grounds every instance the link expands to (amended 2026-07-18, §2.11.3).
+  - `AssyMate` = `{ kind, a, b, value? }` / `AssyJoint` = `{ kind, parent, child, origin, axis,
+    limits? }` — the constraint graph (amended 2026-07-18, §2.11.3). Instance references are indexes
+    into the FLATTENED instance list in document (depth-first) order; `value` is required for the
+    valued mate kinds (`distance`: metres, `angle`: radians).
+  - `AssyDoc` = `{ name?, links: AssyLink[], subAssemblies?: Record<string, AssyNode>,
+    mates?: AssyMate[], joints?: AssyJoint[] }`.
 - **`realizeAssembly(doc) → AssemblyModel`** — flattens the (possibly nested) links into
   `ComponentInstance[]`, composing each sub-assembly link's placement with its children's
   (`worldPos = parentPos + quatRotate(parentQ, childPos)`, `worldQ = parentQ ∘ childQ`, reusing
-  `model.ts`'s `quatMul`/`quatRotate`/`axisAngleQuat`). Deterministic.
+  `model.ts`'s `quatMul`/`quatRotate`/`axisAngleQuat`). Deterministic. Realizes the document's
+  mates/joints (index → minted id, bounds validated at realize where the final instance count is
+  known) and applies `fixed`; when NO link declares `fixed`, the FIRST instance is grounded —
+  matching the editor's `addInstance` convention — so an imported assembly simulates anchored
+  instead of free-falling (§2.11.3).
 - **`deriveBOM(doc) → BomEntry[]`** — recursively expands sub-assemblies and counts leaf `part`
   occurrences, rolled up to `{ part, count }`, sorted by part name (deterministic).
 - **`assemblyToAssy(model) → AssyDoc`** — the inverse, so an interactively-built assembly can be
-  exported to a `.assy` document (round-trip).
+  exported to a `.assy` document (round-trip). Exports the whole constraint graph — `fixed` flags,
+  mates, and joints (ids mapped to link indexes; a dangling instance reference throws rather than
+  silently emitting a broken document).
 - **Honest scope.** Plastiq has no multi-part library yet (all instances reference the current part),
   so `part` is a NAME (string) — the realized instances carry it for the BOM and display; binding a
-  name to distinct geometry is a future multi-part-library milestone. The format and BOM are real and
-  complete; only the geometry-per-name binding is deferred (documented, not stubbed).
+  name to distinct geometry is a future multi-part-library milestone (the import status line
+  discloses this caveat). The format and BOM are real and complete; only the geometry-per-name
+  binding is deferred (documented, not stubbed).
 
 ## Consequences
 

@@ -74,7 +74,9 @@ describe("import-assy — a valid document lands in the live assembly store", ()
     expect(assembly.instances[1]!.pose.position).toEqual([1, 0, 10]);
     expect(assembly.mates).toEqual([]);
     expect(assembly.joints).toEqual([]);
-    expect(status).toBe("imported widget.assy: 2 instance(s)");
+    expect(status).toBe(
+      "imported widget.assy: 2 instance(s) — all instances render the open part (part names bind no geometry yet)",
+    );
 
     // One history snapshot was pushed: undo restores the pre-import assembly.
     useCadStore.getState().undo();
