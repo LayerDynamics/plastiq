@@ -168,6 +168,27 @@ function fusePatternCopies(oc: Occt, copies: readonly Solid[], featureId: string
   return r.solid;
 }
 
+/** Feature types that ADD material by merging into the current body. Used to
+ * spot a join that changed nothing (§13.8 P0); `cut`/`intersect`/`new` are
+ * excluded because they legitimately shrink, reshape, or stand apart. */
+const ADDITIVE_TYPES: ReadonlySet<string> = new Set([
+  "extrude",
+  "revolve",
+  "loft",
+  "sweep",
+  "box",
+  "cylinder",
+  "sphere",
+  "cone",
+  "torus",
+]);
+
+function joinsIntoCurrentBody(f: EditorFeature): boolean {
+  if (!ADDITIVE_TYPES.has(f.type)) return false;
+  const op = f.data?.["op"];
+  return op === undefined || op === "join";
+}
+
 /**
  * "New body" (§2.4): keep everything built so far and add `fresh` alongside it as
  * a SEPARATE body, instead of destroying the prior geometry.
@@ -342,10 +363,17 @@ function sketchForFeature(
   return lastSketch;
 }
 
-/** Per-feature outcome of a rebuild pass (SPEC-5 FR-24 timeline semantics). */
+/** Per-feature outcome of a rebuild pass (SPEC-5 FR-24 timeline semantics).
+ *
+ * `"warning"` is a feature that BUILT but changed nothing the user can see —
+ * today, a join that added no material because the new shape lies entirely
+ * inside the existing body (§13.8's P0). It is deliberately not an error: the
+ * geometry is valid and the timeline continues, but reporting it "ok" is how
+ * "I did the operation and nothing happened" became the product's signature
+ * complaint. */
 export interface FeatureBuildStatus {
   readonly featureId: string;
-  readonly status: "ok" | "error" | "suppressed";
+  readonly status: "ok" | "error" | "suppressed" | "warning";
   /** Present only when `status === "error"`; always names the feature. */
   readonly message?: string;
 }
@@ -401,8 +429,30 @@ function evaluateDocument(oc: Occt, doc: CadDocument, isolate: boolean): Isolate
       continue;
     }
     try {
+      // §13.8 P0: a join that lands entirely INSIDE the current body adds no
+      // material, so the rebuild reports "ok" while the viewport shows exactly
+      // what it showed before — the first thing a new user does (sketch on XY,
+      // extrude up into the starter box) hits precisely this. A union can only
+      // ever grow or preserve volume, so "volume unchanged" is a sound test for
+      // "this union added nothing". Measured once per additive feature that has
+      // something to merge into; other feature types skip the mass-properties
+      // call entirely.
+      const watchNoOp = joinsIntoCurrentBody(f) && currentSolid() != null;
+      const before = watchNoOp ? currentSolid()!.volume() : 0;
       buildFeature(f);
-      statuses.push({ featureId: f.id, status: "ok" });
+      const after = watchNoOp ? currentSolid()?.volume() ?? 0 : 0;
+      if (watchNoOp && Math.abs(after - before) <= before * 1e-9) {
+        statuses.push({
+          featureId: f.id,
+          status: "warning",
+          message:
+            `feature '${f.id}' (${f.type}) joined the existing body but added no material — ` +
+            `it lies entirely inside it, so nothing changed on screen. Set its op to "new" ` +
+            `for a separate body, or move/resize it so it protrudes.`,
+        });
+      } else {
+        statuses.push({ featureId: f.id, status: "ok" });
+      }
     } catch (err) {
       if (!isolate) throw err;
       // Isolating pass: record and skip. `solid` is untouched by a throw (every

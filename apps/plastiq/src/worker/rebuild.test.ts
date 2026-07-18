@@ -1622,6 +1622,76 @@ describe("CAD Studio rebuild (SPEC-5 M0.4)", () => {
       }
     });
 
+    it("§13.8 P0: a pad that lands INSIDE the starter box is reported, not silent", () => {
+      // The exact first-run scenario: the seeded 60x40x30 box, a rectangle
+      // sketched on XY (z=0), extruded UP 10mm. The pad is entirely inside the
+      // box, so join-by-default adds nothing and the viewport is unchanged.
+      const doc: CadDocument = {
+        features: [
+          { id: "f1", type: "box", name: "Box 1", params: { dx: m(60), dy: m(40), dz: m(30) } },
+          {
+            id: "f2",
+            type: "sketch",
+            data: {
+              profile: loopProfile([
+                [m(10), m(10)],
+                [m(30), m(10)],
+                [m(30), m(30)],
+                [m(10), m(30)],
+              ]),
+              plane: { base: "XY" },
+            },
+          },
+          { id: "f3", type: "extrude", deps: ["f2"], params: { height: m(10) } },
+        ],
+        params: {},
+      };
+      const built = rebuildDocumentIsolated(oc, doc);
+      try {
+        // The geometry really is unchanged — that part is correct behaviour.
+        expect(solidVolume(oc, built.solid!)).toBeCloseTo(m(60) * m(40) * m(30), 9);
+        // …but the extrude no longer reports a clean "ok".
+        const f3 = built.statuses.find((st) => st.featureId === "f3")!;
+        expect(f3.status).toBe("warning");
+        expect(f3.message).toMatch(/added no material/);
+        expect(f3.message).toMatch(/"new"/); // tells the user the remedy
+        // Nothing errored: the timeline continues normally.
+        expect(built.statuses.filter((st) => st.status === "error")).toHaveLength(0);
+      } finally {
+        built.solid!.delete();
+      }
+    });
+
+    it("§13.8 P0: a pad that DOES protrude reports ok (no false warning)", () => {
+      const doc: CadDocument = {
+        features: [
+          { id: "f1", type: "box", name: "Box 1", params: { dx: m(60), dy: m(40), dz: m(30) } },
+          {
+            id: "f2",
+            type: "sketch",
+            data: {
+              profile: loopProfile([
+                [m(10), m(10)],
+                [m(30), m(10)],
+                [m(30), m(30)],
+                [m(10), m(30)],
+              ]),
+              plane: { base: "XY", offset: m(30) },
+            },
+          },
+          { id: "f3", type: "extrude", deps: ["f2"], params: { height: m(10) } },
+        ],
+        params: {},
+      };
+      const built = rebuildDocumentIsolated(oc, doc);
+      try {
+        expect(built.statuses.find((st) => st.featureId === "f3")!.status).toBe("ok");
+        expect(solidVolume(oc, built.solid!)).toBeGreaterThan(m(60) * m(40) * m(30));
+      } finally {
+        built.solid!.delete();
+      }
+    });
+
     it("a later feature dresses an edge of the SECOND body (per-body edges stay addressable)", () => {
       // Pick a real edge belonging to the far cylinder (x ≈ 100 mm), then fillet
       // it: dress-up must resolve and operate through the compound, and the

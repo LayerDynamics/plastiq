@@ -61,6 +61,7 @@ function FeatureRow({
 }): React.JSX.Element {
   const selectedFeatureId = useCadStore((s) => s.selectedFeatureId);
   const featureError = useCadStore((s) => s.featureErrors[feature.id]);
+  const featureWarning = useCadStore((s) => s.featureWarnings[feature.id]);
   const rollbackIndex = useCadStore((s) => s.rollbackIndex);
   const selectFeature = useCadStore((s) => s.selectFeature);
   const renameFeature = useCadStore((s) => s.renameFeature);
@@ -125,6 +126,15 @@ function FeatureRow({
         // The message is per-feature, so the badge can say WHAT failed instead of
         // just that something did.
         <span data-testid="badge-error" title={featureError} className="text-[#ff6b6b]">
+          ⚠
+        </span>
+      )}
+      {!errored && featureWarning && (
+        // BUILT, but changed nothing the user can see (§13.8 P0) — e.g. a join
+        // that landed entirely inside the existing body. Amber, not red: the
+        // feature is valid, it just did nothing visible, and the tooltip says
+        // how to make it do something.
+        <span data-testid="badge-warning" title={featureWarning} className="text-[#e0a33e]">
           ⚠
         </span>
       )}

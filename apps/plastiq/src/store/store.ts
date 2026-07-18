@@ -112,6 +112,11 @@ export interface CadStore {
    * rebuild was clean.
    */
   featureErrors: Record<FeatureId, string>;
+  /** Features that BUILT but changed nothing visible (§13.8 P0) — e.g. a join
+   * that landed entirely inside the existing body. Not errors: the geometry is
+   * valid, but reporting them silently is what made "nothing happened" the
+   * product's signature complaint. */
+  featureWarnings: Record<FeatureId, string>;
   /** Persistent refs for the current build's pickable faces/edges (FR-16). */
   selectionRefs: SelectionRefs;
   /** Volume + centroid of the current build (mass-properties readout), or null
@@ -163,6 +168,7 @@ export interface CadStore {
   setMeasureResult: (result: string | null) => void;
   /** Replace the failed-feature map from a rebuild's statuses ({} clears it). */
   setFeatureErrors: (errors: Record<FeatureId, string>) => void;
+  setFeatureWarnings: (warnings: Record<FeatureId, string>) => void;
   /** Replace the persistent-ref lookup for the current build (FR-16). */
   setSelectionRefs: (refs: SelectionRefs) => void;
   /** Publish the current build's volume + centroid (null when no geometry). */
@@ -403,6 +409,7 @@ type CadStateKey =
   | "measuring"
   | "measureResult"
   | "featureErrors"
+  | "featureWarnings"
   | "selectionRefs"
   | "massProps"
   | "section"
@@ -446,6 +453,7 @@ function initialCadState(): CadState {
     measuring: false,
     measureResult: null,
     featureErrors: {},
+    featureWarnings: {},
     selectionRefs: { faces: {}, edges: {} },
     massProps: null,
     section: null,
@@ -573,6 +581,7 @@ export const useCadStore = create<CadStore>((set, get) => ({
     set((s) => ({ measuring: !s.measuring, measureResult: s.measuring ? null : s.measureResult })),
   setMeasureResult: (result) => set({ measureResult: result }),
   setFeatureErrors: (errors) => set({ featureErrors: errors }),
+  setFeatureWarnings: (warnings) => set({ featureWarnings: warnings }),
   setSelectionRefs: (refs) => set({ selectionRefs: refs }),
 
   setMassProps: (props) => set({ massProps: props }),

@@ -229,21 +229,32 @@ export function Viewport(): React.JSX.Element {
           // be surfaced in the status line — dropping it would report "empty",
           // which is precisely the silent-failure this section exists to kill.
           const buildErrors: string[] = [];
+          // Features that BUILT but changed nothing visible (§13.8 P0) — reported
+          // separately from errors: the geometry is valid, the timeline continues,
+          // but the user must be told, or "nothing happened" is all they see.
+          const warnings: Record<string, string> = {};
           for (const s of statuses) {
+            if (s.status === "warning") {
+              if (s.featureId) warnings[s.featureId] = s.message ?? "changed nothing";
+              continue;
+            }
             if (s.status !== "error") continue;
             if (s.featureId) errors[s.featureId] = s.message ?? "failed";
             else buildErrors.push(s.message ?? "the build failed");
           }
           store.setFeatureErrors(errors);
+          store.setFeatureWarnings(warnings);
           const failed = Object.keys(errors);
           setStatus(
             buildErrors.length > 0
               ? `rebuild failed: ${buildErrors[0]!}`
               : failed.length > 0
                 ? `${failed.length} feature${failed.length === 1 ? "" : "s"} failed: ${errors[failed[0]!]!}`
-                : built
-                  ? "ready"
-                  : "empty",
+                : Object.keys(warnings).length > 0
+                  ? (warnings[Object.keys(warnings)[0]!] as string)
+                  : built
+                    ? "ready"
+                    : "empty",
           );
           if (built) {
             // Capture the positional disambiguators (face centroid / edge midpoint)
@@ -287,6 +298,7 @@ export function Viewport(): React.JSX.Element {
           meshRef.current = null;
           const store = useCadStore.getState();
           store.setFeatureErrors({});
+          store.setFeatureWarnings({});
           store.setSelectionRefs({ faces: {}, edges: {} });
           store.setMassProps(null);
         }
