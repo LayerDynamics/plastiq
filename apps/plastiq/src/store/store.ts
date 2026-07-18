@@ -288,8 +288,32 @@ function snapshot(s: {
 }
 
 /** History patch to merge into a mutating `set`: push the prior doc, drop redo. */
-function pushHistory(s: CadStore): { past: HistorySnapshot[]; future: HistorySnapshot[] } {
-  return { past: [...s.past, snapshot(s)].slice(-HISTORY_LIMIT), future: [] };
+/**
+ * §2.11.4: a document mutation while a sim runs invalidates the running world —
+ * it was built from the pre-edit document, so its manifest/colliders are stale.
+ * Auto-stop with a status note saying why, mirroring exactly what the Stop
+ * action sets (`setSimulating(false)`: sim off, unpaused, ticks reset, telemetry
+ * cleared). The workspace is deliberately KEPT — the user stays on the Simulate
+ * tab and can rerun against the edited document. No-op when not simulating.
+ */
+function stopStaleSim(s: CadStore): Partial<CadStore> {
+  if (!s.simulating) return {};
+  return {
+    simulating: false,
+    simPaused: false,
+    simTicks: 0,
+    simTelemetry: null,
+    status: "simulation stopped — the document changed (press Simulate to rerun)",
+  };
+}
+
+function pushHistory(
+  s: CadStore,
+): { past: HistorySnapshot[]; future: HistorySnapshot[] } & Partial<CadStore> {
+  // Every history-pushing mutation edits the document, so it also stops (and
+  // annotates) a running sim — the §2.11.4 invalidation rides the same choke
+  // point the undo stack does.
+  return { past: [...s.past, snapshot(s)].slice(-HISTORY_LIMIT), future: [], ...stopStaleSim(s) };
 }
 
 /**
@@ -448,7 +472,9 @@ export const useCadStore = create<CadStore>((set, get) => ({
 
   updateParams: (id, params, opts) =>
     set((s) => ({
-      ...(opts?.history === false ? {} : pushHistory(s)),
+      // history:false (live drags) still MUTATES the document — it must stop a
+      // running sim (§2.11.4) even though it skips the undo snapshot.
+      ...(opts?.history === false ? stopStaleSim(s) : pushHistory(s)),
       features: s.features.map((f) =>
         f.id === id ? { ...f, params: { ...f.params, ...params } } : f,
       ),
@@ -551,6 +577,10 @@ export const useCadStore = create<CadStore>((set, get) => ({
     set((s) => ({
       rollbackIndex: index,
       rollbackBeforeId: index === null ? null : (s.features[index]?.id ?? null),
+      // The rollback bar changes which features BUILD — a running sim's world no
+      // longer matches, exactly like an edit (§2.11.4), even though rollback is
+      // view state and pushes no history.
+      ...stopStaleSim(s),
     })),
 
   selectFeature: (id) => set({ selectedFeatureId: id }),
@@ -806,6 +836,8 @@ export const useCadStore = create<CadStore>((set, get) => ({
         rollbackBeforeId: rollbackIndex === null ? null : s.rollbackBeforeId,
         past: s.past.slice(0, -1),
         future: [snapshot(s), ...s.future].slice(0, HISTORY_LIMIT),
+        // Undoing mid-sim swaps the document out from under the running world.
+        ...stopStaleSim(s),
       };
     }),
 
@@ -825,6 +857,8 @@ export const useCadStore = create<CadStore>((set, get) => ({
         rollbackBeforeId: rollbackIndex === null ? null : s.rollbackBeforeId,
         past: [...s.past, snapshot(s)].slice(-HISTORY_LIMIT),
         future: s.future.slice(1),
+        // Redo is a document mutation like any other for a running sim.
+        ...stopStaleSim(s),
       };
     }),
 
@@ -834,19 +868,19 @@ export const useCadStore = create<CadStore>((set, get) => ({
     return structuredClone({ features, params, assembly }) as CadDocument;
   },
 
-  loadDocument: (doc) => set({ ...docLoadState(doc), past: [], future: [] }),
+  loadDocument: (doc) =>
+    // Opening/recovering a project mid-sim would leave the old world playing over
+    // a different document — stop it with the note (§2.11.4).
+    set((s) => ({ ...docLoadState(doc), past: [], future: [], ...stopStaleSim(s) })),
 
   replaceDocument: (doc) => {
     // Preserve undo (§2.12.1): snapshot the CURRENT document onto the undo stack
     // BEFORE swapping, so accepting this (AI/ML) edit is a single undoable step
     // instead of erasing every prior manual edit. future is cleared — a new edit
-    // invalidates redo, exactly like any other mutation.
+    // invalidates redo, exactly like any other mutation. pushHistory also stops
+    // a running sim (§2.11.4) — an AI apply mid-sim invalidates the world too.
     const s = get();
-    set({
-      ...docLoadState(doc),
-      past: [...s.past, snapshot(s)].slice(-HISTORY_LIMIT),
-      future: [],
-    });
+    set({ ...docLoadState(doc), ...pushHistory(s) });
   },
 
   // Restore the initial data state, keeping the user's selection-mode choice

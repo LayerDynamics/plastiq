@@ -483,6 +483,85 @@ describe("CAD Studio store — sim playback (FR-41)", () => {
   });
 });
 
+describe("CAD Studio store — editing during a running sim auto-stops it (§2.11.4)", () => {
+  const STOP_NOTE = "simulation stopped — the document changed (press Simulate to rerun)";
+
+  const startSim = (): void => {
+    s().setWorkspace("simulate");
+    expect(s().simulating).toBe(true);
+  };
+
+  it("a feature edit stops the sim with the status note; the workspace is kept", () => {
+    s().addFeature({ type: "box", params: { dx: 0.04, dy: 0.03, dz: 0.02 } });
+    startSim();
+    s().addFeature({ type: "fillet" });
+    expect(s().simulating).toBe(false);
+    expect(s().simPaused).toBe(false);
+    expect(s().simTicks).toBe(0);
+    expect(s().status).toBe(STOP_NOTE);
+    expect(s().workspace).toBe("simulate"); // stays on the Simulate tab, can rerun
+  });
+
+  it("a history-less live drag (updateParams history:false) still stops the sim", () => {
+    const id = s().addFeature({ type: "box", params: { dx: 0.04, dy: 0.03, dz: 0.02 } });
+    startSim();
+    const pastBefore = s().past.length;
+    s().updateParams(id, { dx: 0.05 }, { history: false });
+    expect(s().simulating).toBe(false);
+    expect(s().status).toBe(STOP_NOTE);
+    expect(s().past).toHaveLength(pastBefore); // still no undo snapshot
+  });
+
+  it("undo and redo mid-sim stop the sim (the document is swapped under the world)", () => {
+    s().addFeature({ type: "box", params: { dx: 0.04, dy: 0.03, dz: 0.02 } });
+    startSim();
+    s().undo();
+    expect(s().simulating).toBe(false);
+    expect(s().status).toBe(STOP_NOTE);
+
+    startSim();
+    s().redo();
+    expect(s().simulating).toBe(false);
+    expect(s().status).toBe(STOP_NOTE);
+  });
+
+  it("assembly edits and document loads mid-sim stop the sim", () => {
+    s().addInstance();
+    startSim();
+    s().addInstance();
+    expect(s().simulating).toBe(false);
+    expect(s().status).toBe(STOP_NOTE);
+
+    startSim();
+    s().replaceDocument({ features: [{ id: "f9", type: "sketch", data: {} }], params: {} });
+    expect(s().simulating).toBe(false);
+
+    startSim();
+    s().loadDocument({ features: [], params: {} });
+    expect(s().simulating).toBe(false);
+  });
+
+  it("moving the rollback bar mid-sim stops the sim (it changes what builds)", () => {
+    s().addFeature({ type: "box", params: { dx: 0.04, dy: 0.03, dz: 0.02 } });
+    s().addFeature({ type: "fillet" });
+    startSim();
+    s().setRollback(1);
+    expect(s().simulating).toBe(false);
+    expect(s().status).toBe(STOP_NOTE);
+  });
+
+  it("non-document interactions do NOT stop the sim", () => {
+    const id = s().addFeature({ type: "box", params: { dx: 0.04, dy: 0.03, dz: 0.02 } });
+    startSim();
+    s().selectFeature(id); // selection is view state
+    s().setJointDrive("j1", 0.5); // transient motion preview
+    s().setSimPaused(true); // playback control
+    s().setSimExperiment({ gravityScale: 0.5 }); // live recipe → restart, not stop
+    expect(s().simulating).toBe(true);
+    expect(s().status).not.toBe(STOP_NOTE);
+  });
+});
+
 describe("CAD Studio store — undo/redo & mate-id correctness (S1–S3)", () => {
   it("S1: undo re-anchors the rollback bar to its feature, not a stale index", () => {
     s().addFeature({ type: "sketch" }); // f1
