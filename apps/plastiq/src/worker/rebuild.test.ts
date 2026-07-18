@@ -1430,6 +1430,67 @@ describe("CAD Studio rebuild (SPEC-5 M0.4)", () => {
       }
     });
 
+    it("OVERLAPPING bodies: a new body INSIDE another stays separate and stays usable", () => {
+      // The common real case (and §13.8's P0 shape): the new body sits inside the
+      // existing one rather than clear of it. A compound does not boolean, so the
+      // two overlap rather than merge — volume DOUBLE-COUNTS the shared region,
+      // which is the correct arithmetic for separate bodies and is asserted here
+      // so the behaviour is pinned rather than discovered later.
+      const doc: CadDocument = {
+        features: [
+          { id: "f1", type: "box", params: { dx: m(40), dy: m(40), dz: m(40) } },
+          {
+            id: "f2",
+            type: "cylinder",
+            // Fully inside the box: radius 5 at the box centre, height 20.
+            params: { radius: m(5), height: m(20), ox: m(20), oy: m(20), oz: m(10) },
+            data: { op: "new" },
+          },
+        ],
+        params: {},
+      };
+      const solid = rebuildDocument(oc, doc)!;
+      try {
+        expect(bodyCount(oc, solid), "overlapping bodies stay separate").toBe(2);
+        const boxVol = m(40) ** 3;
+        const cylVol = Math.PI * m(5) ** 2 * m(20);
+        expect(solidVolume(oc, solid)).toBeCloseTo(boxVol + cylVol, 9);
+        expect(solid.isValid()).toBe(true);
+        // The interior body's faces still tessellate (they are inside the box, so
+        // this is also the case that would silently drop if faces were culled).
+        const mesh = rebuildTagged(oc, doc, { linearDeflection: mm(0.5) })!;
+        expect(mesh.faceGroups.length).toBeGreaterThanOrEqual(9);
+      } finally {
+        solid.delete();
+      }
+
+      // …and a later boolean over the self-overlapping compound still runs.
+      const cutDoc: CadDocument = {
+        features: [
+          ...doc.features,
+          {
+            id: "f3",
+            type: "cylinder",
+            params: { radius: m(2), height: m(60), ox: m(20), oy: m(20), oz: m(-10) },
+            data: { op: "cut" },
+          },
+        ],
+        params: {},
+      };
+      const built = rebuildDocumentIsolated(oc, cutDoc);
+      const failed = built.statuses.filter((st) => st.status === "error");
+      expect(failed, JSON.stringify(failed)).toHaveLength(0);
+      expect(built.solid).not.toBeNull();
+      try {
+        // The bore removed material from BOTH overlapping bodies it passed through.
+        const boxVol = m(40) ** 3;
+        const cylVol = Math.PI * m(5) ** 2 * m(20);
+        expect(solidVolume(oc, built.solid!)).toBeLessThan(boxVol + cylVol);
+      } finally {
+        built.solid!.delete();
+      }
+    });
+
     it("a later feature dresses an edge of the SECOND body (per-body edges stay addressable)", () => {
       // Pick a real edge belonging to the far cylinder (x ≈ 100 mm), then fillet
       // it: dress-up must resolve and operate through the compound, and the
