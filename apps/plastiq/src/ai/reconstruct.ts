@@ -15,6 +15,7 @@ import {
 } from "@plastiq/recon";
 
 import { useAiStore } from "./aiStore.js";
+import type { BuildProbe } from "./tools/buildPart.js";
 import type { CadDocument } from "../store/types.js";
 
 export type {
@@ -62,4 +63,36 @@ export async function cancelReconstruct(
  * rebuilds via the kernel's importStep path into an editable B-rep part. */
 export function stepToImportDocument(step: string, name = "Reconstructed mesh"): CadDocument {
   return { features: [{ id: "f1", type: "importStep", name, data: { step } }], params: {} };
+}
+
+/**
+ * Land service-returned STEP in the document store — but only after PROVING it
+ * builds (§2.12.2).
+ *
+ * A service can return text that is not valid STEP, or STEP the kernel cannot
+ * import. Committing it unchecked replaced the user's document with a feature
+ * that fails in the worker: an empty viewport, and (because the callers then
+ * leave mesh mode) the source mesh discarded with nothing to retry from.
+ *
+ * The probe is the SAME one the AI's build_part tool uses
+ * (`tools/buildPart.geometryClientProbe`) — a real OCCT build that rejects a
+ * partially-failed document, not just a null-mesh check. On failure this throws
+ * WITHOUT calling `load`, so the store and the open mesh are untouched and the
+ * caller's existing catch reports why.
+ *
+ * Takes the finished document (usually `stepToImportDocument(step, name)`) so
+ * callers that inject their own document-shaping seam keep it.
+ */
+export async function commitStepDocument(
+  doc: CadDocument,
+  deps: { probe: BuildProbe; load: (doc: CadDocument) => void },
+): Promise<CadDocument> {
+  const verdict = await deps.probe(doc);
+  if (!verdict.ok) {
+    throw new Error(
+      `the service returned STEP that does not build: ${verdict.error} — the original mesh is kept, nothing was replaced`,
+    );
+  }
+  deps.load(doc);
+  return doc;
 }

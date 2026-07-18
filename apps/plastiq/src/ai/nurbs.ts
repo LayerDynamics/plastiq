@@ -18,7 +18,8 @@ import {
 } from "@plastiq/nurbs";
 
 import { useAiStore } from "./aiStore.js";
-import { stepToImportDocument } from "./reconstruct.js";
+import { commitStepDocument, stepToImportDocument } from "./reconstruct.js";
+import type { BuildProbe } from "./tools/buildPart.js";
 import type { CadDocument } from "../store/types.js";
 
 /** The @plastiq/nurbs client default (services/nurbs dev port) — kept here for the panel's
@@ -32,8 +33,12 @@ export function nurbsUnreachableMessage(baseURL: string): string {
 }
 
 export interface FitMeshToCadDeps {
-  /** Apply the resulting CAD document (e.g. useCadStore.getState().loadDocument). */
+  /** Apply the resulting CAD document (e.g. useCadStore.getState().replaceDocument). */
   load: (doc: CadDocument) => void;
+  /** Prove the fitted STEP builds BEFORE it replaces the document (§2.12.2) —
+   * the real-OCCT build probe. Required: committing unvalidated service STEP is
+   * exactly the destructive path this seam exists to prevent. */
+  probe: BuildProbe;
 }
 
 /** Resolve connection knobs from settings unless the caller overrides them. */
@@ -65,8 +70,12 @@ export async function fitMeshToCad(
   name = "Fitted mesh",
 ): Promise<{ doc: CadDocument; report: NurbsReport }> {
   const result = await fitNurbs({ glbBase64 }, withNurbsSettings(opts));
-  const doc = stepToImportDocument(result.step, name);
-  deps.load(doc);
+  // Validate-then-commit (§2.12.2): throws without touching the store if the
+  // service returned STEP the kernel cannot build.
+  const doc = await commitStepDocument(stepToImportDocument(result.step, name), {
+    probe: deps.probe,
+    load: deps.load,
+  });
   return { doc, report: result.report };
 }
 

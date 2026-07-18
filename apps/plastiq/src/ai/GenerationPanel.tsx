@@ -13,7 +13,8 @@ import { useProjectsStore } from "../persistence/projectsStore.js";
 import { buildProvider, keyResolverFor } from "./providers/registry.js";
 import { isFirstRun, toProviderSettings, type AiSettings } from "./settings.js";
 import { runGeneration } from "./runGeneration.js";
-import { cancelReconstruct, reconstructMesh, stepToImportDocument } from "./reconstruct.js";
+import { cancelReconstruct, commitStepDocument, reconstructMesh, stepToImportDocument } from "./reconstruct.js";
+import { liveBuildProbe } from "./agentTurn.js";
 import {
   cancelFit,
   fitMeshToCad,
@@ -339,7 +340,12 @@ function MeshConvertSection(): React.JSX.Element {
         },
       });
       const name = doc.name ?? "Reconstructed mesh";
-      useCadStore.getState().replaceDocument(stepToImportDocument(result.step, name));
+      // Validate-then-commit (§2.12.2): a throw lands in the catch below, so the
+      // store keeps the current document and the mesh stays open to retry from.
+      await commitStepDocument(stepToImportDocument(result.step, name), {
+        probe: liveBuildProbe(),
+        load: (d) => useCadStore.getState().replaceDocument(d),
+      });
       // M1: surface a pose/scale-robust fidelity readout (SCD) when the server reports it —
       // honest NFR-4 UX: "good" if the reconstructed surface tracks the mesh, "coarse" otherwise.
       const dev = result.report.surface_deviation;
@@ -410,7 +416,10 @@ function MeshConvertSection(): React.JSX.Element {
       const name = doc.name ?? "Fitted mesh";
       const { report } = await fitMeshToCad(
         doc.glb,
-        { load: (d) => useCadStore.getState().replaceDocument(d) },
+        {
+          load: (d) => useCadStore.getState().replaceDocument(d),
+          probe: liveBuildProbe(),
+        },
         {
           signal: controller.signal,
           onState: (s) => setStatus(s),

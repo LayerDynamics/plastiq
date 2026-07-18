@@ -16,11 +16,16 @@ import {
 } from "./nurbs.js";
 import { useAiStore } from "./aiStore.js";
 import type { AiSettings } from "./settings.js";
+import type { BuildProbe } from "./tools/buildPart.js";
 import type { CadDocument } from "../store/types.js";
 
 vi.mock("@plastiq/nurbs", () => ({ fitNurbs: vi.fn(), cancelJob: vi.fn() }));
 const fitNurbsMock = vi.mocked(fitNurbs);
 const cancelJobMock = vi.mocked(cancelJob);
+
+/** A build probe that accepts the fitted STEP — the §2.12.2 validate-then-commit
+ * gate runs on every fit, so the wiring tests need one that passes. */
+const okProbe: BuildProbe = async () => ({ ok: true });
 
 /** Minimal valid settings (the resolution tests spread nurbs fields on top). */
 const BASE_SETTINGS: AiSettings = { providerKey: "anthropic", providerId: "anthropic", model: "m", apiKeys: {} };
@@ -61,7 +66,7 @@ beforeEach(() => {
 describe("fitMeshToCad — STEP → CadDocument wiring (FR-8)", () => {
   it("calls fitNurbs with the GLB, wraps the STEP via stepToImportDocument, loads it, returns the report", async () => {
     let loaded: CadDocument | null = null;
-    const res = await fitMeshToCad("R0xCYWFh", { load: (d) => (loaded = d) }, {}, "My mesh");
+    const res = await fitMeshToCad("R0xCYWFh", { load: (d) => (loaded = d), probe: okProbe }, {}, "My mesh");
 
     expect(fitNurbsMock).toHaveBeenCalledTimes(1);
     expect(fitNurbsMock.mock.calls[0]![0]).toEqual({ glbBase64: "R0xCYWFh" });
@@ -79,13 +84,24 @@ describe("fitMeshToCad — STEP → CadDocument wiring (FR-8)", () => {
   it("propagates a failed fit as a throw (nothing loaded)", async () => {
     fitNurbsMock.mockRejectedValue(new Error("nurbs fit failed: genus >= 1"));
     let loaded = false;
-    await expect(fitMeshToCad("R0xC", { load: () => (loaded = true) })).rejects.toThrow(/genus/);
+    await expect(fitMeshToCad("R0xC", { load: () => (loaded = true), probe: okProbe })).rejects.toThrow(/genus/);
     expect(loaded).toBe(false);
+  });
+
+  it("§2.12.2: STEP that does not build is NEVER committed — it throws instead", async () => {
+    // The service returns 200 with unusable STEP: the probe (a real kernel build
+    // in the app) rejects it, so the document is not replaced.
+    const failing: BuildProbe = async () => ({ ok: false, error: "importStep: invalid entity" });
+    let loaded = false;
+    await expect(
+      fitMeshToCad("R0xC", { load: () => (loaded = true), probe: failing }),
+    ).rejects.toThrow(/does not build: importStep: invalid entity.*original mesh is kept/s);
+    expect(loaded).toBe(false); // nothing was committed — no empty viewport, no lost mesh
   });
 });
 
 describe("fitMeshToCad — settings resolution (nurbsBaseURL/nurbsApiKey, SPEC-12 §6.1)", () => {
-  const deps = { load: (): void => {} };
+  const deps = { load: (): void => {}, probe: okProbe };
 
   it("threads the persisted nurbsBaseURL into fitNurbs; absent ⇒ no baseURL (client default)", async () => {
     await fitMeshToCad("R0xC", deps);

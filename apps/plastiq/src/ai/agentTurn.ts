@@ -10,7 +10,7 @@ import { useAiStore } from "./aiStore.js";
 import { buildAgentTools } from "./tools/toolDefs.js";
 import { buildMeshGenDeps } from "./meshGenDeps.js";
 import { summarizePlan, type PlanGraph } from "./planning.js";
-import { geometryClientProbe, type ApplyDocument } from "./tools/buildPart.js";
+import { geometryClientProbe, type ApplyDocument, type BuildProbe } from "./tools/buildPart.js";
 import { reconstructMesh, stepToImportDocument } from "./reconstruct.js";
 import { fitMeshToCad } from "./nurbs.js";
 import { meshFromPartialScan, meshFromPointCloud } from "./capture.js";
@@ -31,6 +31,23 @@ export type BuildSeam = (doc: CadDocument) => Promise<BuildOutcome>;
 /** Read the live build seam, or null when the geometry worker isn't ready yet. */
 export function buildSeam(): BuildSeam | null {
   return (globalThis as { __plastiqBuild?: BuildSeam }).__plastiqBuild ?? null;
+}
+
+/**
+ * The real-OCCT build probe over that seam — used to PROVE a document builds
+ * before it replaces the live one (§2.12.2). Shared by the agent's mesh→CAD
+ * tools, the ML context actions, and the generation panel, so every path that
+ * lands service STEP validates it the same way.
+ *
+ * If the viewport hasn't published the seam yet, the probe REJECTS rather than
+ * waving the document through: unvalidated STEP must never replace the document.
+ */
+export function liveBuildProbe(): BuildProbe {
+  const build = buildSeam();
+  if (!build) {
+    return async () => ({ ok: false, error: "the geometry worker is not ready to validate it" });
+  }
+  return geometryClientProbe({ build });
 }
 
 export interface TurnToolsDeps {
@@ -80,6 +97,10 @@ export function buildMeshToCadDeps(deps: TurnToolsDeps): MeshToCadDeps {
     fitNurbs: fitMeshToCad,
     stepToDoc: stepToImportDocument,
     load: (doc) => useCadStore.getState().replaceDocument(doc),
+    // §2.12.2: the agent's mesh→CAD tools validate service STEP with the SAME
+    // real-OCCT probe build_part uses, so a bad conversion is a tool error the
+    // model can react to — never a blanked viewport with the mesh discarded.
+    probe: liveBuildProbe(),
     onConverted: (name) =>
       useProjectsStore.setState({ activeMeshDoc: null, currentId: null, currentName: name }),
     ...(deps.signal ? { signal: deps.signal } : {}),

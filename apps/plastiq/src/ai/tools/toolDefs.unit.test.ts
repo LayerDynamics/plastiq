@@ -204,6 +204,7 @@ describe("buildAgentTools dispatch", () => {
           fitNurbs: async () => { throw new Error("unused"); },
           stepToDoc: (step, name) => ({ features: [{ id: "f1", type: "importStep", name: name ?? "x", data: { step } }], params: {} }),
           load: () => {},
+          probe: async () => ({ ok: true }),
         },
       }),
     );

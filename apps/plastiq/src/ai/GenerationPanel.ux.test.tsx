@@ -24,6 +24,20 @@ import { useAiStore } from "./aiStore.js";
 import { useProjectsStore } from "../persistence/projectsStore.js";
 import type { ChatMessage, ChatStreamRequest } from "./providers/types.js";
 import type { MeshDoc } from "../store/types.js";
+import type { BuildOutcome } from "../worker/bridge.js";
+import type { TransferMesh } from "../worker/protocol.js";
+
+/** A minimal but well-formed built mesh — one triangle. The §2.12.2 gate only
+ * needs the build to have produced geometry with no failed features, but the
+ * seam's contract is a real TransferMesh, so the stub honours it. */
+const STUB_MESH: TransferMesh = {
+  vertices: new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]),
+  indices: new Uint32Array([0, 1, 2]),
+  faceGroups: [],
+  edges: [],
+  vertexIds: [],
+  vertexPositions: new Float32Array([]),
+};
 
 // Controllable fake chat provider behind the registry seam — the panel + the REAL
 // agent loop drive it; tests flip `behavior`/`errorText` and inspect `requests`.
@@ -77,7 +91,12 @@ beforeEach(() => {
     conversationProjectId: null,
   });
   useProjectsStore.setState({ activeMeshDoc: null });
-  (globalThis as { __plastiqBuild?: () => Promise<null> }).__plastiqBuild = () => Promise.resolve(null);
+  // The viewport's build seam. It must return a real BuildOutcome shape: the
+  // §2.12.2 validate-then-commit gate probes it before landing service STEP, and
+  // a document that doesn't build is (correctly) refused. The previous stub
+  // resolved to `null` — never a valid BuildOutcome, just never exercised.
+  (globalThis as { __plastiqBuild?: () => Promise<BuildOutcome> }).__plastiqBuild = () =>
+    Promise.resolve({ mesh: STUB_MESH, statuses: [{ featureId: "f1", status: "ok" }] });
   providerControl.behavior = "fail";
   providerControl.errorText = "TypeError: Failed to fetch";
   providerControl.requests.length = 0;

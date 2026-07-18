@@ -13,7 +13,9 @@ import type { ContextAction } from "./config.js";
 import { useProjectsStore } from "../../persistence/projectsStore.js";
 import { useCadStore } from "../../store/store.js";
 import { useAiStore } from "../../ai/aiStore.js";
-import { reconstructMesh, stepToImportDocument } from "../../ai/reconstruct.js";
+import { commitStepDocument, reconstructMesh, stepToImportDocument } from "../../ai/reconstruct.js";
+import type { BuildProbe } from "../../ai/tools/buildPart.js";
+import { liveBuildProbe } from "../../ai/agentTurn.js";
 import { fitMeshToCad, NURBS_DEFAULT_BASE_URL, nurbsFitStatusMessage, nurbsUnreachableMessage } from "../../ai/nurbs.js";
 import { RECONSTRUCT_DEFAULT_BASE_URL, checkServiceHealth, serviceUnreachableMessage } from "../../ai/errorHints.js";
 
@@ -26,8 +28,11 @@ export interface MlActionDeps {
   checkHealth: (base: string) => Promise<boolean>;
   reconstruct: typeof reconstructMesh;
   fitNurbs: typeof fitMeshToCad;
-  /** Land the reconstructed/fitted STEP as a parametric doc (useCadStore.loadDocument). */
+  /** Land the reconstructed/fitted STEP as a parametric doc (useCadStore.replaceDocument). */
   load: (doc: CadDocument) => void;
+  /** Prove the returned STEP actually builds BEFORE it replaces the document
+   * (§2.12.2) — the real-OCCT build probe the AI's build_part tool uses. */
+  probe: BuildProbe;
   /** Leave mesh mode + report the terminal status (the projects-store handoff the panel does). */
   finish: (name: string, status: string) => void;
   /** Progress line while the job runs. */
@@ -48,7 +53,9 @@ export async function runReconstructBrep(deps: MlActionDeps): Promise<void> {
     ...(deps.reconstructBaseURL ? { baseURL: deps.reconstructBaseURL } : {}),
     onState: (s) => deps.setStatus(s),
   });
-  deps.load(stepToImportDocument(result.step, name));
+  // Validate before committing (§2.12.2): a throw here leaves the store AND the
+  // open mesh untouched — `finish` (which clears activeMeshDoc) never runs.
+  await commitStepDocument(stepToImportDocument(result.step, name), { probe: deps.probe, load: deps.load });
   const solid = result.report.is_solid ? "solid" : "shell";
   deps.finish(name, `reconstructed to CAD — ${result.report.faces_built} faces, ${solid}`);
 }
@@ -65,7 +72,7 @@ export async function runFitNurbs(deps: MlActionDeps): Promise<void> {
   deps.setStatus("fitting NURBS surfaces…");
   const { report } = await deps.fitNurbs(
     deps.mesh.glb,
-    { load: deps.load },
+    { load: deps.load, probe: deps.probe },
     { ...(deps.nurbsBaseURL ? { baseURL: deps.nurbsBaseURL } : {}), onState: (s) => deps.setStatus(s) },
     name,
   );
@@ -85,6 +92,7 @@ export function liveMlDeps(): MlActionDeps | null {
     reconstruct: reconstructMesh,
     fitNurbs: fitMeshToCad,
     load: (doc) => useCadStore.getState().replaceDocument(doc),
+    probe: liveBuildProbe(),
     finish: (name, status) =>
       useProjectsStore.setState({ activeMeshDoc: null, currentId: null, currentName: name, status }),
     setStatus: (s) => useProjectsStore.setState({ status: s }),

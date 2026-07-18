@@ -50,6 +50,9 @@ function makeDeps(over: Partial<MlActionDeps> = {}): MlActionDeps & {
       return { doc, report: nurbsReport() };
     }),
     load: (doc) => loaded.push(doc),
+    // Default: the returned STEP builds. Tests override with a failing probe to
+    // exercise the §2.12.2 validate-then-commit gate.
+    probe: vi.fn(async () => ({ ok: true as const })),
     finish: (name, status) => finished.push({ name, status }),
     setStatus: (s) => statuses.push(s),
     loaded,
@@ -91,6 +94,26 @@ describe("runReconstructBrep", () => {
     await runReconstructBrep(deps);
     expect(deps.checkHealth).toHaveBeenCalledWith("https://recon.example"); // trailing slash trimmed
     expect(deps.reconstruct).toHaveBeenCalledWith("GLB_BASE64", expect.objectContaining({ baseURL: "https://recon.example/" }));
+  });
+
+  it("§2.12.2: unbuildable STEP is rejected — nothing loaded, and the MESH IS KEPT", async () => {
+    // The service answers 200 with STEP the kernel can't import. Committing it
+    // used to blank the viewport AND clear activeMeshDoc (via finish), leaving
+    // nothing to retry from.
+    const deps = makeDeps({
+      probe: vi.fn(async () => ({ ok: false as const, error: "importStep: invalid entity" })),
+    });
+    await expect(runReconstructBrep(deps)).rejects.toThrow(/does not build/);
+    expect(deps.loaded).toHaveLength(0); // the document was never replaced
+    expect(deps.finished).toHaveLength(0); // finish() never ran ⇒ activeMeshDoc survives
+  });
+
+  it("§2.12.2: the probe validates the SAME document that would be committed", async () => {
+    const deps = makeDeps();
+    await runReconstructBrep(deps);
+    const probed = vi.mocked(deps.probe).mock.calls[0]![0];
+    expect(probed.features[0]).toMatchObject({ type: "importStep", name: "Widget" });
+    expect(probed).toEqual(deps.loaded[0]); // probed doc === committed doc
   });
 });
 

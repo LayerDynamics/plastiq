@@ -15,8 +15,10 @@
 
 import { z } from "zod";
 import type { CadDocument, MeshDoc } from "../../store/types.js";
+import { commitStepDocument } from "../reconstruct.js";
 import type { reconstructMesh, stepToImportDocument } from "../reconstruct.js";
 import type { fitMeshToCad } from "../nurbs.js";
+import type { BuildProbe } from "./buildPart.js";
 
 /** `reconstruct_brep` args (§7.1): only an optional reconstruction route; the mesh is the open doc. */
 const reconstructBrepArgsSchema = z.object({
@@ -43,10 +45,16 @@ export interface MeshToCadDeps {
   /** Fit NURBS surfaces to a mesh GLB (base64); loads the STEP via the passed `load` and returns the
    * report (ai/nurbs.fitMeshToCad — it lands the doc itself, so `load` is threaded through). */
   fitNurbs: typeof fitMeshToCad;
-  /** Wrap reconstruct STEP text → a CadDocument (ai/reconstruct.stepToImportDocument). */
+  /** Wrap reconstruct STEP text → a CadDocument (ai/reconstruct.stepToImportDocument).
+   * Injected so a caller can shape the landed document; the validate-then-commit
+   * gate (§2.12.2) then proves THAT document builds before it is applied. */
   stepToDoc: typeof stepToImportDocument;
-  /** Land the resulting CAD document (useCadStore.loadDocument). */
+  /** Land the resulting CAD document (useCadStore.replaceDocument). */
   load: (doc: CadDocument) => void;
+  /** Prove the service's STEP builds BEFORE it replaces the document (§2.12.2) —
+   * the same real-OCCT probe build_part uses. Without it the agent could blank
+   * the user's viewport with unusable STEP and clear the source mesh. */
+  probe: BuildProbe;
   /** Called after a successful conversion so the app can leave mesh mode (clear activeMeshDoc). */
   onConverted?: (name: string) => void;
   /** Cancels the operation at the next boundary. */
@@ -87,7 +95,9 @@ export async function reconstructBrep(input: unknown, deps: MeshToCadDeps): Prom
   }
 
   try {
-    deps.load(deps.stepToDoc(result.step, name));
+    // Validate-then-commit (§2.12.2): unbuildable STEP is reported to the agent
+    // as a tool error, leaving the document and the open mesh intact.
+    await commitStepDocument(deps.stepToDoc(result.step, name), { probe: deps.probe, load: deps.load });
   } catch (e) {
     return { status: "error", message: "Loading the reconstructed STEP as a CAD document failed.", errors: errMessage(e) };
   }
@@ -113,7 +123,7 @@ export async function fitNurbs(input: unknown, deps: MeshToCadDeps): Promise<Mes
 
   let report;
   try {
-    ({ report } = await deps.fitNurbs(mesh.glb, { load: deps.load }, { ...(deps.signal ? { signal: deps.signal } : {}) }, name));
+    ({ report } = await deps.fitNurbs(mesh.glb, { load: deps.load, probe: deps.probe }, { ...(deps.signal ? { signal: deps.signal } : {}) }, name));
   } catch (e) {
     return { status: "error", message: "The NURBS surface fit failed.", errors: errMessage(e) };
   }

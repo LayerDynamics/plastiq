@@ -42,6 +42,9 @@ function makeDeps(over: Partial<MeshToCadDeps> = {}): MeshToCadDeps & { loaded: 
       params: {},
     })),
     load: (doc) => loaded.push(doc),
+    // Default: the service STEP builds. Tests override with a failing probe to
+    // exercise the §2.12.2 validate-then-commit gate.
+    probe: vi.fn(async () => ({ ok: true as const })),
     onConverted: (name) => converted.push(name),
     ...over,
   };
@@ -65,6 +68,26 @@ describe("reconstruct_brep tool", () => {
     const deps = makeDeps();
     await reconstructBrep({ method: "faceted" }, deps);
     expect(deps.reconstruct).toHaveBeenCalledWith("GLB64", expect.objectContaining({ method: "faceted" }));
+  });
+
+  it("§2.12.2: unbuildable STEP is a structured error — nothing loaded, mesh mode kept", async () => {
+    const deps = makeDeps({
+      probe: vi.fn(async () => ({ ok: false as const, error: "importStep: invalid entity" })),
+    });
+    const r = await reconstructBrep({}, deps);
+
+    expect(r.status).toBe("error");
+    expect(r.errors).toMatch(/does not build: importStep: invalid entity/);
+    expect(deps.loaded).toHaveLength(0); // the document was never replaced
+    expect(deps.converted).toHaveLength(0); // onConverted never ran ⇒ the mesh stays open
+  });
+
+  it("§2.12.2: the probe sees the document the injected stepToDoc produced", async () => {
+    const deps = makeDeps();
+    await reconstructBrep({}, deps);
+    const probed = vi.mocked(deps.probe).mock.calls[0]![0];
+    expect(probed).toEqual(deps.loaded[0]); // probed doc === committed doc
+    expect(probed.features[0]).toMatchObject({ type: "importStep", name: "Widget" });
   });
 
   it("reports 'shell' when the reconstruction is not a solid", async () => {
