@@ -317,7 +317,14 @@ function sweepAlongPickedEdges(
  * geometry). Throws on the first unrecoverable feature error; the caller
  * (worker/tree) attributes it to the offending feature.
  */
-type ActiveSketch = { profile: Profile; plane: DatumPlane };
+type ActiveSketch = {
+  profile: Profile;
+  plane: DatumPlane;
+  /** True when the plane came from a MODEL FACE rather than a base datum. A face
+   * plane's normal points OUT of the body it was taken from, which is what tells
+   * a cut which way the material actually lies (§13.8 P0). */
+  onFace: boolean;
+};
 
 /** Resolve the sketch profile for extrude/cut/revolve (C3): prefer
  * `data.sketchId`, then the first `deps` entry that names a known sketch, then
@@ -559,7 +566,11 @@ function evaluateDocument(oc: Occt, doc: CadDocument, isolate: boolean): Isolate
         } else {
           sketchPlane = resolveSketchPlane(planeSpec);
         }
-        const entry: ActiveSketch = { profile: prof, plane: sketchPlane };
+        const entry: ActiveSketch = {
+          profile: prof,
+          plane: sketchPlane,
+          onFace: isFaceSketchPlane(planeSpec),
+        };
         sketches.set(f.id, entry);
         lastSketch = entry;
         break;
@@ -855,6 +866,16 @@ function evaluateDocument(oc: Occt, doc: CadDocument, isolate: boolean): Isolate
         }
         const depth = num(f, "depth");
         const back = opt(f, "back", 0);
+        // A cut sketched ON a model face must go INTO the body (§13.8 P0). A face
+        // plane's normal points OUTWARD, so extruding the tool along it would
+        // sweep through empty space and remove exactly nothing — the same
+        // "operation did nothing" defect this pass exists to kill, mirrored. A
+        // DATUM-plane cut keeps sweeping +normal (a sketch under the body cuts
+        // upward into it), and an explicit direction always wins.
+        if (!direction && activeSketch.onFace) {
+          const n = activeSketch.plane.normal;
+          direction = [-n[0], -n[1], -n[2]];
+        }
         // Outer cut tool; profile.holes on cut leave islands via cutProfileHoles on the tool
         // so the tool is a ring (outer minus holes) before subtracting from the body.
         let tool = extrude(oc, profileSketch(activeSketch.profile, activeSketch.plane), depth, {

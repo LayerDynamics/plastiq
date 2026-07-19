@@ -1,8 +1,12 @@
 // Construction-geometry gizmo: the active sketch's construction entities (lines &
 // circles flagged `construction`) drawn as dashed 3D reference geometry ON the
 // sketch plane, so they read in the 3D scene too — not just the 2D overlay.
-// Datum sketches for now; face-plane sketches are a follow-up (their frame is
-// resolved in the worker). Arc/spline construction = follow-up.
+// Works on BOTH plane kinds: a base datum resolves locally, while a FACE-derived
+// plane uses the frame the viewport resolves through the geometry worker and
+// publishes as `sketchStore.resolvedFrame` — necessary now that a sketch with no
+// explicit offset defaults to the model's outer face (§13.8 P0), which would
+// otherwise leave the common case with no construction geometry drawn at all.
+// Arc/spline construction entities remain 2D-only.
 
 import { useMemo } from "react";
 import { Line } from "@react-three/drei";
@@ -19,10 +23,13 @@ export function ConstructionGeometryGizmo(): React.JSX.Element | null {
   const plane = useSketchStore((s) => s.model.plane);
   const offset = useSketchStore((s) => s.model.offset ?? 0);
   const model = useSketchStore((s) => s.model);
+  const resolved = useSketchStore((s) => s.resolvedFrame);
 
   const polylines = useMemo<P3[][]>(() => {
-    if (!active || onFace) return [];
-    const dp = resolveDatumPlane(plane, offset);
+    // A face plane has no honest frame until the worker resolves it; drawing on
+    // a guessed one would put the reference geometry in the wrong place.
+    if (!active || (onFace && !resolved)) return [];
+    const dp = onFace && resolved ? resolved : resolveDatumPlane(plane, offset);
     const [ox, oy, oz] = dp.origin;
     const [xx, xy, xz] = dp.xAxis;
     const [nx, ny, nz] = dp.normal;
@@ -58,7 +65,7 @@ export function ConstructionGeometryGizmo(): React.JSX.Element | null {
       }
     }
     return out;
-  }, [active, onFace, plane, offset, model]);
+  }, [active, onFace, resolved, plane, offset, model]);
 
   useGizmoPresence("constructionGeometry", polylines.length > 0);
   if (polylines.length === 0) return null;

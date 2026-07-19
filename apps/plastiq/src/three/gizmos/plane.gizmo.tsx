@@ -1,8 +1,14 @@
-// Plane gizmo: a translucent quad + outline on the ACTIVE sketch's datum plane,
-// so you can see the plane you're drawing on in 3D (S1–S3). Oriented by the
-// resolved DatumPlane frame (origin/normal/xAxis) and offset. Shown while
-// sketching on a datum; face-derived sketch planes (model.face) are a follow-up
-// (their frame is resolved in the worker, not the store).
+// Plane gizmo: a translucent quad + outline on the ACTIVE sketch's plane, so you
+// can see the plane you're drawing on in 3D (S1–S3). Oriented by the resolved
+// DatumPlane frame (origin/normal/xAxis) and offset.
+//
+// Works for BOTH plane kinds. A base datum resolves synchronously here; a
+// FACE-derived plane needs the solid, so the viewport resolves it through the
+// geometry worker and publishes it as `sketchStore.resolvedFrame`, which this
+// reads. That matters now that a sketch started with no explicit offset lands on
+// the model's outer face by default (§13.8 P0) — the common case is a face
+// plane, and hiding the gizmo for it would leave the most common sketch with no
+// visible plane at all.
 
 import { useMemo } from "react";
 import * as THREE from "three";
@@ -27,10 +33,14 @@ export function PlaneGizmo(): React.JSX.Element | null {
   const plane = useSketchStore((s) => s.model.plane);
   const offset = useSketchStore((s) => s.model.offset ?? 0);
   const onFace = useSketchStore((s) => s.model.face != null);
-  const show = active && !onFace;
+  const resolved = useSketchStore((s) => s.resolvedFrame);
+  // A face plane can only be drawn once the worker has resolved it; until then
+  // there is no honest frame to draw, so the quad waits rather than flashing at
+  // the wrong place.
+  const show = active && (!onFace || resolved != null);
 
   const frame = useMemo(() => {
-    const dp = resolveDatumPlane(plane, offset);
+    const dp = onFace && resolved ? resolved : resolveDatumPlane(plane, offset);
     const x = new THREE.Vector3(dp.xAxis[0], dp.xAxis[1], dp.xAxis[2]);
     const z = new THREE.Vector3(dp.normal[0], dp.normal[1], dp.normal[2]);
     const y = new THREE.Vector3().crossVectors(z, x);
@@ -39,7 +49,7 @@ export function PlaneGizmo(): React.JSX.Element | null {
       position: [dp.origin[0], dp.origin[1], dp.origin[2]] as [number, number, number],
       quaternion: [q.x, q.y, q.z, q.w] as [number, number, number, number],
     };
-  }, [plane, offset]);
+  }, [plane, offset, onFace, resolved]);
 
   useGizmoPresence("plane", show);
   if (!show) return null;

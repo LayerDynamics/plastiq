@@ -7,7 +7,7 @@
 // parametric source of truth.
 
 import { create } from "zustand";
-import { solveSketch, type SolveResult } from "@plastiq/cad";
+import { solveSketch, type DatumPlane, type SolveResult } from "@plastiq/cad";
 import { centeredView, type View2D } from "./transform2d.js";
 import { buildConstraints, type ConstraintKind } from "./hit.js";
 import { buildDimension, measure, type DimensionKind } from "./dim.js";
@@ -50,6 +50,17 @@ export type SketchConsumer =
 
 export interface SketchStore {
   active: boolean;
+  /**
+   * The active sketch's plane RESOLVED to a world frame, or null when not
+   * sketching (and briefly while a face plane is still resolving).
+   *
+   * A base datum resolves synchronously, but a FACE plane needs the solid, so
+   * the viewport resolves it through the geometry worker and publishes the
+   * result here. Keeping it in the store is what lets 3D overlays (the plane
+   * gizmo) draw a face-based sketch plane at all — they cannot run OCCT
+   * themselves, and recomputing it per-consumer would duplicate the round trip.
+   */
+  resolvedFrame: DatumPlane | null;
   /** The document feature being edited (null = a brand-new sketch). */
   editingFeatureId: string | null;
   /** When set, Finish also adds this solid feature consuming the new sketch (W4). */
@@ -78,6 +89,8 @@ export interface SketchStore {
   future: SketchModel[];
   /** Mark the solver ready (called when initSketchSolver resolves). */
   setSolverReady: (ready: boolean) => void;
+  /** Publish the resolved world frame of the active sketch plane (viewport). */
+  setResolvedFrame: (frame: DatumPlane | null) => void;
 
   enterSketch: (
     plane: DatumPlaneId,
@@ -163,9 +176,11 @@ export const useSketchStore = create<SketchStore>((set, get) => ({
   selection: [],
   editingDim: null,
   solverReady: false,
+  resolvedFrame: null,
   past: [],
   future: [],
   setSolverReady: (ready) => set({ solverReady: ready }),
+  setResolvedFrame: (frame) => set({ resolvedFrame: frame }),
 
   enterSketch: (plane, offset = 0, featureId, model, consumer = null) => {
     // The sketcher solves synchronously; refuse to open it until planegcs is

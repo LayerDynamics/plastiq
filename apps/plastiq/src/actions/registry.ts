@@ -12,6 +12,7 @@ import { useCadStore } from "../store/store.js";
 import { useProjectsStore } from "../persistence/projectsStore.js";
 import { useVoxelStore } from "../voxel/voxelStore.js";
 import { assemblyToAssy, parseAssy, realizeAssembly } from "../assembly/assy.js";
+import { startingSketchModel } from "../sketch/defaultPlane.js";
 import type { AssemblyModel } from "../assembly/model.js";
 import { voxelDocToMesh } from "../voxel/doc.js";
 import { voxelMeshToGlbBase64 } from "../voxel/glb.js";
@@ -369,7 +370,7 @@ const RIBBON_ONLY: ActionDef[] = [
     // Opens the sketcher (T13); sample rect remains as a separate discoverability path.
     enabled: always,
     run: () => {
-      useSketchStore.getState().enterSketch("XY", 0);
+      useSketchStore.getState().enterSketch("XY", 0, undefined, startingSketchModel("XY", cad().selectionRefs.faces));
       cad().setStatus("Sketch: draw a closed profile, then Finish");
     },
   },
@@ -385,8 +386,21 @@ const RIBBON_ONLY: ActionDef[] = [
     icon: "▭",
     enabled: always,
     run: () => {
-      cad().addFeature({ type: "sketch", data: { profile: DEFAULT_RECT } });
-      cad().setStatus("Rectangle sketch inserted — extrude it, or edit its profile");
+      // Land it on the model's top face, not the bare XY plane (§13.8 P0): with
+      // a body already present, XY/0 is buried INSIDE it, so the rectangle you
+      // just "inserted" would extrude into solid material and appear to do
+      // nothing. `startingSketchModel` resolves the same parametric face spec the
+      // sketcher's own default uses; an empty document still gets plain XY.
+      const model = startingSketchModel("XY", cad().selectionRefs.faces);
+      const plane = model.face
+        ? { kind: "face" as const, face: model.face, offset: 0 }
+        : { base: "XY" as const, offset: 0 };
+      cad().addFeature({ type: "sketch", data: { profile: DEFAULT_RECT, plane } });
+      cad().setStatus(
+        model.face
+          ? "Rectangle sketch inserted on the top face — extrude it, or edit its profile"
+          : "Rectangle sketch inserted — extrude it, or edit its profile",
+      );
     },
   },
   {

@@ -1662,6 +1662,153 @@ describe("CAD Studio rebuild (SPEC-5 M0.4)", () => {
       }
     });
 
+    it("§13.8 P0 SOLVED: the default sketch lands on the box's TOP face, so the first extrude is VISIBLE", () => {
+      // The real first-run flow, end to end. The sketch feature now carries the
+      // face-plane spec that `startingSketchModel` produces for a document with
+      // geometry (sketch/defaultPlane.ts) instead of a blind XY/0 that sits on
+      // the box's buried bottom face.
+      const doc: CadDocument = {
+        features: [
+          { id: "f1", type: "box", name: "Box 1", params: { dx: m(60), dy: m(40), dz: m(30) } },
+          {
+            id: "f2",
+            type: "sketch",
+            data: {
+              profile: loopProfile([
+                [m(10), m(10)],
+                [m(30), m(10)],
+                [m(30), m(30)],
+                [m(10), m(30)],
+              ]),
+              // What the default path now produces: the box's +Z face.
+              plane: { kind: "face", face: { normal: [0, 0, 1] }, offset: 0 },
+            },
+          },
+          { id: "f3", type: "extrude", deps: ["f2"], params: { height: m(10) } },
+        ],
+        params: {},
+      };
+      const built = rebuildDocumentIsolated(oc, doc);
+      try {
+        // The pad ADDS material now — the whole point of the P0.
+        const boxVol = m(60) * m(40) * m(30);
+        const padVol = m(20) * m(20) * m(10);
+        expect(solidVolume(oc, built.solid!)).toBeCloseTo(boxVol + padVol, 9);
+        // It stands proud of the box: the model is taller than the box alone.
+        expect(built.solid!.boundingBox().max[2]).toBeCloseTo(m(40), 6);
+        // And it is a clean success — no warning, because something happened.
+        expect(built.statuses.find((st) => st.featureId === "f3")!.status).toBe("ok");
+      } finally {
+        built.solid!.delete();
+      }
+    });
+
+    it("§13.8 P0: the face-based default is PARAMETRIC — raising the box carries the pad", () => {
+      // A baked `offset: 0.03` would detach the moment the box changed height.
+      // The face spec re-resolves against the rebuilt solid every pass.
+      const doc = (dz: number): CadDocument => ({
+        features: [
+          { id: "f1", type: "box", params: { dx: m(60), dy: m(40), dz } },
+          {
+            id: "f2",
+            type: "sketch",
+            data: {
+              profile: loopProfile([
+                [m(10), m(10)],
+                [m(30), m(10)],
+                [m(30), m(30)],
+                [m(10), m(30)],
+              ]),
+              plane: { kind: "face", face: { normal: [0, 0, 1] }, offset: 0 },
+            },
+          },
+          { id: "f3", type: "extrude", deps: ["f2"], params: { height: m(10) } },
+        ],
+        params: {},
+      });
+      for (const dz of [m(30), m(50)]) {
+        const solid = rebuildDocument(oc, doc(dz))!;
+        try {
+          // The pad still sits ON the (moved) top face: total height = box + pad.
+          expect(solid.boundingBox().max[2]).toBeCloseTo(dz + m(10), 6);
+          expect(solid.volume()).toBeCloseTo(m(60) * m(40) * dz + m(20) * m(20) * m(10), 9);
+        } finally {
+          solid.delete();
+        }
+      }
+    });
+
+    it("§13.8 P0: a cut sketched ON a face removes material (it aims INTO the body)", () => {
+      // The mirror of the extrude case. A face plane's normal points OUTWARD, so
+      // sweeping the cut tool along it would pass through empty space and remove
+      // nothing — "the operation did nothing" again, from the other side.
+      const doc: CadDocument = {
+        features: [
+          { id: "f1", type: "box", params: { dx: m(60), dy: m(40), dz: m(30) } },
+          {
+            id: "f2",
+            type: "sketch",
+            data: {
+              // A face plane's u/v origin is the FACE CENTROID, so this 20×20
+              // square is centred on the top face and lies fully within it.
+              profile: loopProfile([
+                [m(-10), m(-10)],
+                [m(10), m(-10)],
+                [m(10), m(10)],
+                [m(-10), m(10)],
+              ]),
+              plane: { kind: "face", face: { normal: [0, 0, 1] }, offset: 0 },
+            },
+          },
+          { id: "f3", type: "cut", deps: ["f2"], params: { depth: m(10) } },
+        ],
+        params: {},
+      };
+      const built = rebuildDocumentIsolated(oc, doc);
+      try {
+        expect(built.statuses.filter((st) => st.status === "error")).toHaveLength(0);
+        // A 20×20×10 pocket was removed from the top — not nothing, and not a
+        // through-cut of the whole box.
+        const boxVol = m(60) * m(40) * m(30);
+        expect(solidVolume(oc, built.solid!)).toBeCloseTo(boxVol - m(20) * m(20) * m(10), 9);
+        // The box's outer height is unchanged: the tool went DOWN into it.
+        expect(built.solid!.boundingBox().max[2]).toBeCloseTo(m(30), 6);
+      } finally {
+        built.solid!.delete();
+      }
+    });
+
+    it("§13.8 P0: a DATUM-plane cut still sweeps +normal (unchanged)", () => {
+      // A sketch on XY under the box cuts UPWARD into it — the pre-existing
+      // contract the feature-edit gizmo's arrow direction asserts.
+      const doc: CadDocument = {
+        features: [
+          { id: "f1", type: "box", params: { dx: m(60), dy: m(40), dz: m(30) } },
+          {
+            id: "f2",
+            type: "sketch",
+            data: {
+              profile: loopProfile([
+                [m(10), m(10)],
+                [m(30), m(10)],
+                [m(30), m(30)],
+                [m(10), m(30)],
+              ]),
+              plane: { base: "XY", offset: 0 },
+            },
+          },
+          { id: "f3", type: "cut", deps: ["f2"], params: { depth: m(10) } },
+        ],
+        params: {},
+      };
+      const solid = rebuildDocument(oc, doc)!;
+      try {
+        expect(solid.volume()).toBeCloseTo(m(60) * m(40) * m(30) - m(20) * m(20) * m(10), 9);
+      } finally {
+        solid.delete();
+      }
+    });
+
     it("§13.8 P0: a pad that DOES protrude reports ok (no false warning)", () => {
       const doc: CadDocument = {
         features: [

@@ -7,6 +7,7 @@ import { useState } from "react";
 import { useCadStore } from "../../store/store.js";
 import { useSketchStore } from "../../sketch/sketchStore.js";
 import { emptySketch, type DatumPlaneId, type SketchModel } from "../../sketch/model.js";
+import { startingSketchModel } from "../../sketch/defaultPlane.js";
 
 export function SketchLauncher(): React.JSX.Element {
   const enterSketch = useSketchStore((s) => s.enterSketch);
@@ -55,7 +56,14 @@ export function SketchLauncher(): React.JSX.Element {
         disabled={!solverReady}
         className={solverReady ? btn : btnDisabled}
         title={solverReady ? `Open the 2D sketch editor on the ${plane} plane` : "Loading sketch solver…"}
-        onClick={() => enterSketch(plane, (Number(offsetMm) || 0) / 1000)}
+        onClick={() => {
+          // Offset 0 = "wherever makes sense on this orientation": land on the
+          // model's outer face along the datum normal rather than a plane that
+          // may be buried inside the body (§13.8 P0). A TYPED offset is an exact
+          // instruction and is honoured against the bare datum.
+          const offset = (Number(offsetMm) || 0) / 1000;
+          enterSketch(plane, offset, undefined, startingSketchModel(plane, selectionRefs.faces, offset));
+        }}
       >
         New Sketch
       </button>

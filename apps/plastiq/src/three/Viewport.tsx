@@ -229,9 +229,13 @@ export function Viewport(): React.JSX.Element {
           // be surfaced in the status line — dropping it would report "empty",
           // which is precisely the silent-failure this section exists to kill.
           const buildErrors: string[] = [];
-          // Features that BUILT but changed nothing visible (§13.8 P0) — reported
-          // separately from errors: the geometry is valid, the timeline continues,
-          // but the user must be told, or "nothing happened" is all they see.
+          // Features that BUILT but changed nothing visible (§13.8 P0). They ride
+          // the per-feature channel (an amber ⚠ badge + tooltip in the tree,
+          // beside the red error badge) and deliberately do NOT displace the
+          // status line: `status` reports the BUILD's state, and a no-op join is
+          // a SUCCESSFUL build — "ready" is the truthful answer there. Errors do
+          // reach the status line because a failed feature means the build did
+          // not fully succeed; a warning does not.
           const warnings: Record<string, string> = {};
           for (const s of statuses) {
             if (s.status === "warning") {
@@ -250,11 +254,9 @@ export function Viewport(): React.JSX.Element {
               ? `rebuild failed: ${buildErrors[0]!}`
               : failed.length > 0
                 ? `${failed.length} feature${failed.length === 1 ? "" : "s"} failed: ${errors[failed[0]!]!}`
-                : Object.keys(warnings).length > 0
-                  ? (warnings[Object.keys(warnings)[0]!] as string)
-                  : built
-                    ? "ready"
-                    : "empty",
+                : built
+                  ? "ready"
+                  : "empty",
           );
           if (built) {
             // Capture the positional disambiguators (face centroid / edge midpoint)
@@ -321,9 +323,15 @@ export function Viewport(): React.JSX.Element {
     // Resolve the active sketch's "normal to" plane for the ortho camera (S2/S3):
     // a base datum synchronously, or a model face via the worker (shifted by the
     // offset along the face normal). Stale async results are dropped.
+    // Local state drives the ortho camera; the store copy lets 3D overlays that
+    // cannot run OCCT (the plane gizmo) draw a FACE-based sketch plane too.
+    const publishFrame = (fr: DatumPlane | null): void => {
+      setSketchFrame(fr);
+      useSketchStore.getState().setResolvedFrame(fr);
+    };
     const resolveSketchFrame = (s: ReturnType<typeof useSketchStore.getState>): void => {
       if (!s.active) {
-        setSketchFrame(null);
+        publishFrame(null);
         return;
       }
       const face = s.model.face;
@@ -332,7 +340,7 @@ export function Viewport(): React.JSX.Element {
         void client.facePlane(useCadStore.getState().toDocument(), face).then((fr) => {
           const cur = useSketchStore.getState();
           if (cancelled || !cur.active || cur.model.face !== face) return;
-          setSketchFrame(
+          publishFrame(
             fr
               ? {
                   origin: [
@@ -348,7 +356,7 @@ export function Viewport(): React.JSX.Element {
         });
         return;
       }
-      setSketchFrame(resolveDatumPlane(s.model.plane, s.model.offset ?? 0));
+      publishFrame(resolveDatumPlane(s.model.plane, s.model.offset ?? 0));
     };
     resolveSketchFrame(useSketchStore.getState());
     const unsubSketch = useSketchStore.subscribe((s, prev) => {

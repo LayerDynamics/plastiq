@@ -7,6 +7,7 @@ import { useCadStore, type NewFeature } from "../../store/store.js";
 import { useSketchStore } from "../../sketch/sketchStore.js";
 import { editSketchFeature, finishSketchFeature } from "../../sketch/editFeature.js";
 import { emptySketch, type SketchModel, type SketchPoint } from "../../sketch/model.js";
+import { startingSketchModel } from "../../sketch/defaultPlane.js";
 import { canApply, type ConstraintKind } from "../../sketch/hit.js";
 import { canDimension, type DimensionKind } from "../../sketch/dim.js";
 import { extractProfile } from "../../sketch/profile.js";
@@ -152,7 +153,8 @@ const CREATE: ContextAction[] = [
       label: () => `New sketch (${plane})`,
       visible: (ctx) => editing(ctx) && ctx.kind === "empty",
       enabled: (ctx) => ctx.solverReady,
-      run: () => sketch().enterSketch(plane, 0),
+      run: () =>
+        sketch().enterSketch(plane, 0, undefined, startingSketchModel(plane, cad().selectionRefs.faces)),
     }),
   ),
   {
@@ -191,7 +193,7 @@ const CREATE: ContextAction[] = [
       }
       useSketchStore
         .getState()
-        .enterSketch("XY", 0, undefined, undefined, {
+        .enterSketch("XY", 0, undefined, startingSketchModel("XY", cad().selectionRefs.faces), {
           type: "extrude",
           params: { height: EXTRUDE_H },
           data: { op: "join" },
@@ -214,7 +216,9 @@ const CREATE: ContextAction[] = [
         openEdit(id, "cut", CUT_D);
         return;
       }
-      useSketchStore.getState().enterSketch("XY", 0, undefined, undefined, {
+      useSketchStore
+        .getState()
+        .enterSketch("XY", 0, undefined, startingSketchModel("XY", cad().selectionRefs.faces), {
         type: "cut",
         params: { depth: CUT_D },
       });
@@ -238,7 +242,9 @@ const CREATE: ContextAction[] = [
         openEdit(id, "revolve", Math.PI * 2);
         return;
       }
-      useSketchStore.getState().enterSketch("XY", 0, undefined, undefined, {
+      useSketchStore
+        .getState()
+        .enterSketch("XY", 0, undefined, startingSketchModel("XY", cad().selectionRefs.faces), {
         type: "revolve",
         params: { angle: Math.PI * 2, ay: 1 },
         data: { op: "join" },
