@@ -61,6 +61,25 @@ export interface SketchStore {
    * themselves, and recomputing it per-consumer would duplicate the round trip.
    */
   resolvedFrame: DatumPlane | null;
+  /**
+   * An in-progress drag-draw, in SKETCH UV metres: where the pointer went down
+   * and where it is now. Null when not drag-drawing.
+   *
+   * The 3D sketch surface (SketchScene) owns the pointer, but the dashed
+   * rubber-band is drawn by the 2D overlay (Sketcher), so the drag has to be
+   * shared state rather than either component's local state. UV — not pixels —
+   * because that is the frame both agree on; the overlay projects it with its
+   * own view transform.
+   */
+  dragDraw: { from: [number, number]; to: [number, number] } | null;
+  /**
+   * The pointer's position over the sketch plane in UV metres, or null when it
+   * is off the plane. Same reason as {@link dragDraw}: the 3D surface owns the
+   * pointer, but the 2D overlay needs it to place the precise-input box and to
+   * run snap inference — a value the overlay cannot observe itself, because it
+   * is `pointer-events-none` (ADR-0014).
+   */
+  cursor: [number, number] | null;
   /** The document feature being edited (null = a brand-new sketch). */
   editingFeatureId: string | null;
   /** When set, Finish also adds this solid feature consuming the new sketch (W4). */
@@ -91,6 +110,10 @@ export interface SketchStore {
   setSolverReady: (ready: boolean) => void;
   /** Publish the resolved world frame of the active sketch plane (viewport). */
   setResolvedFrame: (frame: DatumPlane | null) => void;
+  /** Begin/update/end the drag-draw rubber-band (null ends it). */
+  setDragDraw: (drag: { from: [number, number]; to: [number, number] } | null) => void;
+  /** Publish the pointer's sketch-plane position (null = off the plane). */
+  setCursor: (uv: [number, number] | null) => void;
 
   enterSketch: (
     plane: DatumPlaneId,
@@ -177,10 +200,14 @@ export const useSketchStore = create<SketchStore>((set, get) => ({
   editingDim: null,
   solverReady: false,
   resolvedFrame: null,
+  dragDraw: null,
+  cursor: null,
   past: [],
   future: [],
   setSolverReady: (ready) => set({ solverReady: ready }),
   setResolvedFrame: (frame) => set({ resolvedFrame: frame }),
+  setDragDraw: (drag) => set({ dragDraw: drag }),
+  setCursor: (uv) => set({ cursor: uv }),
 
   enterSketch: (plane, offset = 0, featureId, model, consumer = null) => {
     // The sketcher solves synchronously; refuse to open it until planegcs is

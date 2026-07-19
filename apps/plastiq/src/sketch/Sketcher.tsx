@@ -622,6 +622,8 @@ export function Sketcher(): React.JSX.Element | null {
   const hostRef = useRef<HTMLDivElement>(null);
   const [size, setSize] = useState({ w: 800, h: 600 });
   const [hover, setHover] = useState<{ px: Px; snap: Snap; hint: SegHint | null } | null>(null);
+  /** Pointer over the sketch plane, published by the 3D surface (SketchScene). */
+  const sketchCursor = useSketchStore((s) => s.cursor);
   // Right-click context menu (sketch-entity context): screen-anchored DOM menu
   // over the overlay, reusing the shared catalog (constraints/dimensions/fix/finish).
   const [ctxMenu, setCtxMenu] = useState<{
@@ -634,11 +636,25 @@ export function Sketcher(): React.JSX.Element | null {
   const moved = useRef(false);
   /** The point being dragged in the Select tool (live re-solve), if any. */
   const dragPoint = useRef<string | null>(null);
-  /** A press that may become a drag-draw (DRAG_DRAW tools): the press point in px +
-   * snapped world. Set on pointerdown when a fresh shape can start there. */
-  const dragDraw = useRef<{ px: Px; snap: Snap } | null>(null);
-  /** Live drag-draw rubber-band (press → cursor) for the preview overlay. */
-  const [dragPreview, setDragPreview] = useState<{ from: Px; to: Px } | null>(null);
+  /**
+   * Live drag-draw rubber-band, read from the SKETCH STORE rather than tracked
+   * here (§2.6). ADR-0014 moved the drawing pointer onto the 3D plane
+   * (SketchScene), so this overlay no longer sees the press/move that define the
+   * drag — it receives them as shared UV state and projects them with its own
+   * view. The local press-ref + preview state this replaces could never fire:
+   * nothing assigned the ref after the migration.
+   */
+  const dragDraw = useSketchStore((s) => s.dragDraw);
+  const dragPreview = useMemo(
+    () =>
+      dragDraw
+        ? {
+            from: toScreen(view, { u: dragDraw.from[0], v: dragDraw.from[1] }),
+            to: toScreen(view, { u: dragDraw.to[0], v: dragDraw.to[1] }),
+          }
+        : null,
+    [dragDraw, view],
+  );
   /** rAF-coalesced point-drag (perf): pointermove only records the latest pointer
    * here; at most ONE movePoint+solve runs per animation frame (with that latest
    * position), and pointerup flushes any unapplied position synchronously, so the
@@ -774,9 +790,6 @@ export function Sketcher(): React.JSX.Element | null {
       const px = hoverLatest.current;
       hoverLatest.current = null;
       if (!px) return;
-      // A drag-draw in progress also rubber-bands from the press to the cursor.
-      const draw = dragDraw.current;
-      if (draw) setDragPreview({ from: draw.px, to: px });
       setHover({ px, ...inferAtRef.current(px) });
     });
   };
@@ -789,6 +802,29 @@ export function Sketcher(): React.JSX.Element | null {
     }
     hoverLatest.current = null;
   };
+
+  /**
+   * Drive the hover preview from the SHARED cursor (§2.6).
+   *
+   * ADR-0014 moved the pointer onto the 3D sketch plane, and this overlay is
+   * `pointer-events-none`, so it never sees a pointermove — `scheduleHover` and
+   * its rAF coalescer were left with no caller, which is why snap inference and
+   * the precise-input box (which needs a cursor position to place itself) went
+   * dead for tools with no anchor. SketchScene publishes the pointer in UV; this
+   * projects it and feeds the EXISTING coalescer, so inference still runs at most
+   * once per animation frame rather than at the pointer's event rate.
+   */
+  useEffect(() => {
+    if (!sketchCursor) {
+      cancelHover();
+      setHover(null);
+      return;
+    }
+    scheduleHover(toScreen(view, { u: sketchCursor[0], v: sketchCursor[1] }));
+    // `scheduleHover`/`cancelHover` are re-created each render but read their
+    // state through refs, so only the cursor and view actually matter here.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sketchCursor, view]);
 
   // Leaving the sketch (or unmounting) drops any coalesced frame — a late frame
   // must not solve against a reset model.
@@ -1110,11 +1146,20 @@ export function Sketcher(): React.JSX.Element | null {
           onDelete={removeConstraint}
           onEdit={setEditingDim}
         />
+        {/* Rubber-band for an in-flight drag-draw. The overlay is
+            pointer-events-none, which stops it stealing clicks but not it
+            drawing — the geometry itself is committed on release by SketchScene. */}
+        {dragPreview && <DragDrawPreview tool={tool} from={dragPreview.from} to={dragPreview.to} />}
       </svg>
       {/* Inline precise-value box: appears during a drawing gesture near the cursor;
           shows live values, type to lock + auto-dimension (FR — Fusion precise input). */}
       {drawFieldsNow.length > 0 && boxPos && (
-        <div className="pointer-events-auto">
+        // While a drag-draw is in flight the box must not capture the pointer:
+        // it tracks the cursor, so it would sit under the release and swallow
+        // the pointerup that completes the shape (§2.6). It still RENDERS —
+        // the live length/angle readout is the point of a drag — it simply
+        // stops intercepting until the gesture ends.
+        <div className={dragDraw ? "pointer-events-none" : "pointer-events-auto"}>
         <DrawInputBox
           fields={drawFieldsNow}
           live={liveNow}

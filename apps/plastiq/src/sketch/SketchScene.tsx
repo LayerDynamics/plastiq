@@ -3,7 +3,7 @@
 // owned by SketchPlanePick (ray ∩ plane → UV); this component is display + pick
 // surface only.
 
-import { useMemo } from "react";
+import { useMemo, useRef } from "react";
 import * as THREE from "three";
 import { Line } from "@react-three/drei";
 import { useThree } from "@react-three/fiber";
@@ -27,6 +27,16 @@ function asP3(v: Vec3): P3 {
   return [v[0], v[1], v[2]];
 }
 
+/** Tools whose shape is defined by two points, so a press-drag-release can draw
+ * them end to end (the press is click 1, the release click 2). Chained/multi-click
+ * tools (arc, spline, polygon, slot…) keep their own click sequences. */
+const DRAG_TOOLS: ReadonlySet<string> = new Set(["line", "rectangle", "circle"]);
+
+/** How far the pointer must travel (SI metres in the sketch plane) before a press
+ * counts as a drag rather than a click. Below this a click-by-click gesture would
+ * otherwise close a zero-size shape on release. */
+const DRAG_MIN = 0.001;
+
 /** Invisible plane mesh that captures left-clicks for sketch tools (ray → UV). */
 function SketchPlanePick({ plane }: { plane: DatumPlane }): React.JSX.Element {
   const { camera, gl } = useThree();
@@ -37,6 +47,14 @@ function SketchPlanePick({ plane }: { plane: DatumPlane }): React.JSX.Element {
   const setSelection = useSketchStore((s) => s.setSelection);
   const toggleSelect = useSketchStore((s) => s.toggleSelect);
   const selection = useSketchStore((s) => s.selection);
+  const setDragDraw = useSketchStore((s) => s.setDragDraw);
+  const setCursor = useSketchStore((s) => s.setCursor);
+  /**
+   * Where a drag-draw started, and whether it has travelled far enough to BE a
+   * drag (§2.6). A ref, not state: it is read inside pointer handlers on the
+   * same gesture and must never lag a re-render.
+   */
+  const press = useRef<{ uv: UV; moved: boolean } | null>(null);
 
   const geom = useMemo(() => {
     // Large plane so free-orbit still has a pick surface.
@@ -135,8 +153,51 @@ function SketchPlanePick({ plane }: { plane: DatumPlane }): React.JSX.Element {
           }
         }
         clickAt(su, sv, { reusePointId, constraint });
+        // Press is the FIRST click of a 2-click primitive; if the pointer now
+        // travels, release supplies the second (ADR-0014 drag-draw). Snapped
+        // coordinates are recorded so the rubber-band starts where the geometry
+        // actually did.
+        if (DRAG_TOOLS.has(tool)) press.current = { uv: [su, sv], moved: false };
+      }}
+      onPointerUp={(e) => {
+        const start = press.current;
+        press.current = null;
+        setDragDraw(null);
+        if (e.button !== 0 || !start) return;
+        // A press that never travelled is a plain CLICK — the press already
+        // registered it, and click-by-click drawing still completes on the next
+        // click. Only a real drag closes the shape here.
+        if (!start.moved) return;
+        const uv = hitUv(e);
+        if (!uv) return;
+        e.stopPropagation();
+        clickAt(uv[0], uv[1]);
+        // A drag draws ONE segment: the polyline chain would otherwise leave the
+        // release point pending, so the next drag would continue this line
+        // instead of starting its own. Rectangle/circle clear `pending`
+        // themselves on completion.
+        if (useSketchStore.getState().tool === "line") useSketchStore.setState({ pending: [] });
       }}
       onPointerMove={(e) => {
+        // The 2D overlay cannot see the pointer (it is pointer-events-none), so
+        // publish it: the precise-input box and snap inference both need it.
+        const here = hitUv(e);
+        setCursor(here ? [here[0], here[1]] : null);
+        // Drag-draw in flight: publish the rubber-band for the 2D overlay.
+        const start = press.current;
+        if (start && e.buttons === 1) {
+          const uv = hitUv(e);
+          if (uv) {
+            if (!start.moved && Math.hypot(uv[0] - start.uv[0], uv[1] - start.uv[1]) >= DRAG_MIN) {
+              start.moved = true;
+            }
+            if (start.moved) {
+              e.stopPropagation();
+              setDragDraw({ from: [start.uv[0], start.uv[1]], to: [uv[0], uv[1]] });
+            }
+          }
+          return;
+        }
         if (tool !== "select") return;
         // Drag selected free points (first selected).
         if (e.buttons !== 1 || selection.length === 0) return;
@@ -147,6 +208,13 @@ function SketchPlanePick({ plane }: { plane: DatumPlane }): React.JSX.Element {
         const uv = hitUv(e);
         if (!uv) return;
         movePoint(id, uv[0], uv[1]);
+      }}
+      onPointerLeave={() => {
+        // Off the plane: drop the cursor so the overlay stops tracking a stale
+        // position, and abandon any drag that never released over it.
+        setCursor(null);
+        setDragDraw(null);
+        press.current = null;
       }}
       // Keep camera reference used so the mesh participates in the frame.
       userData={{ sketchPick: true, cameraId: camera.uuid, canvas: gl.domElement }}
@@ -206,6 +274,14 @@ function PlaneGrid({ plane }: { plane: DatumPlane }): React.JSX.Element {
 function SketchEntities({ plane }: { plane: DatumPlane }): React.JSX.Element {
   const model = useSketchStore((s) => s.model);
   const selection = useSketchStore((s) => s.selection);
+  const setDragDraw = useSketchStore((s) => s.setDragDraw);
+  const setCursor = useSketchStore((s) => s.setCursor);
+  /**
+   * Where a drag-draw started, and whether it has travelled far enough to BE a
+   * drag (§2.6). A ref, not state: it is read inside pointer handlers on the
+   * same gesture and must never lag a re-render.
+   */
+  const press = useRef<{ uv: UV; moved: boolean } | null>(null);
 
   const pt = (id: string): UV | null => {
     const p = model.points.find((x) => x.id === id);
