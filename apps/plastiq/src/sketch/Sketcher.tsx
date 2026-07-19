@@ -17,7 +17,9 @@ import {
 } from "./drawInput.js";
 import { catmullRomPoints } from "./spline2d.js";
 import { nearestSnap, segmentHint, type SegHint, type Snap } from "./infer.js";
-import { canApply, hitTest, type ConstraintKind } from "./hit.js";
+// `hitTest` moved to SketchScene with the pointer it serves (ADR-0014): the
+// 3D plane owns picking now. `canApply` stays — it gates these buttons.
+import { canApply, type ConstraintKind } from "./hit.js";
 import { canDimension, type DimensionKind } from "./dim.js";
 import { extractProfile } from "./profile.js";
 import { finishSketchFeature } from "./editFeature.js";

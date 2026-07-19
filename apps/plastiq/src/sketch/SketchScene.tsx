@@ -9,6 +9,8 @@ import { Line } from "@react-three/drei";
 import { useThree } from "@react-three/fiber";
 import type { DatumPlane } from "@plastiq/cad";
 import { useSketchStore } from "./sketchStore.js";
+import { hitTest } from "./hit.js";
+import { toScreen } from "./transform2d.js";
 import {
   arcWorld,
   circleWorld,
@@ -49,6 +51,7 @@ function SketchPlanePick({ plane }: { plane: DatumPlane }): React.JSX.Element {
   const selection = useSketchStore((s) => s.selection);
   const setDragDraw = useSketchStore((s) => s.setDragDraw);
   const setCursor = useSketchStore((s) => s.setCursor);
+  const view = useSketchStore((s) => s.view);
   /**
    * Where a drag-draw started, and whether it has travelled far enough to BE a
    * drag (§2.6). A ref, not state: it is read inside pointer handlers on the
@@ -102,15 +105,20 @@ function SketchPlanePick({ plane }: { plane: DatumPlane }): React.JSX.Element {
         if (!uv) return;
         const [u, v] = uv;
         if (tool === "select") {
-          // Nearest point within 2 mm.
-          let best: { id: string; d: number } | null = null;
-          for (const pt of model.points) {
-            const d = Math.hypot(pt.u - u, pt.v - v);
-            if (d < 0.002 && (!best || d < best.d)) best = { id: pt.id, d };
-          }
-          if (best) {
-            if (e.shiftKey) toggleSelect(best.id);
-            else setSelection([best.id]);
+          // Full ENTITY hit test, not points-only (§2.6). Selecting points alone
+          // is why every constraint that needs a line or a circle — parallel,
+          // perpendicular, equal, concentric, tangent, midpoint, pointOnObject,
+          // symmetric, horizontal/vertical — could never enable: `canApply`
+          // counts lines/circles in the selection and always saw zero.
+          //
+          // `hitTest` ranks points above curves, so point picking behaves as
+          // before. Both the cursor and the entities are projected through the
+          // SAME 2D view, so its px tolerance is a uniform radius in model space
+          // (~1.75 mm at the default scale — near the 2 mm this replaces).
+          const hit = hitTest(model, view, toScreen(view, { u, v }));
+          if (hit) {
+            if (e.shiftKey) toggleSelect(hit.id);
+            else setSelection([hit.id]);
           } else if (!e.shiftKey) {
             setSelection([]);
           }
@@ -274,14 +282,6 @@ function PlaneGrid({ plane }: { plane: DatumPlane }): React.JSX.Element {
 function SketchEntities({ plane }: { plane: DatumPlane }): React.JSX.Element {
   const model = useSketchStore((s) => s.model);
   const selection = useSketchStore((s) => s.selection);
-  const setDragDraw = useSketchStore((s) => s.setDragDraw);
-  const setCursor = useSketchStore((s) => s.setCursor);
-  /**
-   * Where a drag-draw started, and whether it has travelled far enough to BE a
-   * drag (§2.6). A ref, not state: it is read inside pointer handlers on the
-   * same gesture and must never lag a re-render.
-   */
-  const press = useRef<{ uv: UV; moved: boolean } | null>(null);
 
   const pt = (id: string): UV | null => {
     const p = model.points.find((x) => x.id === id);
