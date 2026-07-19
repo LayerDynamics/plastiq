@@ -48,9 +48,25 @@ function SketchPlanePick({ plane }: { plane: DatumPlane }): React.JSX.Element {
   const movePoint = useSketchStore((s) => s.movePoint);
   const setSelection = useSketchStore((s) => s.setSelection);
   const toggleSelect = useSketchStore((s) => s.toggleSelect);
-  const selection = useSketchStore((s) => s.selection);
   const setDragDraw = useSketchStore((s) => s.setDragDraw);
   const setCursor = useSketchStore((s) => s.setCursor);
+  const solve = useSketchStore((s) => s.solve);
+  const pushHistory = useSketchStore((s) => s.pushHistory);
+  /**
+   * The point being dragged with the Select tool, plus the rAF handle coalescing
+   * its re-solves (§2.6.2). Dragging used to write coordinates and NOTHING else:
+   * the sketch never re-solved, so constraints were visibly violated while you
+   * dragged, and the move was not undoable.
+   *
+   * The solve is coalesced to one per animation frame because planegcs runs the
+   * WHOLE sketch — at a 120 Hz pointer that is 120 solves a second — and flushed
+   * on release so the committed state is the one the last position implies.
+   */
+  const pointDrag = useRef<{ id: string; frame: number | null; latest: UV | null }>({
+    id: "",
+    frame: null,
+    latest: null,
+  });
   const view = useSketchStore((s) => s.view);
   /**
    * Where a drag-draw started, and whether it has travelled far enough to BE a
@@ -119,6 +135,15 @@ function SketchPlanePick({ plane }: { plane: DatumPlane }): React.JSX.Element {
           if (hit) {
             if (e.shiftKey) toggleSelect(hit.id);
             else setSelection([hit.id]);
+            // Dragging a POINT re-solves live, so snapshot ONCE here — per-move
+            // snapshots would make one drag an undo stack of its own.
+            if (hit.kind === "point") {
+              const p = model.points.find((q) => q.id === hit.id);
+              if (p && !p.fixed) {
+                pushHistory();
+                pointDrag.current = { id: hit.id, frame: null, latest: null };
+              }
+            }
           } else if (!e.shiftKey) {
             setSelection([]);
           }
@@ -168,6 +193,20 @@ function SketchPlanePick({ plane }: { plane: DatumPlane }): React.JSX.Element {
         if (DRAG_TOOLS.has(tool)) press.current = { uv: [su, sv], moved: false };
       }}
       onPointerUp={(e) => {
+        // Flush a pending point-drag frame: the final solve is authoritative, so
+        // releasing must not leave the last movement unapplied.
+        const drag = pointDrag.current;
+        if (drag.id) {
+          if (drag.frame != null) {
+            cancelAnimationFrame(drag.frame);
+            drag.frame = null;
+          }
+          if (drag.latest) {
+            movePoint(drag.id, drag.latest[0], drag.latest[1]);
+            solve();
+          }
+          pointDrag.current = { id: "", frame: null, latest: null };
+        }
         const start = press.current;
         press.current = null;
         setDragDraw(null);
@@ -207,15 +246,26 @@ function SketchPlanePick({ plane }: { plane: DatumPlane }): React.JSX.Element {
           return;
         }
         if (tool !== "select") return;
-        // Drag selected free points (first selected).
-        if (e.buttons !== 1 || selection.length === 0) return;
-        const id = selection[0]!;
-        const pt = model.points.find((p) => p.id === id);
+        // Drag the point picked on press (§2.6.2): move it AND re-solve, so the
+        // constraints stay satisfied under the cursor instead of being visibly
+        // violated until some later action happened to solve.
+        const drag = pointDrag.current;
+        if (e.buttons !== 1 || !drag.id) return;
+        const pt = model.points.find((p) => p.id === drag.id);
         if (!pt || pt.fixed) return;
         e.stopPropagation();
         const uv = hitUv(e);
         if (!uv) return;
-        movePoint(id, uv[0], uv[1]);
+        drag.latest = [uv[0], uv[1]];
+        if (drag.frame != null) return;
+        drag.frame = requestAnimationFrame(() => {
+          drag.frame = null;
+          const at = drag.latest;
+          drag.latest = null;
+          if (!at || !drag.id) return;
+          movePoint(drag.id, at[0], at[1]);
+          solve();
+        });
       }}
       onPointerLeave={() => {
         // Off the plane: drop the cursor so the overlay stops tracking a stale

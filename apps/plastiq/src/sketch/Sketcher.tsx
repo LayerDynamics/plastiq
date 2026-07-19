@@ -6,7 +6,7 @@
 
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { useSketchStore, sketchId, type SketchTool } from "./sketchStore.js";
-import { circumcircle, type SketchModel } from "./model.js";
+import type { SketchModel } from "./model.js";
 import {
   drawDims,
   drawFields,
@@ -15,7 +15,6 @@ import {
   type DrawField,
   type Vec2,
 } from "./drawInput.js";
-import { catmullRomPoints } from "./spline2d.js";
 import { nearestSnap, segmentHint, type SegHint, type Snap } from "./infer.js";
 // `hitTest` moved to SketchScene with the pointer it serves (ADR-0014): the
 // 3D plane owns picking now. `canApply` stays — it gates these buttons.
@@ -23,237 +22,61 @@ import { canApply, type ConstraintKind } from "./hit.js";
 import { canDimension, type DimensionKind } from "./dim.js";
 import { extractProfile } from "./profile.js";
 import { finishSketchFeature } from "./editFeature.js";
-import { resolveContextTarget, type ContextTarget } from "../three/contextmenu/contextSelection.js";
-import { buildMenuSections, type MenuSection } from "../three/contextmenu/contextOptions.js";
-import { runContextAction } from "../three/contextmenu/config.js";
-import { snapshotCad, snapshotSketch } from "../three/contextmenu/snapshot.js";
-import { PlastiqScreenContextMenu } from "../three/contextmenu/PlastiqContextMenu.js";
 import {
   centeredView,
-  gridStep,
-  panBy,
   toScreen,
   toWorld,
-  zoomAt,
   type Px,
   type View2D,
 } from "./transform2d.js";
 
-/** Memoised (perf): the grid depends only on the view transform and the viewport
- * size, so a drag-solve tick (model change) must not rebuild its line array. */
-const GridAndAxes = memo(function GridAndAxes({
-  view,
-  w,
-  h,
-}: {
-  view: View2D;
-  w: number;
-  h: number;
-}): React.JSX.Element {
-  const step = gridStep(view.scale);
-  const lines: React.JSX.Element[] = [];
-  // World bounds of the viewport corners.
-  const left = (0 - view.panX) / view.scale;
-  const right = (w - view.panX) / view.scale;
-  const top = -(0 - view.panY) / view.scale;
-  const bottom = -(h - view.panY) / view.scale;
-  const u0 = Math.floor(Math.min(left, right) / step) * step;
-  const u1 = Math.ceil(Math.max(left, right) / step) * step;
-  const v0 = Math.floor(Math.min(top, bottom) / step) * step;
-  const v1 = Math.ceil(Math.max(top, bottom) / step) * step;
+// The sketch's GRID, AXES, POINTS and CURVES are drawn in place on the 3D
+// plane (ADR-0014 — SketchScene's PlaneGrid + SketchEntities). The 2D
+// `GridAndAxes` and `SketchGeometry` components that used to draw them here
+// were left unmounted by that migration and are gone: this overlay's `view` is
+// a fixed centred transform that does NOT track the 3D camera, so re-mounting
+// them would draw the sketch a second time wherever the camera is not. What
+// stays here is what only a DOM/SVG layer can do — constraint and dimension
+// glyphs, the drag rubber-band, snap inference, and the precise-input box.
 
-  for (let u = u0; u <= u1 + step / 2; u += step) {
-    const x = u * view.scale + view.panX;
-    lines.push(
-      <line
-        key={`gx${u.toFixed(6)}`}
-        x1={x}
-        y1={0}
-        x2={x}
-        y2={h}
-        stroke="#1b2230"
-        strokeWidth={1}
-      />,
-    );
-  }
-  for (let v = v0; v <= v1 + step / 2; v += step) {
-    const y = -v * view.scale + view.panY;
-    lines.push(
-      <line
-        key={`gy${v.toFixed(6)}`}
-        x1={0}
-        y1={y}
-        x2={w}
-        y2={y}
-        stroke="#1b2230"
-        strokeWidth={1}
-      />,
-    );
-  }
+const TOOLS: { tool: SketchTool; label: string }[] = [
+  { tool: "select", label: "Select" },
+  { tool: "line", label: "Line" },
+  { tool: "rectangle", label: "Rect" },
+  { tool: "rectCenter", label: "Rect◉" },
+  { tool: "circle", label: "Circle" },
+  { tool: "circle3", label: "Circle3" },
+  { tool: "arc3", label: "Arc3" },
+  { tool: "arcCenter", label: "Arc◉" },
+  { tool: "polygon", label: "Poly" },
+  { tool: "slot", label: "Slot" },
+  { tool: "spline", label: "Spline" },
+  { tool: "point", label: "Point" },
+];
 
-  const o = toScreen(view, { u: 0, v: 0 });
-  return (
-    <g>
-      {lines}
-      {/* X axis (red) + Y axis (green) through the origin. */}
-      <line x1={0} y1={o.y} x2={w} y2={o.y} stroke="#7a2b2b" strokeWidth={1.5} />
-      <line x1={o.x} y1={0} x2={o.x} y2={h} stroke="#2b6b3a" strokeWidth={1.5} />
-      <circle cx={o.x} cy={o.y} r={4} fill="#ffd34a" />
-    </g>
-  );
-},
-// The view object is re-created by pan/zoom; compare its fields so an unrelated
-// re-render with an equivalent view still skips the grid rebuild.
-(prev, next) =>
-  prev.w === next.w &&
-  prev.h === next.h &&
-  prev.view.scale === next.view.scale &&
-  prev.view.panX === next.view.panX &&
-  prev.view.panY === next.view.panY);
+/** Single-key tool shortcuts (lowercased), Fusion-style: the primary tool of each
+ * family (the centre/3-point variants stay on their toolbar buttons). */
+const TOOL_KEYS: Record<string, SketchTool> = {
+  v: "select",
+  l: "line",
+  r: "rectangle",
+  c: "circle",
+  a: "arc3",
+  g: "polygon",
+  o: "slot",
+  s: "spline",
+  p: "point",
+};
 
+/** Tools where a left press-drag-release draws the shape (press = first click,
+ * release = second click). The 2-click primitives; other tools keep click-by-click
+ * and left-drag still pans. Pan is always available on the middle mouse button. */
 /** Three-state solver colour (FR-20): under = blue, well = green, over = red. */
 export function verdictColor(verdict: string | undefined): string {
   if (verdict === "well-constrained") return "#6be675";
   if (verdict === "over-constrained") return "#ff6b6b";
   return "#4ea1ff"; // under-constrained (or not yet solved) → draggable blue
 }
-
-type Pt = { x: number; y: number };
-
-/**
- * Tessellate the arc through three screen-space points (a → through → b) into an
- * SVG polyline points string. Falls back to the straight chord when the points
- * are collinear. Purely for display — the kernel builds the true arc edge.
- */
-function arcPolyline(a: Pt, through: Pt, b: Pt): string {
-  const cc = circumcircle([a.x, a.y], [b.x, b.y], [through.x, through.y]);
-  if (!cc) return `${a.x},${a.y} ${b.x},${b.y}`;
-  const { u: cx, v: cy, r } = cc;
-  const ang = (p: Pt): number => Math.atan2(p.y - cy, p.x - cx);
-  const norm = (x: number): number => ((x % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI);
-  const a0 = ang(a);
-  const dAB = norm(ang(b) - a0);
-  const dAT = norm(ang(through) - a0);
-  const ccw = dAT < dAB; // does `through` lie on the CCW arc from a to b?
-  const span = ccw ? dAB : dAB - 2 * Math.PI;
-  const N = 40;
-  const pts: string[] = [];
-  for (let i = 0; i <= N; i++) {
-    const t = a0 + (span * i) / N;
-    pts.push(`${(cx + r * Math.cos(t)).toFixed(2)},${(cy + r * Math.sin(t)).toFixed(2)}`);
-  }
-  return pts.join(" ");
-}
-
-/** The drawn sketch entities (lines, arcs, circles, points) in screen space.
- * Memoised (perf, shallow props): the store only replaces `model` / `selection`
- * when they actually change, so a hover-only tick skips the whole rebuild. */
-const SketchGeometry = memo(function SketchGeometry({
-  model,
-  view,
-  selection,
-  baseColor,
-}: {
-  model: SketchModel;
-  view: View2D;
-  selection: readonly string[];
-  baseColor: string;
-}): React.JSX.Element {
-  const sel = new Set(selection);
-  const pt = (id: string): { x: number; y: number } | null => {
-    const p = model.points.find((q) => q.id === id);
-    return p ? toScreen(view, { u: p.u, v: p.v }) : null;
-  };
-  const strokeOf = (e: { construction?: boolean; id: string }): string =>
-    sel.has(e.id) ? "#ffd34a" : e.construction ? "#5a6b86" : baseColor;
-  return (
-    <g>
-      {model.entities.map((e) => {
-        const dash = e.construction ? "4 3" : undefined;
-        const stroke = strokeOf(e);
-        const width = sel.has(e.id) ? 2.5 : 1.75;
-        if (e.kind === "line") {
-          const a = pt(e.a);
-          const b = pt(e.b);
-          if (!a || !b) return null;
-          return (
-            <line
-              key={e.id}
-              x1={a.x}
-              y1={a.y}
-              x2={b.x}
-              y2={b.y}
-              stroke={stroke}
-              strokeWidth={width}
-              strokeDasharray={dash}
-            />
-          );
-        }
-        if (e.kind === "arc") {
-          const a = pt(e.a);
-          const b = pt(e.b);
-          const t = pt(e.through);
-          if (!a || !b || !t) return null;
-          return (
-            <polyline
-              key={e.id}
-              points={arcPolyline(a, t, b)}
-              fill="none"
-              stroke={stroke}
-              strokeWidth={width}
-              strokeDasharray={dash}
-            />
-          );
-        }
-        if (e.kind === "spline") {
-          const pts = e.points.map(pt);
-          if (!pts.every((p): p is { x: number; y: number } => p !== null) || pts.length < 2) {
-            return null;
-          }
-          return (
-            <polyline
-              key={e.id}
-              points={catmullRomPoints(pts)
-                .map((p) => `${p.x.toFixed(2)},${p.y.toFixed(2)}`)
-                .join(" ")}
-              fill="none"
-              stroke={stroke}
-              strokeWidth={width}
-              strokeDasharray={dash}
-            />
-          );
-        }
-        const c = pt(e.center);
-        if (!c) return null;
-        return (
-          <circle
-            key={e.id}
-            cx={c.x}
-            cy={c.y}
-            r={e.radius * view.scale}
-            fill="none"
-            stroke={stroke}
-            strokeWidth={width}
-            strokeDasharray={dash}
-          />
-        );
-      })}
-      {model.points.map((p) => {
-        const s = toScreen(view, { u: p.u, v: p.v });
-        const r = sel.has(p.id) ? 4 : 2.5;
-        return (
-          <circle
-            key={p.id}
-            cx={s.x}
-            cy={s.y}
-            r={r}
-            fill={sel.has(p.id) ? "#ffd34a" : p.fixed ? "#ff8a3a" : baseColor}
-          />
-        );
-      })}
-    </g>
-  );
-});
 
 const MM = 1000;
 const DEG = 180 / Math.PI;
@@ -432,39 +255,9 @@ const ConstraintGlyphs = memo(function ConstraintGlyphs({
   );
 });
 
-const TOOLS: { tool: SketchTool; label: string }[] = [
-  { tool: "select", label: "Select" },
-  { tool: "line", label: "Line" },
-  { tool: "rectangle", label: "Rect" },
-  { tool: "rectCenter", label: "Rect◉" },
-  { tool: "circle", label: "Circle" },
-  { tool: "circle3", label: "Circle3" },
-  { tool: "arc3", label: "Arc3" },
-  { tool: "arcCenter", label: "Arc◉" },
-  { tool: "polygon", label: "Poly" },
-  { tool: "slot", label: "Slot" },
-  { tool: "spline", label: "Spline" },
-  { tool: "point", label: "Point" },
-];
-
-/** Single-key tool shortcuts (lowercased), Fusion-style: the primary tool of each
- * family (the centre/3-point variants stay on their toolbar buttons). */
-const TOOL_KEYS: Record<string, SketchTool> = {
-  v: "select",
-  l: "line",
-  r: "rectangle",
-  c: "circle",
-  a: "arc3",
-  g: "polygon",
-  o: "slot",
-  s: "spline",
-  p: "point",
-};
-
-/** Tools where a left press-drag-release draws the shape (press = first click,
- * release = second click). The 2-click primitives; other tools keep click-by-click
- * and left-drag still pans. Pan is always available on the middle mouse button. */
-const DRAG_DRAW: ReadonlySet<SketchTool> = new Set(["line", "rectangle", "rectCenter", "circle"]);
+// The drag-draw tool set lives in SketchScene beside the handler that reads it
+// (its DRAG_TOOLS): the 3D plane receives the press/move/release, so a copy here
+// could never gate anything.
 
 /** Order the smart-dimension (D) key tries — the first that fits the selection wins.
  * distance/radius/angle are mutually exclusive by selection shape, so this just sets
@@ -601,8 +394,6 @@ export function Sketcher(): React.JSX.Element | null {
   const finishGesture = useSketchStore((s) => s.finishGesture);
   const pending = useSketchStore((s) => s.pending);
   const selection = useSketchStore((s) => s.selection);
-  const setSelection = useSketchStore((s) => s.setSelection);
-  const toggleSelect = useSketchStore((s) => s.toggleSelect);
   const applyConstraint = useSketchStore((s) => s.applyConstraint);
   const removeConstraint = useSketchStore((s) => s.removeConstraint);
   const addDimension = useSketchStore((s) => s.addDimension);
@@ -610,8 +401,6 @@ export function Sketcher(): React.JSX.Element | null {
   const setConstraintValue = useSketchStore((s) => s.setConstraintValue);
   const setEditingDim = useSketchStore((s) => s.setEditingDim);
   const result = useSketchStore((s) => s.result);
-  const movePoint = useSketchStore((s) => s.movePoint);
-  const solve = useSketchStore((s) => s.solve);
   const addDrawDimensions = useSketchStore((s) => s.addDrawDimensions);
 
   // Finish (FR-21): commit the sketch via the shared helper (solve → derive the
@@ -628,16 +417,11 @@ export function Sketcher(): React.JSX.Element | null {
   const sketchCursor = useSketchStore((s) => s.cursor);
   // Right-click context menu (sketch-entity context): screen-anchored DOM menu
   // over the overlay, reusing the shared catalog (constraints/dimensions/fix/finish).
-  const [ctxMenu, setCtxMenu] = useState<{
-    x: number;
-    y: number;
-    sections: MenuSection[];
-    target: ContextTarget;
-  } | null>(null);
-  const pan = useRef<{ x: number; y: number } | null>(null);
-  const moved = useRef(false);
-  /** The point being dragged in the Select tool (live re-solve), if any. */
-  const dragPoint = useRef<string | null>(null);
+  // Selection, point-dragging and view pan/zoom all live on the 3D sketch plane
+  // now (ADR-0014 — SketchScene owns the pointer): it hit-tests entities, drags
+  // a point with a coalesced re-solve, and the 3D camera IS the sketch view. The
+  // refs and store bindings that served this overlay's own pointer handlers went
+  // with them; keeping copies here would be a second, unreachable input path.
   /**
    * Live drag-draw rubber-band, read from the SKETCH STORE rather than tracked
    * here (§2.6). ADR-0014 moved the drawing pointer onto the 3D plane
@@ -755,35 +539,14 @@ export function Sketcher(): React.JSX.Element | null {
   inferAtRef.current = inferAt;
 
   // --- rAF coalescing (perf; semantics-preserving) ---
-  // Dragging a point re-solves the whole sketch; hovering re-runs snap inference.
-  // Doing either on EVERY pointermove floods the wasm solver / hit-testing at the
-  // pointer's event rate (often 120+ Hz). Coalesce both to at most once per
-  // animation frame, always with the LATEST pointer; pointerup flushes the drag
-  // so the committed end state is byte-identical to the unthrottled path.
-  const applyDragSolve = (): void => {
-    const latest = dragSolveLatest.current;
-    dragSolveLatest.current = null;
-    if (!latest) return;
-    movePoint(latest.id, latest.u, latest.v);
-    solve();
-  };
-  const scheduleDragSolve = (pid: string, u: number, v: number): void => {
-    dragSolveLatest.current = { id: pid, u, v };
-    if (dragSolveFrame.current != null) return;
-    dragSolveFrame.current = requestAnimationFrame(() => {
-      dragSolveFrame.current = null;
-      applyDragSolve();
-    });
-  };
-  /** Cancel the pending frame and apply the latest unapplied drag position NOW
-   * (pointerup): the final solve is authoritative. No-op when nothing is pending. */
-  const flushDragSolve = (): void => {
-    if (dragSolveFrame.current != null) {
-      cancelAnimationFrame(dragSolveFrame.current);
-      dragSolveFrame.current = null;
-    }
-    applyDragSolve();
-  };
+  // Hovering re-runs snap inference; doing it on EVERY pointermove floods
+  // hit-testing at the pointer's event rate (often 120+ Hz), so it is coalesced
+  // to at most once per animation frame, always with the LATEST pointer.
+  //
+  // The point-DRAG coalescer that lived here moved to SketchScene with the
+  // pointer it serves (ADR-0014): the 3D plane receives the press/move/release,
+  // so a drag scheduler here could never be reached. Its behaviour is unchanged
+  // — snapshot once on press, one movePoint+solve per frame, flush on release.
   const scheduleHover = (p: Px): void => {
     hoverLatest.current = p;
     if (hoverFrame.current != null) return;
@@ -823,10 +586,18 @@ export function Sketcher(): React.JSX.Element | null {
       return;
     }
     scheduleHover(toScreen(view, { u: sketchCursor[0], v: sketchCursor[1] }));
-    // `scheduleHover`/`cancelHover` are re-created each render but read their
-    // state through refs, so only the cursor and view actually matter here.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // `scheduleHover`/`cancelHover` are re-created every render but read their
+    // state through refs, so the cursor and view are the only real inputs.
   }, [sketchCursor, view]);
+
+  // Right-click in the sketcher is ALREADY served, and not from here: the
+  // overlay is pointer-events-none, so the event reaches the WebGL canvas where
+  // `useCanvasRightClick` resolves the sketch target and opens the live
+  // world-anchored menu (`canvas-context-menu`, asserted by
+  // e2e/plastiq/context-menu.spec.ts). The screen-anchored copy this component
+  // used to hold — its `ctxMenu` state, backdrop and PlastiqScreenContextMenu,
+  // plus resolveContextTarget/buildMenuSections/snapshotCad/snapshotSketch — was
+  // a SECOND menu for the same gesture; wiring it up produced two menus at once.
 
   // Leaving the sketch (or unmounting) drops any coalesced frame — a late frame
   // must not solve against a reset model.
@@ -916,11 +687,6 @@ export function Sketcher(): React.JSX.Element | null {
   }, [active]);
 
   if (!active) return null;
-
-  const rectPx = (e: React.PointerEvent): { x: number; y: number } => {
-    const r = (e.currentTarget as SVGElement).getBoundingClientRect();
-    return { x: e.clientX - r.left, y: e.clientY - r.top };
-  };
 
   const toolBtn = (t: SketchTool, label: string): React.JSX.Element => (
     <button
@@ -1152,6 +918,16 @@ export function Sketcher(): React.JSX.Element | null {
             pointer-events-none, which stops it stealing clicks but not it
             drawing — the geometry itself is committed on release by SketchScene. */}
         {dragPreview && <DragDrawPreview tool={tool} from={dragPreview.from} to={dragPreview.to} />}
+        {/* Snap/inference indicators under the cursor (grid, endpoint, on-object…)
+            plus the rubber-band back to the gesture's anchor. Driven by the same
+            `hover` the precise-input box uses. */}
+        {hover && (
+          <InferenceOverlay
+            hover={hover}
+            tip={hover.px}
+            anchor={anchor ? toScreen(view, { u: anchor.u, v: anchor.v }) : null}
+          />
+        )}
       </svg>
       {/* Inline precise-value box: appears during a drawing gesture near the cursor;
           shows live values, type to lock + auto-dimension (FR — Fusion precise input). */}
@@ -1171,30 +947,6 @@ export function Sketcher(): React.JSX.Element | null {
           at={boxPos}
         />
         </div>
-      )}
-      {ctxMenu && (
-        <>
-          {/* Backdrop dismisses on the next click (matches the feature-tree menu). */}
-          <div
-            data-testid="sketch-ctx-backdrop"
-            className="pointer-events-auto fixed inset-0 z-40"
-            onClick={() => setCtxMenu(null)}
-            onContextMenu={(e) => {
-              e.preventDefault();
-              setCtxMenu(null);
-            }}
-          />
-          <PlastiqScreenContextMenu
-            open={true}
-            anchor={{ x: ctxMenu.x, y: ctxMenu.y }}
-            target={ctxMenu.target}
-            onClose={() => setCtxMenu(null)}
-            onRun={(id) => {
-              runContextAction(id, ctxMenu.target);
-              setCtxMenu(null);
-            }}
-          />
-        </>
       )}
     </div>
   );
