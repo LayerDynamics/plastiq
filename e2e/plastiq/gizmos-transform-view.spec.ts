@@ -99,9 +99,12 @@ test("the view cube is unobstructed and reorients the camera on click (FR-12)", 
   //    the cube itself — the element at a face's centre is inside the view-cube svg,
   //    and a point beside the cube falls through to the CANVAS (the overlay is
   //    pointer-transparent outside its painted shapes, so orbit still works there).
+  //    Which faces exist depends on where the camera is — the cube now draws only
+  //    the faces pointing at you (FR-12) — so this probes whichever face is
+  //    currently visible rather than assuming a fixed one.
   const [onFace, besideCube] = await page.evaluate(() => {
     const svg = document.querySelector('[data-testid="view-cube"]')!;
-    const f = document.querySelector('[data-testid="cube-face-F"]')!.getBoundingClientRect();
+    const f = document.querySelector('[data-testid^="cube-face-"]')!.getBoundingClientRect();
     const el = document.elementFromPoint(f.left + f.width / 2, f.top + f.height / 2);
     const c = document.querySelector("#viewport-root canvas")!.getBoundingClientRect();
     const beside = document.elementFromPoint(c.right - 150, c.top + 60);
@@ -126,14 +129,19 @@ test("the view cube is unobstructed and reorients the camera on click (FR-12)", 
   await settle();
   const before = await shot();
 
-  await page.getByTestId("cube-face-F").click();
+  // Click a face the camera can currently see; it snaps to that ortho view.
+  await page.locator('[data-testid^="cube-face-"]').first().click();
   await page.mouse.move(...neutral); // clear the cube hover-highlight
   await settle();
-  const front = await shot();
-  expect(front).not.toBe(before); // the camera moved to the front view
+  const ortho = await shot();
+  expect(ortho).not.toBe(before); // the camera moved to that face's view
 
-  await page.getByTestId("cube-spot-1-11").click(); // near corner → iso
+  // Now a corner spot — three non-zero axes — snaps to an iso view. Picked from
+  // whatever the cube shows AFTER the first snap, since the visible set changed.
+  const corner = page.locator('[data-testid^="cube-spot-"]').last();
+  await expect(corner).toBeVisible();
+  await corner.click();
   await page.mouse.move(...neutral);
   await settle();
-  expect(await shot()).not.toBe(front); // …and again to iso
+  expect(await shot()).not.toBe(ortho); // …and again
 });

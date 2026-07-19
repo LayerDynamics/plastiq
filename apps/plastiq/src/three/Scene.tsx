@@ -4,7 +4,7 @@
 
 import { useEffect, useMemo } from "react";
 import * as THREE from "three";
-import { useThree } from "@react-three/fiber";
+import { useFrame, useThree } from "@react-three/fiber";
 import { OrbitControls } from "@react-three/drei";
 import { Part } from "./Part.js";
 import { Picking } from "./Picking.js";
@@ -14,6 +14,11 @@ import { ObjectCenterGizmo } from "./gizmos/objectCenter.gizmo.js";
 import { PlaneGizmo } from "./gizmos/plane.gizmo.js";
 import { ConstructionGeometryGizmo } from "./gizmos/constructionGeometry.gizmo.js";
 import { SectionAnalysisGizmo } from "./gizmos/sectionAnalysis.gizmo.js";
+import {
+  orientationChanged,
+  useCameraOrientation,
+  type Quat,
+} from "../viewport/cameraOrientation.js";
 import { FeatureEditGizmo } from "./gizmos/featureEdit.gizmo.js";
 import { OffsetGizmo } from "./gizmos/offset.gizmo.js";
 import { RightClickDropdownGizmo } from "./gizmos/rightClickDropdown.gizmo.js";
@@ -129,6 +134,28 @@ interface OrbitLike {
   /** The DOM element OrbitControls binds pointer events to (the r3f event
    * source — the canvas's parent, NOT the canvas itself). */
   domElement?: Element;
+}
+
+/**
+ * Feed the view cube the live camera orientation (FR-12).
+ *
+ * The cube is a DOM overlay outside the Canvas, so it cannot read the camera —
+ * it needs the orientation as React state. Sampling happens here, inside the
+ * frame loop, because OrbitControls mutates the camera directly and emits no
+ * React-visible change; a `useEffect` would never see an orbit.
+ *
+ * The store is written ONLY when the orientation actually moved, so a resting
+ * camera costs one quaternion comparison per frame and no re-render at all.
+ */
+function CameraOrientationPublisher(): null {
+  const camera = useThree((s) => s.camera);
+  useFrame(() => {
+    const q = camera.quaternion;
+    const next: Quat = [q.x, q.y, q.z, q.w];
+    const { quat, setQuat } = useCameraOrientation.getState();
+    if (orientationChanged(quat, next)) setQuat(next);
+  });
+  return null;
 }
 
 export function Scene({
@@ -388,6 +415,8 @@ export function Scene({
         instances={instances}
         {...(mateMode ? { onMatePick: addMatePick } : {})}
       />
+      {/* Keeps the DOM view cube pointing where the camera points (FR-12). */}
+      <CameraOrientationPublisher />
       <MatePickGizmo instances={instances} />
       <ExperimentGround />
       <Picking part={part} />
