@@ -37,16 +37,82 @@ export const DEFAULT_VIEW_QUAT: Quat = (() => {
   return [q.x, q.y, q.z, q.w];
 })();
 
+/** A 4x4 column-major matrix, as three.js stores them. */
+export type Mat4 = readonly number[];
+
+/** Identity, before a camera has reported anything. */
+const IDENTITY_M4: Mat4 = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
+
 interface CameraOrientationState {
   /** The viewport camera's world quaternion. */
   quat: Quat;
   setQuat: (q: Quat) => void;
+  /**
+   * projection · viewMatrix — everything needed to take a WORLD point to
+   * normalised device coordinates, plus the canvas size to land it in pixels.
+   *
+   * The sketch overlay needs the full transform, not just the orientation: its
+   * glyphs sit on world points and must stay on them through orbit, pan, zoom
+   * and the perspective divide. A scale-and-pan 2D view cannot express that —
+   * the camera is perspective and generally not square-on to the sketch plane.
+   */
+  viewProjection: Mat4;
+  /** Canvas size in CSS pixels (NDC → px). */
+  canvas: { w: number; h: number };
+  setProjection: (m: Mat4, w: number, h: number) => void;
 }
 
 export const useCameraOrientation = create<CameraOrientationState>((set) => ({
   quat: DEFAULT_VIEW_QUAT,
   setQuat: (q) => set({ quat: q }),
+  viewProjection: IDENTITY_M4,
+  canvas: { w: 1, h: 1 },
+  setProjection: (viewProjection, w, h) => set({ viewProjection, canvas: { w, h } }),
 }));
+
+/** Whether a view-projection changed enough to re-render what depends on it. */
+export function projectionChanged(a: Mat4, b: Mat4): boolean {
+  for (let i = 0; i < 16; i++) {
+    if (Math.abs((a[i] ?? 0) - (b[i] ?? 0)) > 1e-9) return true;
+  }
+  return false;
+}
+
+/**
+ * A point on the sketch plane, in CSS pixels over the canvas.
+ *
+ * `frame` is the plane's world frame (origin + normal + xAxis); the in-plane v
+ * axis is normal × xAxis, matching how the 3D scene lays the sketch out, so a
+ * glyph drawn here lands exactly on the geometry it annotates. Returns null when
+ * the point is behind the camera, where there is no honest screen position.
+ */
+export function projectPlanePoint(
+  frame: { origin: Vec3; normal: Vec3; xAxis: Vec3 },
+  viewProjection: Mat4,
+  canvas: { w: number; h: number },
+  uv: readonly [number, number],
+): { x: number; y: number } | null {
+  const [ox, oy, oz] = frame.origin;
+  const [nx, ny, nz] = frame.normal;
+  const [xx, xy, xz] = frame.xAxis;
+  // In-plane Y = normal × xAxis.
+  const yx = ny * xz - nz * xy;
+  const yy = nz * xx - nx * xz;
+  const yz = nx * xy - ny * xx;
+  const wx = ox + xx * uv[0] + yx * uv[1];
+  const wy = oy + xy * uv[0] + yy * uv[1];
+  const wz = oz + xz * uv[0] + yz * uv[1];
+  const m = viewProjection;
+  // Column-major: clip = M · (wx, wy, wz, 1).
+  const cx = (m[0] ?? 0) * wx + (m[4] ?? 0) * wy + (m[8] ?? 0) * wz + (m[12] ?? 0);
+  const cy = (m[1] ?? 0) * wx + (m[5] ?? 0) * wy + (m[9] ?? 0) * wz + (m[13] ?? 0);
+  const cw = (m[3] ?? 0) * wx + (m[7] ?? 0) * wy + (m[11] ?? 0) * wz + (m[15] ?? 0);
+  if (!Number.isFinite(cw) || cw <= 1e-9) return null; // behind the camera
+  return {
+    x: ((cx / cw) * 0.5 + 0.5) * canvas.w,
+    y: (0.5 - (cy / cw) * 0.5) * canvas.h,
+  };
+}
 
 /**
  * Whether two orientations differ enough to be worth a re-render.

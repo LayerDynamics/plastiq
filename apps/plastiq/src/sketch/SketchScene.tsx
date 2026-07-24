@@ -10,7 +10,7 @@ import { useThree } from "@react-three/fiber";
 import type { DatumPlane } from "@plastiq/cad";
 import { useSketchStore } from "./sketchStore.js";
 import { hitTest } from "./hit.js";
-import { toScreen } from "./transform2d.js";
+import { projectPlanePoint, useCameraOrientation } from "../viewport/cameraOrientation.js";
 import {
   arcWorld,
   circleWorld,
@@ -67,7 +67,9 @@ function SketchPlanePick({ plane }: { plane: DatumPlane }): React.JSX.Element {
     frame: null,
     latest: null,
   });
-  const view = useSketchStore((s) => s.view);
+  const resolvedFrame = useSketchStore((s) => s.resolvedFrame);
+  const viewProjection = useCameraOrientation((s) => s.viewProjection);
+  const canvasSize = useCameraOrientation((s) => s.canvas);
   /**
    * Where a drag-draw started, and whether it has travelled far enough to BE a
    * drag (§2.6). A ref, not state: it is read inside pointer handlers on the
@@ -131,7 +133,12 @@ function SketchPlanePick({ plane }: { plane: DatumPlane }): React.JSX.Element {
           // before. Both the cursor and the entities are projected through the
           // SAME 2D view, so its px tolerance is a uniform radius in model space
           // (~1.75 mm at the default scale — near the 2 mm this replaces).
-          const hit = hitTest(model, view, toScreen(view, { u, v }));
+          // Pick through the LIVE camera, so the 7 px tolerance is 7 real
+          // pixels at the current zoom rather than a fixed 2D view's guess.
+          const project = (p: readonly [number, number]): { x: number; y: number } | null =>
+            resolvedFrame ? projectPlanePoint(resolvedFrame, viewProjection, canvasSize, p) : null;
+          const here = project([u, v]);
+          const hit = here ? hitTest(model, project, here) : null;
           if (hit) {
             if (e.shiftKey) toggleSelect(hit.id);
             else setSelection([hit.id]);

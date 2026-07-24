@@ -104,3 +104,48 @@ describe("dimensions — measure / canDimension / build (FR-19)", () => {
     expect(input.constraints).toEqual([]); // driven adds no residual
   });
 });
+
+// Selecting a SEGMENT and dimensioning it is the ordinary CAD gesture. It used
+// to be a silent no-op: only loose points were resolved, so `measure` returned
+// null and addDimension bailed before building anything — the button appeared to
+// do nothing at all.
+describe("dimensioning a selected line (its endpoints are the pair)", () => {
+  it("offers, measures and builds a length on one selected line", () => {
+    expect(canDimension("distance", model, ["l0"])).toBe(true);
+    expect(measure("distance", model, ["l0"])).toBeCloseTo(0.05, 9); // the 3-4-5 span
+    const d = buildDimension("distance", model, ["l0"], 0.05, "d5")!;
+    expect(d).toMatchObject({ kind: "distance", a: "p0", b: "p1", value: 0.05 });
+  });
+
+  it("h/v distances take the line's own direction, signed a→b", () => {
+    expect(measure("hDistance", model, ["l0"])).toBeCloseTo(0.03, 9);
+    expect(measure("vDistance", model, ["l0"])).toBeCloseTo(0.04, 9);
+    expect(canDimension("hDistance", model, ["l0"])).toBe(true);
+    expect(canDimension("vDistance", model, ["l0"])).toBe(true);
+  });
+
+  it("what it measures is exactly what it builds — can/measure/build agree", () => {
+    // The three used to resolve the selection separately, so a selection could be
+    // offered and then refused. They share one resolver now.
+    for (const sel of [["l0"], ["p0", "p1"], ["l1"]]) {
+      const ok = canDimension("distance", model, sel);
+      const v = measure("distance", model, sel);
+      expect(ok).toBe(v != null);
+      expect(ok).toBe(buildDimension("distance", model, sel, v ?? 0, "x") !== null);
+    }
+  });
+
+  it("stays out of AMBIGUOUS selections rather than guessing", () => {
+    expect(canDimension("distance", model, ["l0", "l1"])).toBe(false); // that's an angle
+    expect(canDimension("distance", model, ["l0", "c"])).toBe(false); // line + loose point
+    expect(measure("distance", model, ["l0", "l1"])).toBeNull();
+    // …and two lines still dimension as an angle, unchanged.
+    expect(canDimension("angle", model, ["l0", "l1"])).toBe(true);
+  });
+
+  it("a solver constraint built from a line really binds its endpoints", () => {
+    const d = buildDimension("distance", model, ["l0"], 0.05, "d6")!;
+    const input = toSolverInput({ ...model, constraints: [d] });
+    expect(input.constraints).toHaveLength(1); // not driven → a real residual
+  });
+});

@@ -28,6 +28,34 @@ function circleSel(model: SketchModel, sel: readonly string[]): string[] {
   return sel.filter((id) => model.entities.some((e) => e.id === id && e.kind === "circle"));
 }
 
+/**
+ * The two points a length dimension spans, or null if the selection doesn't name
+ * a pair.
+ *
+ * Two selected points are the explicit form. A single selected SEGMENT is the
+ * one every CAD app supports and this one used to drop on the floor: picking a
+ * line and asking for its length means its two endpoints. Resolving that here —
+ * rather than in each of measure/build/can — keeps all three agreeing on which
+ * pair they are talking about, which is what stops a dimension being offered on
+ * a selection it then silently refuses to build.
+ *
+ * Anything ambiguous (a line AND a loose point, two lines) returns null: two
+ * lines is an ANGLE dimension, and guessing between readings would attach a
+ * dimension to geometry the user did not pick.
+ */
+function dimPoints(model: SketchModel, sel: readonly string[]): [string, string] | null {
+  const pts = pointSel(model, sel);
+  if (pts.length === 2) return [pts[0]!, pts[1]!];
+  if (pts.length === 0) {
+    const lines = lineSel(model, sel);
+    if (lines.length === 1) {
+      const l = model.entities.find((e) => e.id === lines[0] && e.kind === "line");
+      if (l && l.kind === "line") return [l.a, l.b];
+    }
+  }
+  return null;
+}
+
 /** Whether a dimension of `kind` can apply to the current selection. */
 export function canDimension(
   kind: DimensionKind,
@@ -35,7 +63,7 @@ export function canDimension(
   sel: readonly string[],
 ): boolean {
   if (kind === "distance" || kind === "hDistance" || kind === "vDistance") {
-    return pointSel(model, sel).length === 2;
+    return dimPoints(model, sel) !== null;
   }
   if (kind === "radius" || kind === "diameter") return circleSel(model, sel).length === 1;
   if (kind === "lineAngle") return lineSel(model, sel).length === 1; // one line ∠ to X axis
@@ -59,9 +87,9 @@ export function measure(
   sel: readonly string[],
 ): number | null {
   if (kind === "distance" || kind === "hDistance" || kind === "vDistance") {
-    const [a, b] = pointSel(model, sel);
-    const pa = a ? point(model, a) : undefined;
-    const pb = b ? point(model, b) : undefined;
+    const pair = dimPoints(model, sel);
+    const pa = pair ? point(model, pair[0]) : undefined;
+    const pb = pair ? point(model, pair[1]) : undefined;
     if (!pa || !pb) return null;
     if (kind === "hDistance") return pb.u - pa.u; // signed Δx
     if (kind === "vDistance") return pb.v - pa.v; // signed Δy
@@ -95,8 +123,8 @@ export function buildDimension(
   id: string,
 ): SketchConstraint | null {
   if (kind === "distance" || kind === "hDistance" || kind === "vDistance") {
-    const [a, b] = pointSel(model, sel);
-    return a && b ? { id, kind, a, b, value } : null;
+    const pair = dimPoints(model, sel);
+    return pair ? { id, kind, a: pair[0], b: pair[1], value } : null;
   }
   if (kind === "radius" || kind === "diameter") {
     const [circle] = circleSel(model, sel);

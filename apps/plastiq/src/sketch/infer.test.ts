@@ -3,7 +3,18 @@ import { lineHint, nearestSnap, segmentHint } from "./infer.js";
 import { circumcircle, type SketchModel } from "./model.js";
 import { toScreen, type View2D } from "./transform2d.js";
 
+// A stand-in camera projection. `nearestSnap` now takes a projector (sketch point
+// → pixels through the live camera) instead of a fixed 2D view; a plain scale+pan
+// is still a perfectly valid projector, so these keep exercising the snap logic
+// with arithmetic that is easy to read.
 const view: View2D = { scale: 1000, panX: 400, panY: 300 };
+const project = (uv: readonly [number, number]): { x: number; y: number } =>
+  toScreen(view, { u: uv[0], v: uv[1] });
+/** The cursor in both frames, as the sketcher supplies it. */
+const at = (px: { x: number; y: number }): { uv: { u: number; v: number }; px: { x: number; y: number } } => ({
+  uv: { u: (px.x - view.panX) / view.scale, v: -(px.y - view.panY) / view.scale },
+  px,
+});
 
 const model: SketchModel = {
   plane: "XY",
@@ -15,7 +26,7 @@ const model: SketchModel = {
 describe("nearestSnap — origin / endpoint / grid (FR-17)", () => {
   it("snaps to the origin when the cursor is near it", () => {
     const near = toScreen(view, { u: 0, v: 0 });
-    const snap = nearestSnap(model, view, { x: near.x + 3, y: near.y - 2 });
+    const snap = nearestSnap(model, project, at({ x: near.x + 3, y: near.y - 2 }));
     expect(snap.kind).toBe("origin");
     expect(snap.u).toBe(0);
     expect(snap.v).toBe(0);
@@ -23,14 +34,14 @@ describe("nearestSnap — origin / endpoint / grid (FR-17)", () => {
 
   it("snaps to an existing point and returns its id (true connection)", () => {
     const near = toScreen(view, { u: 0.05, v: 0.02 });
-    const snap = nearestSnap(model, view, { x: near.x - 4, y: near.y + 1 });
+    const snap = nearestSnap(model, project, at({ x: near.x - 4, y: near.y + 1 }));
     expect(snap.kind).toBe("point");
     expect(snap.pointId).toBe("p1");
     expect(snap.u).toBeCloseTo(0.05, 9);
   });
 
   it("falls back to the nearest grid intersection when nothing is close", () => {
-    const snap = nearestSnap(model, view, { x: 123, y: 217 });
+    const snap = nearestSnap(model, project, at({ x: 123, y: 217 }));
     expect(snap.kind).toBe("grid");
     // grid-snapped to a multiple of the grid step.
     const step = snap.u === 0 ? 1 : snap.u;
@@ -50,7 +61,7 @@ describe("nearestSnap — midpoint + centre (FR-17)", () => {
       constraints: [],
     };
     const mid = toScreen(view, { u: 0.05, v: 0 });
-    const snap = nearestSnap(m, view, { x: mid.x + 2, y: mid.y - 1 });
+    const snap = nearestSnap(m, project, at({ x: mid.x + 2, y: mid.y - 1 }));
     expect(snap.kind).toBe("midpoint");
     expect(snap.u).toBeCloseTo(0.05, 9);
     expect(snap.v).toBeCloseTo(0, 9);
@@ -68,8 +79,8 @@ describe("nearestSnap — midpoint + centre (FR-17)", () => {
       constraints: [],
     };
     const cc = circumcircle([0, 0], [0.1, 0], [0.05, 0.05])!;
-    const at = toScreen(view, { u: cc.u, v: cc.v });
-    const snap = nearestSnap(m, view, { x: at.x - 2, y: at.y + 2 });
+    const centrePx = toScreen(view, { u: cc.u, v: cc.v });
+    const snap = nearestSnap(m, project, at({ x: centrePx.x - 2, y: centrePx.y + 2 }));
     expect(snap.kind).toBe("center");
     expect(snap.u).toBeCloseTo(cc.u, 9);
     expect(snap.v).toBeCloseTo(cc.v, 9);

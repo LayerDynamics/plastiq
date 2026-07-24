@@ -16,6 +16,7 @@ import { ConstructionGeometryGizmo } from "./gizmos/constructionGeometry.gizmo.j
 import { SectionAnalysisGizmo } from "./gizmos/sectionAnalysis.gizmo.js";
 import {
   orientationChanged,
+  projectionChanged,
   useCameraOrientation,
   type Quat,
 } from "../viewport/cameraOrientation.js";
@@ -149,11 +150,25 @@ interface OrbitLike {
  */
 function CameraOrientationPublisher(): null {
   const camera = useThree((s) => s.camera);
+  const size = useThree((s) => s.size);
+  const vp = useMemo(() => new THREE.Matrix4(), []);
   useFrame(() => {
+    const st = useCameraOrientation.getState();
     const q = camera.quaternion;
     const next: Quat = [q.x, q.y, q.z, q.w];
-    const { quat, setQuat } = useCameraOrientation.getState();
-    if (orientationChanged(quat, next)) setQuat(next);
+    if (orientationChanged(st.quat, next)) st.setQuat(next);
+    // The full transform, for anything that must sit ON world geometry (the
+    // sketch overlay's glyphs and dimensions). Sampled here for the same reason
+    // as the orientation: OrbitControls moves the camera outside React.
+    vp.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
+    const m = vp.elements as unknown as number[];
+    if (
+      projectionChanged(st.viewProjection, m) ||
+      st.canvas.w !== size.width ||
+      st.canvas.h !== size.height
+    ) {
+      st.setProjection([...m], size.width, size.height);
+    }
   });
   return null;
 }

@@ -16,19 +16,20 @@ import {
   type Vec2,
 } from "./drawInput.js";
 import { nearestSnap, segmentHint, type SegHint, type Snap } from "./infer.js";
+import {
+  projectPlanePoint,
+  useCameraOrientation,
+} from "../viewport/cameraOrientation.js";
 // `hitTest` moved to SketchScene with the pointer it serves (ADR-0014): the
 // 3D plane owns picking now. `canApply` stays — it gates these buttons.
 import { canApply, type ConstraintKind } from "./hit.js";
 import { canDimension, type DimensionKind } from "./dim.js";
 import { extractProfile } from "./profile.js";
 import { finishSketchFeature } from "./editFeature.js";
-import {
-  centeredView,
-  toScreen,
-  toWorld,
-  type Px,
-  type View2D,
-} from "./transform2d.js";
+// Only the pixel type survives from the 2D transform module here: the overlay
+// projects through the LIVE camera now (viewport/cameraOrientation), not through
+// a scale-and-pan view that was fixed on entering the sketch.
+import type { Px } from "./transform2d.js";
 
 // The sketch's GRID, AXES, POINTS and CURVES are drawn in place on the 3D
 // plane (ADR-0014 — SketchScene's PlaneGrid + SketchEntities). The 2D
@@ -139,18 +140,19 @@ function DimensionEditor({
  * hover-only tick skips re-walking every constraint. */
 const ConstraintGlyphs = memo(function ConstraintGlyphs({
   model,
-  view,
+  project,
   onDelete,
   onEdit,
 }: {
   model: SketchModel;
-  view: View2D;
+  /** Sketch point → screen pixels, through the LIVE camera. */
+  project: (uv: readonly [number, number]) => { x: number; y: number } | null;
   onDelete: (id: string) => void;
   onEdit: (id: string) => void;
 }): React.JSX.Element {
   const screen = (id: string): { x: number; y: number } | null => {
     const p = model.points.find((q) => q.id === id);
-    return p ? toScreen(view, { u: p.u, v: p.v }) : null;
+    return p ? project([p.u, p.v]) : null;
   };
   const lineMid = (lineId: string): { x: number; y: number } | null => {
     const l = model.entities.find((e) => e.id === lineId && e.kind === "line");
@@ -158,6 +160,15 @@ const ConstraintGlyphs = memo(function ConstraintGlyphs({
     const a = screen(l.a);
     const b = screen(l.b);
     return a && b ? { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 } : null;
+  };
+  /** Midway between two sketch points, on screen — where a dimension spanning
+   * them belongs. Anchoring on `a` alone hung the label off one endpoint, so a
+   * length read as though it belonged to that corner rather than to the span. */
+  const pairMid = (aId: string, bId: string): { x: number; y: number } | null => {
+    const a = screen(aId);
+    const b = screen(bId);
+    if (!a || !b) return a ?? b;
+    return { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
   };
   const circleCenter = (circleId: string): { x: number; y: number } | null => {
     const e = model.entities.find((x) => x.id === circleId && x.kind === "circle");
@@ -206,7 +217,7 @@ const ConstraintGlyphs = memo(function ConstraintGlyphs({
                   : "point" in c
                     ? screen(c.point)
                     : "a" in c
-                      ? screen(c.a)
+                      ? pairMid(c.a, c.b)
                       : null;
         if (!at) return null;
         const label = dimLabel(c);
@@ -379,8 +390,6 @@ function DrawInputBox({
 
 export function Sketcher(): React.JSX.Element | null {
   const active = useSketchStore((s) => s.active);
-  const view = useSketchStore((s) => s.view);
-  const setView = useSketchStore((s) => s.setView);
   const exitSketch = useSketchStore((s) => s.exitSketch);
   const plane = useSketchStore((s) => s.model.plane);
   const model = useSketchStore((s) => s.model);
@@ -415,6 +424,25 @@ export function Sketcher(): React.JSX.Element | null {
   const [hover, setHover] = useState<{ px: Px; snap: Snap; hint: SegHint | null } | null>(null);
   /** Pointer over the sketch plane, published by the 3D surface (SketchScene). */
   const sketchCursor = useSketchStore((s) => s.cursor);
+  /**
+   * Sketch point → screen pixels, through the LIVE camera (FR-12).
+   *
+   * This overlay used to project through a fixed centred `View2D` (a scale and a
+   * pan) that was set once on entering the sketch and never moved. The geometry
+   * is drawn by the 3D camera, so every orbit, pan or zoom slid the glyphs off
+   * the entities they annotate — and no 2D scale-and-pan could have followed,
+   * because the camera is perspective and generally not square-on to the plane.
+   * The real view-projection is used instead, so a dimension stays welded to its
+   * edge from any viewpoint.
+   */
+  const resolvedFrame = useSketchStore((s) => s.resolvedFrame);
+  const viewProjection = useCameraOrientation((s) => s.viewProjection);
+  const canvasSize = useCameraOrientation((s) => s.canvas);
+  const project = useMemo(() => {
+    const frame = resolvedFrame;
+    return (uv: readonly [number, number]): { x: number; y: number } | null =>
+      frame ? projectPlanePoint(frame, viewProjection, canvasSize, uv) : null;
+  }, [resolvedFrame, viewProjection, canvasSize]);
   // Right-click context menu (sketch-entity context): screen-anchored DOM menu
   // over the overlay, reusing the shared catalog (constraints/dimensions/fix/finish).
   // Selection, point-dragging and view pan/zoom all live on the 3D sketch plane
@@ -435,11 +463,11 @@ export function Sketcher(): React.JSX.Element | null {
     () =>
       dragDraw
         ? {
-            from: toScreen(view, { u: dragDraw.from[0], v: dragDraw.from[1] }),
-            to: toScreen(view, { u: dragDraw.to[0], v: dragDraw.to[1] }),
+            from: project(dragDraw.from),
+            to: project(dragDraw.to),
           }
         : null,
-    [dragDraw, view],
+    [dragDraw, project],
   );
   /** rAF-coalesced point-drag (perf): pointermove only records the latest pointer
    * here; at most ONE movePoint+solve runs per animation frame (with that latest
@@ -467,7 +495,10 @@ export function Sketcher(): React.JSX.Element | null {
     .map((id) => model.points.find((p) => p.id === id))
     .filter((p): p is NonNullable<typeof p> => p != null)
     .map((p) => ({ u: p.u, v: p.v }));
-  const cursorW: Vec2 = hover ? toWorld(view, hover.px) : { u: 0, v: 0 };
+  // The cursor is ALREADY a sketch coordinate — the 3D plane publishes it that
+  // way — so it no longer has to be un-projected from pixels (which the fixed 2D
+  // view could only ever approximate once the camera moved).
+  const cursorW: Vec2 = sketchCursor ? { u: sketchCursor[0], v: sketchCursor[1] } : { u: 0, v: 0 };
   const liveNow = drawFieldsNow.length
     ? liveValues(tool, pending.length, anchorsW, cursorW)
     : [];
@@ -477,7 +508,7 @@ export function Sketcher(): React.JSX.Element | null {
   const liveBoxPos: Px | null = hover
     ? hover.px
     : anchor
-      ? toScreen(view, { u: anchor.u, v: anchor.v })
+      ? project([anchor.u, anchor.v])
       : null;
   if (!draft && liveBoxPos) drawBoxPos.current = liveBoxPos;
   const boxPos = draft ? (drawBoxPos.current ?? liveBoxPos) : liveBoxPos;
@@ -526,7 +557,8 @@ export function Sketcher(): React.JSX.Element | null {
   commitRef.current = commitDraft;
 
   const inferAt = (p: Px): { snap: Snap; hint: SegHint | null } => {
-    const snap = nearestSnap(model, view, p);
+    const uv: Vec2 = sketchCursor ? { u: sketchCursor[0], v: sketchCursor[1] } : { u: 0, v: 0 };
+    const snap = nearestSnap(model, project, { uv, px: p });
     const hint =
       tool === "line" && anchor
         ? segmentHint(model, { u: anchor.u, v: anchor.v }, { u: snap.u, v: snap.v })
@@ -585,10 +617,11 @@ export function Sketcher(): React.JSX.Element | null {
       setHover(null);
       return;
     }
-    scheduleHover(toScreen(view, { u: sketchCursor[0], v: sketchCursor[1] }));
+    const px = project(sketchCursor);
+    if (px) scheduleHover(px);
     // `scheduleHover`/`cancelHover` are re-created every render but read their
     // state through refs, so the cursor and view are the only real inputs.
-  }, [sketchCursor, view]);
+  }, [sketchCursor, project]);
 
   // Right-click in the sketcher is ALREADY served, and not from here: the
   // overlay is pointer-events-none, so the event reaches the WebGL canvas where
@@ -630,10 +663,11 @@ export function Sketcher(): React.JSX.Element | null {
     return () => ro.disconnect();
   }, []);
 
-  // Re-centre the view on entering the sketch (not on every view change).
-  useEffect(() => {
-    if (active) setView(centeredView(size.w, size.h, view.scale));
-  }, [active, setView, size.w, size.h, view.scale]);
+  // Nothing re-centres a 2D view any more: the 3D camera IS the sketch's view,
+  // and the overlay projects through it (see `project`). The old
+  // `setView(centeredView(...))` pinned a scale-and-pan that never moved again,
+  // which is exactly what made the glyphs drift off the geometry on the first
+  // orbit.
 
   // Keyboard shortcuts (Fusion-style): single letters switch tools, D dimensions the
   // selection, X toggles construction, Esc backs out (abort gesture → select), Enter
@@ -910,14 +944,16 @@ export function Sketcher(): React.JSX.Element | null {
       >
         <ConstraintGlyphs
           model={model}
-          view={view}
+          project={project}
           onDelete={removeConstraint}
           onEdit={setEditingDim}
         />
         {/* Rubber-band for an in-flight drag-draw. The overlay is
             pointer-events-none, which stops it stealing clicks but not it
             drawing — the geometry itself is committed on release by SketchScene. */}
-        {dragPreview && <DragDrawPreview tool={tool} from={dragPreview.from} to={dragPreview.to} />}
+        {dragPreview?.from && dragPreview.to && (
+          <DragDrawPreview tool={tool} from={dragPreview.from} to={dragPreview.to} />
+        )}
         {/* Snap/inference indicators under the cursor (grid, endpoint, on-object…)
             plus the rubber-band back to the gesture's anchor. Driven by the same
             `hover` the precise-input box uses. */}
@@ -925,7 +961,7 @@ export function Sketcher(): React.JSX.Element | null {
           <InferenceOverlay
             hover={hover}
             tip={hover.px}
-            anchor={anchor ? toScreen(view, { u: anchor.u, v: anchor.v }) : null}
+            anchor={anchor ? project([anchor.u, anchor.v]) : null}
           />
         )}
       </svg>

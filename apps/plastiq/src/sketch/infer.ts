@@ -6,7 +6,7 @@
 // Shift suppresses it). Pure → unit-tested without the DOM.
 
 import { circumcircle, type LineEntity, type SketchModel } from "./model.js";
-import { gridStep, toScreen, type Px, type Vec2, type View2D } from "./transform2d.js";
+import { gridStep, type Px, type Vec2 } from "./transform2d.js";
 
 export type SnapKind = "origin" | "point" | "midpoint" | "center" | "grid";
 
@@ -29,10 +29,23 @@ function dist(a: Px, b: Px): number {
  * origin > existing points > grid intersection (grid always available as a
  * fallback, so a click is never unconstrained-by-pixels).
  */
-export function nearestSnap(model: SketchModel, view: View2D, cursorPx: Px, pixelTol = 10): Snap {
+export function nearestSnap(
+  model: SketchModel,
+  /** Sketch point → screen pixels through the LIVE camera (null if off-screen). */
+  project: (uv: readonly [number, number]) => Px | null,
+  /** The cursor, in BOTH frames: the plane coordinate the 3D surface reports and
+   * its screen position. Having the plane coordinate directly removes the old
+   * un-projection, which a fixed 2D view could only approximate once the camera
+   * had moved off square-on. */
+  cursor: { uv: Vec2; px: Px },
+  pixelTol = 10,
+): Snap {
+  const cursorPx = cursor.px;
   let best: { snap: Snap; px: number } | null = null;
   const consider = (snap: Snap): void => {
-    const d = dist(cursorPx, toScreen(view, { u: snap.u, v: snap.v }));
+    const sp = project([snap.u, snap.v]);
+    if (!sp) return;
+    const d = dist(cursorPx, sp);
     if (d <= pixelTol && (!best || d < best.px)) best = { snap, px: d };
   };
 
@@ -67,12 +80,16 @@ export function nearestSnap(model: SketchModel, view: View2D, cursorPx: Px, pixe
 
   if (best) return (best as { snap: Snap }).snap;
 
-  // Fallback: snap to the nearest grid intersection.
-  const step = gridStep(view.scale);
-  const world: Vec2 = {
-    u: (cursorPx.x - view.panX) / view.scale,
-    v: -(cursorPx.y - view.panY) / view.scale,
-  };
+  // Fallback: snap to the nearest grid intersection. The grid's spacing follows
+  // the ON-SCREEN scale, measured from the projection itself (how many pixels one
+  // sketch unit spans right here) rather than read off a fixed 2D view — so the
+  // grid coarsens and refines with the camera, as it looks like it should.
+  const world = cursor.uv;
+  const probe = 1e-3;
+  const a = project([world.u, world.v]);
+  const b = project([world.u + probe, world.v]);
+  const pxPerUnit = a && b ? dist(a, b) / probe : 1;
+  const step = gridStep(pxPerUnit > 1e-9 ? pxPerUnit : 1);
   return {
     kind: "grid",
     u: Math.round(world.u / step) * step,

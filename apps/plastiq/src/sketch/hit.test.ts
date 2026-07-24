@@ -4,6 +4,11 @@ import type { SketchModel } from "./model.js";
 import { toScreen, type View2D } from "./transform2d.js";
 
 const view: View2D = { scale: 1000, panX: 400, panY: 300 };
+// `hitTest` now takes a projector (sketch point → pixels through the live
+// camera) rather than a fixed 2D view. A scale+pan is still a valid projector,
+// so these keep testing the hit ranking with readable arithmetic.
+const project = (uv: readonly [number, number]): { x: number; y: number } =>
+  toScreen(view, { u: uv[0], v: uv[1] });
 
 const model: SketchModel = {
   plane: "XY",
@@ -22,16 +27,16 @@ const model: SketchModel = {
 describe("hitTest — click → nearest entity (M3.4)", () => {
   it("hits a point when the cursor is on it", () => {
     const s = toScreen(view, { u: 0.05, v: 0 });
-    expect(hitTest(model, view, { x: s.x + 2, y: s.y })).toEqual({ kind: "point", id: "p1" });
+    expect(hitTest(model, project, { x: s.x + 2, y: s.y })).toEqual({ kind: "point", id: "p1" });
   });
 
   it("hits a line along its span (not just endpoints)", () => {
     const s = toScreen(view, { u: 0.025, v: 0 }); // midpoint of l0
-    expect(hitTest(model, view, { x: s.x, y: s.y + 2 })).toEqual({ kind: "line", id: "l0" });
+    expect(hitTest(model, project, { x: s.x, y: s.y + 2 })).toEqual({ kind: "line", id: "l0" });
   });
 
   it("misses empty space", () => {
-    expect(hitTest(model, view, { x: 10, y: 10 })).toBeNull();
+    expect(hitTest(model, project, { x: 10, y: 10 })).toBeNull();
   });
 });
 

@@ -5,7 +5,7 @@
 
 import { circumcircle, type SketchConstraint, type SketchModel } from "./model.js";
 import { catmullRomPoints } from "./spline2d.js";
-import { toScreen, type Px, type View2D } from "./transform2d.js";
+import type { Px } from "./transform2d.js";
 
 export interface Hit {
   kind: "point" | "line" | "circle" | "arc" | "spline";
@@ -64,10 +64,22 @@ function distToSpline(p: Px, pts: Px[]): number {
  * The nearest sketch entity under `px` within `tol` pixels. Points win ties
  * (they sit on top of lines), then lines/circles.
  */
-export function hitTest(model: SketchModel, view: View2D, px: Px, tol = 7): Hit | null {
+export function hitTest(
+  model: SketchModel,
+  /** Sketch point → screen pixels through the LIVE camera (null if off-screen). */
+  project: (uv: readonly [number, number]) => Px | null,
+  px: Px,
+  tol = 7,
+): Hit | null {
+  // Pixels-per-sketch-unit right where we are looking, measured from the
+  // projection itself. A circle's on-screen radius needs it, and reading it off
+  // a fixed 2D view was wrong the moment the camera zoomed.
+  const o = project([0, 0]);
+  const e1 = project([1e-3, 0]);
+  const scale = o && e1 ? Math.hypot(e1.x - o.x, e1.y - o.y) / 1e-3 : 1;
   const screen = (id: string): Px | null => {
     const p = model.points.find((q) => q.id === id);
-    return p ? toScreen(view, { u: p.u, v: p.v }) : null;
+    return p ? project([p.u, p.v]) : null;
   };
 
   let best: { hit: Hit; d: number; rank: number } | null = null;
@@ -81,8 +93,8 @@ export function hitTest(model: SketchModel, view: View2D, px: Px, tol = 7): Hit 
     consider(
       { kind: "point", id: p.id },
       Math.hypot(
-        px.x - toScreen(view, { u: p.u, v: p.v }).x,
-        px.y - toScreen(view, { u: p.u, v: p.v }).y,
+        px.x - (project([p.u, p.v])?.x ?? Infinity),
+        px.y - (project([p.u, p.v])?.y ?? Infinity),
       ),
       0,
     );
@@ -97,7 +109,7 @@ export function hitTest(model: SketchModel, view: View2D, px: Px, tol = 7): Hit 
       if (c)
         consider(
           { kind: "circle", id: e.id },
-          Math.abs(Math.hypot(px.x - c.x, px.y - c.y) - e.radius * view.scale),
+          Math.abs(Math.hypot(px.x - c.x, px.y - c.y) - e.radius * scale),
           1,
         );
     } else if (e.kind === "arc") {
