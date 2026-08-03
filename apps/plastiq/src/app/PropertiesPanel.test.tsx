@@ -433,4 +433,117 @@ describe("round primitive properties", () => {
     expect(path.kind).toBe("polyline");
     expect(path.points[1]![2]).toBeCloseTo(0.05, 6);
   });
+
+  it("exposes and commits the trim keep side (§14 regression)", () => {
+    useCadStore.getState().loadDocument({
+      features: [
+        {
+          id: "tr1",
+          type: "trim",
+          data: {
+            plane: { origin: [0, 0, 0], normal: [1, 0, 0] },
+            keep: "positive",
+          },
+        },
+      ],
+      params: {},
+    });
+    useCadStore.setState({ selectedFeatureId: "tr1" });
+    render(<PropertiesPanel />);
+    const keep = screen.getByTestId("feature-trim-keep") as HTMLSelectElement;
+    expect(keep.value).toBe("positive");
+    fireEvent.change(keep, { target: { value: "negative" } });
+    expect(useCadStore.getState().features[0]!.data?.["keep"]).toBe("negative");
+  });
+
+  it("edits extension continuity and reattaches its selected boundary (§14)", () => {
+    const original = {
+      faceNormals: [
+        [0, 0, 1],
+        [1, 0, 0],
+      ] as [[number, number, number], [number, number, number]],
+    };
+    const replacement = {
+      faceNormals: [
+        [0, 0, 1],
+        [0, 1, 0],
+      ] as [[number, number, number], [number, number, number]],
+    };
+    useCadStore.getState().loadDocument({
+      features: [
+        {
+          id: "ex1",
+          type: "extendSurface",
+          params: { length: 0.01 },
+          data: { edge: original, continuity: 1 },
+        },
+      ],
+      params: {},
+    });
+    useCadStore.setState({
+      selectedFeatureId: "ex1",
+      picks: [{ kind: "edge", id: 12 }],
+      selectionRefs: { faces: {}, edges: { 12: replacement } },
+    });
+    render(<PropertiesPanel />);
+    fireEvent.change(screen.getByTestId("feature-extend-continuity"), {
+      target: { value: "3" },
+    });
+    fireEvent.click(screen.getByTestId("feature-attach-boundary"));
+    const data = useCadStore.getState().features[0]!.data;
+    expect(data?.["continuity"]).toBe(3);
+    expect(data?.["edge"]).toEqual(replacement);
+  });
+
+  it("makes surface loft/sweep and thicken data genuinely editable", () => {
+    useCadStore.getState().loadDocument({
+      features: [
+        {
+          id: "sl1",
+          type: "surfaceLoft",
+          data: { sections: [{}, {}], ruled: false },
+        },
+      ],
+      params: {},
+    });
+    useCadStore.setState({ selectedFeatureId: "sl1" });
+    const view = render(<PropertiesPanel />);
+    fireEvent.click(screen.getByTestId("feature-loft-ruled"));
+    expect(useCadStore.getState().features[0]!.data?.["ruled"]).toBe(true);
+
+    view.unmount();
+    useCadStore.getState().loadDocument({
+      features: [
+        {
+          id: "ss1",
+          type: "surfaceSweep",
+          data: {
+            profile: { kind: "circle", center: [0, 0], radius: 0.005 },
+            path: {
+              kind: "polyline",
+              points: [
+                [0, 0, 0],
+                [0, 0, 0.04],
+              ],
+            },
+          },
+        },
+      ],
+      params: {},
+    });
+    useCadStore.setState({ selectedFeatureId: "ss1" });
+    const sweepView = render(<PropertiesPanel />);
+    expect(screen.getByTestId("feature-sweep-mode")).toBeTruthy();
+    expect(screen.getByTestId("feature-path-editor")).toBeTruthy();
+
+    sweepView.unmount();
+    useCadStore.getState().loadDocument({
+      features: [{ id: "th1", type: "thicken", params: { thickness: 0.002 }, data: {} }],
+      params: {},
+    });
+    useCadStore.setState({ selectedFeatureId: "th1" });
+    render(<PropertiesPanel />);
+    fireEvent.click(screen.getByTestId("feature-thicken-both-sides"));
+    expect(useCadStore.getState().features[0]!.data?.["bothSides"]).toBe(true);
+  });
 });

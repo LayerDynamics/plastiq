@@ -46,6 +46,8 @@ const ICONS: Record<string, string> = {
   solidify: "⬢",
   patch: "▣",
   trim: "✂",
+  untrim: "□",
+  extendSurface: "⇥",
   scale: "⤢",
   mirror: "◫",
   transform: "✥",

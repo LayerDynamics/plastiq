@@ -35,12 +35,7 @@ export interface ThickenOptions {
  * toward (negative grows the other way); only a zero / non-finite wall is
  * rejected. `opts.bothSides` centres the wall on the surface instead.
  */
-export function thicken(
-  oc: Occt,
-  surface: Solid,
-  thickness: number,
-  opts?: ThickenOptions,
-): Solid {
+export function thicken(oc: Occt, surface: Solid, thickness: number, opts?: ThickenOptions): Solid {
   // Magnitude pre-validation BEFORE any OCCT allocation (revolve.ts:20 pattern):
   // a zero, NaN, or infinite wall makes MakeThickSolidBySimple raise an opaque
   // Standard_Failure (or hand back an empty shape) after temporaries exist. Fail
@@ -76,7 +71,9 @@ export function thicken(
     trash.push(maker);
     maker.MakeThickSolidBySimple(base, thickness);
     if (!maker.IsDone()) {
-      throw new Error("thicken: the offset solver did not complete (wall too thick for the surface?)");
+      throw new Error(
+        "thicken: the offset solver did not complete (wall too thick for the surface?)",
+      );
     }
     const shape = maker.Shape();
     // The Shape() handle is an owned allocation: free it before any throw, and on
@@ -84,6 +81,13 @@ export function thicken(
     if (shape.IsNull()) {
       shape.delete();
       throw new Error("thicken: produced an empty shape");
+    }
+
+    const analyzer = new oc.BRepCheck_Analyzer(shape, true, false);
+    trash.push(analyzer);
+    if (!analyzer.IsValid_2()) {
+      shape.delete();
+      throw new Error("thicken: resulting solid failed BRepCheck_Analyzer");
     }
 
     // Guarantee a POSITIVELY-oriented solid. Depending on the input face's
@@ -104,6 +108,10 @@ export function thicken(
       const rev = shape.Reversed();
       shape.delete();
       return new Solid(oc, rev);
+    }
+    if (signed === 0) {
+      shape.delete();
+      throw new Error("thicken: resulting solid has zero volume");
     }
     return new Solid(oc, shape);
   } finally {

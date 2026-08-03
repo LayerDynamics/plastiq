@@ -1832,6 +1832,30 @@ export declare class Geom_BoundedSurface extends Geom_Surface {
   delete(): void;
 }
 
+export declare class Handle_Geom_BoundedSurface {
+  Nullify(): void;
+  IsNull(): boolean;
+  reset(thePtr: Geom_BoundedSurface): void;
+  get(): Geom_BoundedSurface;
+  delete(): void;
+}
+
+  export declare class Handle_Geom_BoundedSurface_1 extends Handle_Geom_BoundedSurface {
+    constructor();
+  }
+
+  export declare class Handle_Geom_BoundedSurface_2 extends Handle_Geom_BoundedSurface {
+    constructor(thePtr: Geom_BoundedSurface);
+  }
+
+  export declare class Handle_Geom_BoundedSurface_3 extends Handle_Geom_BoundedSurface {
+    constructor(theHandle: Handle_Geom_BoundedSurface);
+  }
+
+  export declare class Handle_Geom_BoundedSurface_4 extends Handle_Geom_BoundedSurface {
+    constructor(theHandle: Handle_Geom_BoundedSurface);
+  }
+
 export declare type IFSelect_ReturnStatus = {
   IFSelect_RetVoid: {};
   IFSelect_RetDone: {};
@@ -3333,6 +3357,34 @@ export declare class TopoDS_Builder {
   MakeCompound(C: TopoDS_Compound): void;
   Add(S: TopoDS_Shape, C: TopoDS_Shape): void;
   Remove(S: TopoDS_Shape, C: TopoDS_Shape): void;
+  delete(): void;
+}
+
+export declare class GeomLib {
+  constructor();
+  static To3d(Position: gp_Ax2, Curve2d: Handle_Geom2d_Curve): Handle_Geom_Curve;
+  static GTransform(Curve: Handle_Geom2d_Curve, GTrsf: gp_GTrsf2d): Handle_Geom2d_Curve;
+  static SameRange(Tolerance: Standard_Real, Curve2dPtr: Handle_Geom2d_Curve, First: Standard_Real, Last: Standard_Real, RequestedFirst: Standard_Real, RequestedLast: Standard_Real, NewCurve2dPtr: Handle_Geom2d_Curve): void;
+  static BuildCurve3d(Tolerance: Standard_Real, CurvePtr: Adaptor3d_CurveOnSurface, FirstParameter: Standard_Real, LastParameter: Standard_Real, NewCurvePtr: Handle_Geom_Curve, MaxDeviation: Standard_Real, AverageDeviation: Standard_Real, Continuity: GeomAbs_Shape, MaxDegree: Graphic3d_ZLayerId, MaxSegment: Graphic3d_ZLayerId): void;
+  static AdjustExtremity(Curve: Handle_Geom_BoundedCurve, P1: gp_Pnt, P2: gp_Pnt, T1: gp_Vec, T2: gp_Vec): void;
+  static ExtendCurveToPoint(Curve: Handle_Geom_BoundedCurve, Point: gp_Pnt, Cont: Graphic3d_ZLayerId, After: Standard_Boolean): void;
+  static ExtendSurfByLength(Surf: Handle_Geom_BoundedSurface, Length: Standard_Real, Cont: Graphic3d_ZLayerId, InU: Standard_Boolean, After: Standard_Boolean): void;
+  static AxeOfInertia(Points: TColgp_Array1OfPnt, Axe: gp_Ax2, IsSingular: Standard_Boolean, Tol: Standard_Real): void;
+  static Inertia(Points: TColgp_Array1OfPnt, Bary: gp_Pnt, XDir: gp_Dir, YDir: gp_Dir, Xgap: Standard_Real, YGap: Standard_Real, ZGap: Standard_Real): void;
+  static RemovePointsFromArray(NumPoints: Graphic3d_ZLayerId, InParameters: IntTools_CArray1OfReal, OutParameters: Handle_TColStd_HArray1OfReal): void;
+  static DensifyArray1OfReal(MinNumPoints: Graphic3d_ZLayerId, InParameters: IntTools_CArray1OfReal, OutParameters: Handle_TColStd_HArray1OfReal): void;
+  static FuseIntervals(Interval1: IntTools_CArray1OfReal, Interval2: IntTools_CArray1OfReal, Fusion: TColStd_SequenceOfReal, Confusion: Standard_Real, IsAdjustToFirstInterval: Standard_Boolean): void;
+  static EvalMaxParametricDistance(Curve: Adaptor3d_Curve, AReferenceCurve: Adaptor3d_Curve, Tolerance: Standard_Real, Parameters: IntTools_CArray1OfReal, MaxDistance: Standard_Real): void;
+  static EvalMaxDistanceAlongParameter(Curve: Adaptor3d_Curve, AReferenceCurve: Adaptor3d_Curve, Tolerance: Standard_Real, Parameters: IntTools_CArray1OfReal, MaxDistance: Standard_Real): void;
+  static CancelDenominatorDerivative(BSurf: Handle_Geom_BSplineSurface, UDirection: Standard_Boolean, VDirection: Standard_Boolean): void;
+  static NormEstim(S: Handle_Geom_Surface, UV: gp_Pnt2d, Tol: Standard_Real, N: gp_Dir): Graphic3d_ZLayerId;
+  static IsClosed(S: Handle_Geom_Surface, Tol: Standard_Real, isUClosed: Standard_Boolean, isVClosed: Standard_Boolean): void;
+  static IsBSplUClosed(S: Handle_Geom_BSplineSurface, U1: Standard_Real, U2: Standard_Real, Tol: Standard_Real): Standard_Boolean;
+  static IsBSplVClosed(S: Handle_Geom_BSplineSurface, V1: Standard_Real, V2: Standard_Real, Tol: Standard_Real): Standard_Boolean;
+  static IsBzUClosed(S: Handle_Geom_BezierSurface, U1: Standard_Real, U2: Standard_Real, Tol: Standard_Real): Standard_Boolean;
+  static IsBzVClosed(S: Handle_Geom_BezierSurface, V1: Standard_Real, V2: Standard_Real, Tol: Standard_Real): Standard_Boolean;
+  static isIsoLine(theC2D: Handle_Adaptor2d_Curve2d, theIsU: Standard_Boolean, theParam: Standard_Real, theIsForward: Standard_Boolean): Standard_Boolean;
+  static buildC3dOnIsoLine(theC2D: Handle_Adaptor2d_Curve2d, theSurf: Handle_Adaptor3d_Surface, theFirst: Standard_Real, theLast: Standard_Real, theTolerance: Standard_Real, theIsU: Standard_Boolean, theParam: Standard_Real, theIsForward: Standard_Boolean): Handle_Geom_Curve;
   delete(): void;
 }
 
@@ -5756,6 +5808,11 @@ export type OpenCascadeInstance = {FS: typeof FS} & {
   Handle_Geom_TrimmedCurve_3: typeof Handle_Geom_TrimmedCurve_3;
   Handle_Geom_TrimmedCurve_4: typeof Handle_Geom_TrimmedCurve_4;
   Geom_BoundedSurface: typeof Geom_BoundedSurface;
+  Handle_Geom_BoundedSurface: typeof Handle_Geom_BoundedSurface;
+  Handle_Geom_BoundedSurface_1: typeof Handle_Geom_BoundedSurface_1;
+  Handle_Geom_BoundedSurface_2: typeof Handle_Geom_BoundedSurface_2;
+  Handle_Geom_BoundedSurface_3: typeof Handle_Geom_BoundedSurface_3;
+  Handle_Geom_BoundedSurface_4: typeof Handle_Geom_BoundedSurface_4;
   IFSelect_ReturnStatus: IFSelect_ReturnStatus;
   TopExp_Explorer: typeof TopExp_Explorer;
   TopExp_Explorer_1: typeof TopExp_Explorer_1;
@@ -5949,6 +6006,7 @@ export type OpenCascadeInstance = {FS: typeof FS} & {
   TopoDS_Shell: typeof TopoDS_Shell;
   TopoDS: typeof TopoDS;
   TopoDS_Builder: typeof TopoDS_Builder;
+  GeomLib: typeof GeomLib;
   IGESControl_Reader: typeof IGESControl_Reader;
   IGESControl_Reader_1: typeof IGESControl_Reader_1;
   IGESControl_Reader_2: typeof IGESControl_Reader_2;

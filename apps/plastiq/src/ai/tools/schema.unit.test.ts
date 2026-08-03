@@ -269,6 +269,53 @@ function sampleAuthoring(): AuthoringDocument {
       { id: "f26", type: "sew", params: { tolerance: 0.001 } },
       { id: "f27", type: "solidify" },
       { id: "f28", type: "thicken", params: { thickness: 1.5 }, data: { bothSides: false } },
+      {
+        id: "f29",
+        type: "patch",
+        data: {
+          edges: [
+            {
+              faceNormals: [
+                [0, 0, 1],
+                [0, 0, 1],
+              ],
+            },
+            {
+              faceNormals: [
+                [0, 0, 1],
+                [0, 0, 1],
+              ],
+            },
+            {
+              faceNormals: [
+                [0, 0, 1],
+                [0, 0, 1],
+              ],
+            },
+          ],
+          continuity: "c1",
+        },
+      },
+      {
+        id: "f30",
+        type: "trim",
+        data: { plane: { origin: [20, 0, 0], normal: [1, 0, 0] }, keep: "positive" },
+      },
+      { id: "f31", type: "untrim" },
+      {
+        id: "f32",
+        type: "extendSurface",
+        params: { length: 10 },
+        data: {
+          edge: {
+            faceNormals: [
+              [0, 0, 1],
+              [0, 0, 1],
+            ],
+          },
+          continuity: 2,
+        },
+      },
     ],
     params: { wall: 2 },
   };
@@ -356,6 +403,15 @@ describe("R0 unit conversion — mm/deg → SI", () => {
     const net = (ff.data!.surface as { controlNet: number[][][] }).controlNet;
     expect(net[1]![0]![0]).toBeCloseTo(0.04, 12); // 40 mm → 0.04 m
     expect(net[0]![1]![1]).toBeCloseTo(0.03, 12); // 30 mm → 0.03 m
+  });
+
+  it("converts trim plane origin and surface-extension length (§14)", () => {
+    const si = toCadDocument(sampleAuthoring());
+    const trim = si.features.find((f) => f.id === "f30")!;
+    expect((trim.data!.plane as { origin: number[] }).origin).toEqual([0.02, 0, 0]);
+    const extend = si.features.find((f) => f.id === "f32")!;
+    expect(extend.params!.length).toBeCloseTo(0.01, 12);
+    expect(extend.data!.continuity).toBe(2);
   });
 
   it("converts revolve origin lengths (ox/oy/oz) and leaves axis unitless (G2)", () => {

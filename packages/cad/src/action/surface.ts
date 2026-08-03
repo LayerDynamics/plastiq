@@ -9,8 +9,11 @@
 
 import type {
   BRepBuilderAPI_TransitionMode,
+  BRepAdaptor_Surface,
   GeomAbs_Shape,
+  Handle_Geom_Surface,
   TopoDS_Edge,
+  TopoDS_Face,
   TopoDS_Wire,
 } from "opencascade.js";
 
@@ -20,6 +23,7 @@ import type { DatumPlane } from "../env/plane.js";
 import { Solid } from "../solid/solid.js";
 import type { Sketch } from "../sketch/sketch.js";
 import { buildSpineWire, type SpinePath } from "../sketch/spine.js";
+import { shapeEnums } from "../mesh/normals.js";
 import type { LoftOptions, SweepOptions, SweepTransition } from "./loft.js";
 import { split } from "./split.js";
 
@@ -44,6 +48,11 @@ export interface PatchOptions {
   readonly continuity?: "c0" | "c1" | "g1" | "c2" | "g2";
   /** Optional interior point constraints the filled surface should pass through. */
   readonly passthroughPoints?: readonly Vec3[];
+}
+
+export interface ExtendSurfaceOptions {
+  /** Requested boundary continuity. OCCT supports C1, C2, or C3. Default C1. */
+  readonly continuity?: 1 | 2 | 3;
 }
 
 /** Surface area of a face/shell body (SI m²). */
@@ -74,7 +83,9 @@ export function surfaceLoft(oc: Occt, sketches: readonly Sketch[], opts: LoftOpt
     }
     maker.Build(progress);
     if (!maker.IsDone()) {
-      throw new Error("surfaceLoft: ThruSections could not build a shell through the given sections");
+      throw new Error(
+        "surfaceLoft: ThruSections could not build a shell through the given sections",
+      );
     }
     const shape = maker.Shape();
     if (shape.IsNull()) {
@@ -350,21 +361,16 @@ export function trimSurface(
   }
   const keep = opts?.keep ?? "positive";
   let bestIdx = 0;
-  let bestScore =
-    (() => {
-      const c = parts[0]!.centreOfMass();
-      return (
-        (c[0] - origin[0]) * unit[0] +
-        (c[1] - origin[1]) * unit[1] +
-        (c[2] - origin[2]) * unit[2]
-      );
-    })();
+  let bestScore = (() => {
+    const c = parts[0]!.centreOfMass();
+    return (
+      (c[0] - origin[0]) * unit[0] + (c[1] - origin[1]) * unit[1] + (c[2] - origin[2]) * unit[2]
+    );
+  })();
   for (let i = 1; i < parts.length; i++) {
     const c = parts[i]!.centreOfMass();
     const score =
-      (c[0] - origin[0]) * unit[0] +
-      (c[1] - origin[1]) * unit[1] +
-      (c[2] - origin[2]) * unit[2];
+      (c[0] - origin[0]) * unit[0] + (c[1] - origin[1]) * unit[1] + (c[2] - origin[2]) * unit[2];
     if (keep === "positive" ? score > bestScore : score < bestScore) {
       bestScore = score;
       bestIdx = i;
@@ -377,11 +383,83 @@ export function trimSurface(
   return best;
 }
 
-export function patch(
+/**
+ * Restore a trimmed B-spline face to the full natural bounds of its basis
+ * surface. The input must contain exactly one B-spline face; analytic surfaces
+ * such as planes are intentionally rejected because they are unbounded and have
+ * no finite natural face to restore.
+ */
+export function untrimSurface(oc: Occt, body: Solid): Solid {
+  const face = singleFace(oc, body, "untrimSurface");
+  const adaptor = new oc.BRepAdaptor_Surface_2(face, false);
+  const trash: Array<{ delete(): void }> = [face, adaptor];
+  try {
+    if (adaptor.GetType() !== oc.GeomAbs_SurfaceType.GeomAbs_BSplineSurface) {
+      throw new Error("untrimSurface: the face basis must be a bounded B-spline surface");
+    }
+    const bspline = adaptor.BSpline();
+    trash.push(bspline);
+    if (bspline.IsNull()) {
+      throw new Error("untrimSurface: the face has a null B-spline basis");
+    }
+    const surface = new oc.Handle_Geom_Surface_2(bspline.get());
+    trash.push(surface);
+    return faceFromNaturalBounds(oc, surface, "untrimSurface", trash);
+  } finally {
+    for (let i = trash.length - 1; i >= 0; i--) trash[i]!.delete();
+  }
+}
+
+/**
+ * Extend one selected boundary of a single B-spline face by `length` metres.
+ * The edge's stored p-curve endpoints identify U/V and before/after exactly;
+ * OCCT then extends a copy of the basis surface with C1..C3 continuity, leaving
+ * the source body unchanged.
+ */
+export function extendSurface(
   oc: Occt,
-  boundary: readonly TopoDS_Edge[],
-  opts?: PatchOptions,
+  body: Solid,
+  boundary: TopoDS_Edge,
+  length: number,
+  opts?: ExtendSurfaceOptions,
 ): Solid {
+  if (!Number.isFinite(length) || length <= 0) {
+    throw new Error(`extendSurface: length must be a finite positive number (got ${length})`);
+  }
+  const continuity = opts?.continuity ?? 1;
+  if (continuity !== 1 && continuity !== 2 && continuity !== 3) {
+    throw new Error(`extendSurface: continuity must be 1, 2, or 3 (got ${continuity})`);
+  }
+
+  const face = singleFace(oc, body, "extendSurface");
+  const restricted = new oc.BRepAdaptor_Surface_2(face, true);
+  const basis = new oc.BRepAdaptor_Surface_2(face, false);
+  const trash: Array<{ delete(): void }> = [face, restricted, basis];
+  try {
+    if (basis.GetType() !== oc.GeomAbs_SurfaceType.GeomAbs_BSplineSurface) {
+      throw new Error("extendSurface: the face basis must be a bounded B-spline surface");
+    }
+    const side = boundarySide(oc, face, boundary, restricted, trash);
+    const bspline = basis.BSpline();
+    trash.push(bspline);
+    if (bspline.IsNull()) {
+      throw new Error("extendSurface: the face has a null B-spline basis");
+    }
+    const bounded = new oc.Handle_Geom_BoundedSurface_2(bspline.get());
+    trash.push(bounded);
+    oc.GeomLib.ExtendSurfByLength(bounded, length, continuity, side.direction === "u", side.after);
+    if (bounded.IsNull()) {
+      throw new Error("extendSurface: OCCT returned a null extended surface");
+    }
+    const surface = new oc.Handle_Geom_Surface_2(bounded.get());
+    trash.push(surface);
+    return faceFromNaturalBounds(oc, surface, "extendSurface", trash);
+  } finally {
+    for (let i = trash.length - 1; i >= 0; i--) trash[i]!.delete();
+  }
+}
+
+export function patch(oc: Occt, boundary: readonly TopoDS_Edge[], opts?: PatchOptions): Solid {
   if (boundary.length < 3) {
     throw new Error("patch: needs at least 3 boundary edges");
   }
@@ -443,4 +521,87 @@ function continuityToGeomAbs(oc: Occt, c: NonNullable<PatchOptions["continuity"]
     default:
       return G.GeomAbs_C0 as unknown as GeomAbs_Shape;
   }
+}
+
+function singleFace(oc: Occt, body: Solid, operation: string): TopoDS_Face {
+  const S = shapeEnums(oc);
+  const exp = new oc.TopExp_Explorer_2(body.shape, S.TopAbs_FACE, S.TopAbs_SHAPE);
+  try {
+    if (!exp.More()) throw new Error(`${operation}: the body contains no face`);
+    const face = oc.TopoDS.Face_1(exp.Current());
+    exp.Next();
+    if (exp.More()) {
+      face.delete();
+      throw new Error(`${operation}: the body must contain exactly one face`);
+    }
+    return face;
+  } finally {
+    exp.delete();
+  }
+}
+
+function faceFromNaturalBounds(
+  oc: Occt,
+  surface: Handle_Geom_Surface,
+  operation: string,
+  trash: Array<{ delete(): void }>,
+): Solid {
+  const maker = new oc.BRepBuilderAPI_MakeFace_8(surface, 1e-7);
+  trash.push(maker);
+  if (!maker.IsDone()) {
+    throw new Error(`${operation}: MakeFace failed on the B-spline surface`);
+  }
+  const face = maker.Face();
+  if (face.IsNull()) {
+    face.delete();
+    throw new Error(`${operation}: produced an empty face`);
+  }
+  return new Solid(oc, face);
+}
+
+function boundarySide(
+  oc: Occt,
+  face: TopoDS_Face,
+  edge: TopoDS_Edge,
+  surface: BRepAdaptor_Surface,
+  trash: Array<{ delete(): void }>,
+): { direction: "u" | "v"; after: boolean } {
+  const first = new oc.gp_Pnt2d_1();
+  const last = new oc.gp_Pnt2d_1();
+  trash.push(first, last);
+  oc.BRep_Tool.UVPoints_2(edge, face, first, last);
+
+  const u0 = surface.FirstUParameter();
+  const u1 = surface.LastUParameter();
+  const v0 = surface.FirstVParameter();
+  const v1 = surface.LastVParameter();
+  const scale = Math.max(1, Math.abs(u1 - u0), Math.abs(v1 - v0));
+  const tolerance = scale * 1e-7;
+  const candidates = [
+    {
+      direction: "u" as const,
+      after: false,
+      error: Math.abs(first.X() - u0) + Math.abs(last.X() - u0),
+    },
+    {
+      direction: "u" as const,
+      after: true,
+      error: Math.abs(first.X() - u1) + Math.abs(last.X() - u1),
+    },
+    {
+      direction: "v" as const,
+      after: false,
+      error: Math.abs(first.Y() - v0) + Math.abs(last.Y() - v0),
+    },
+    {
+      direction: "v" as const,
+      after: true,
+      error: Math.abs(first.Y() - v1) + Math.abs(last.Y() - v1),
+    },
+  ].sort((a, b) => a.error - b.error);
+  const best = candidates[0]!;
+  if (best.error > 2 * tolerance) {
+    throw new Error("extendSurface: the selected edge is not a boundary of the face");
+  }
+  return { direction: best.direction, after: best.after };
 }

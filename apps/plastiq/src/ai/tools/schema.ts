@@ -428,6 +428,23 @@ const featureSchema: z.ZodTypeAny = z.lazy(() =>
         })
         .optional(),
     }),
+    // §14 restore the full natural bounds of a single B-spline face.
+    z.object({
+      ...base,
+      type: z.literal("untrim"),
+      params: numParams.optional(),
+      data: z.unknown().optional(),
+    }),
+    // §14 extend a selected B-spline boundary by a physical length.
+    z.object({
+      ...base,
+      type: z.literal("extendSurface"),
+      params: z.object({ length: z.number() }),
+      data: z.object({
+        edge: edgeRef,
+        continuity: z.union([z.literal(1), z.literal(2), z.literal(3)]).optional(),
+      }),
+    }),
     z.object({
       ...base,
       type: z.literal("scale"),
@@ -885,7 +902,8 @@ function convData(
       }
       break;
     }
-    case "section": {
+    case "section":
+    case "trim": {
       const plane = d.plane as Record<string, unknown> | undefined;
       if (plane && Array.isArray(plane.origin)) {
         d.plane = {

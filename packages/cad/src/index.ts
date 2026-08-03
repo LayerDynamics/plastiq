@@ -163,6 +163,7 @@ export {
   analyzeFreeBounds,
   type SurfaceFromPointsOptions,
   type PatchOptions,
+  type ExtendSurfaceOptions,
   surfaceArea,
   surfaceLoft,
   surfaceSweep,
@@ -172,6 +173,8 @@ export {
   offsetSurface,
   patch,
   trimSurface,
+  untrimSurface,
+  extendSurface,
 } from "./action/index.js";
 export {
   type SpinePath,

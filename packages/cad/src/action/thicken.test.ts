@@ -15,7 +15,11 @@ beforeAll(async () => {
 });
 
 /** The first planar face of a box, and its analytic surface area + centroid. */
-function firstFace(box: Solid): { face: TopoDS_Face; area: number; centroid: [number, number, number] } {
+function firstFace(box: Solid): {
+  face: TopoDS_Face;
+  area: number;
+  centroid: [number, number, number];
+} {
   const S = shapeEnums(oc);
   const exp = new oc.TopExp_Explorer_2(box.shape, S.TopAbs_FACE, S.TopAbs_SHAPE);
   const face = oc.TopoDS.Face_1(exp.Current());
@@ -115,12 +119,57 @@ describe("thicken", () => {
     const { face } = firstFace(box);
     const faceSolid = new Solid(oc, face);
     try {
-      expect(() => thicken(oc, faceSolid, 0)).toThrow(/thicken: thickness must be a finite non-zero number \(got 0\)/);
-      expect(() => thicken(oc, faceSolid, Number.NaN)).toThrow(/thicken: thickness must be a finite non-zero number/);
-      expect(() => thicken(oc, faceSolid, Number.POSITIVE_INFINITY)).toThrow(/thicken: thickness must be a finite non-zero number/);
+      expect(() => thicken(oc, faceSolid, 0)).toThrow(
+        /thicken: thickness must be a finite non-zero number \(got 0\)/,
+      );
+      expect(() => thicken(oc, faceSolid, Number.NaN)).toThrow(
+        /thicken: thickness must be a finite non-zero number/,
+      );
+      expect(() => thicken(oc, faceSolid, Number.POSITIVE_INFINITY)).toThrow(
+        /thicken: thickness must be a finite non-zero number/,
+      );
     } finally {
       faceSolid.delete();
       box.delete();
     }
+  });
+
+  it("rejects an OCCT result that fails BRepCheck_Analyzer", () => {
+    let shapeDeleted = false;
+    let analyzerDeleted = false;
+    const candidate = {
+      IsNull: () => false,
+      delete: () => {
+        shapeDeleted = true;
+      },
+    };
+    const fakeOc = {
+      BRepOffsetAPI_MakeThickSolid: class {
+        MakeThickSolidBySimple(): void {}
+        IsDone(): boolean {
+          return true;
+        }
+        Shape(): typeof candidate {
+          return candidate;
+        }
+        delete(): void {}
+      },
+      BRepCheck_Analyzer: class {
+        constructor(_shape: unknown, _geomControls: boolean, _parallel: boolean) {}
+        IsValid_2(): boolean {
+          return false;
+        }
+        delete(): void {
+          analyzerDeleted = true;
+        }
+      },
+    } as unknown as Occt;
+    const sheet = { shape: {} } as Solid;
+
+    expect(() => thicken(fakeOc, sheet, 0.001)).toThrow(
+      /thicken: resulting solid failed BRepCheck_Analyzer/,
+    );
+    expect(shapeDeleted).toBe(true);
+    expect(analyzerDeleted).toBe(true);
   });
 });

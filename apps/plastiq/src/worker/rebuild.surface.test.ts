@@ -9,6 +9,8 @@ import {
   makeBox,
   mm,
   Solid,
+  surfaceFromPoints,
+  tessellateTagged,
   type Occt,
 } from "@plastiq/cad";
 import type { CadDocument } from "../store/types.js";
@@ -65,6 +67,12 @@ function squareLoop(halfMm: number) {
       { kind: "line" as const, to: [-h, -h] as [number, number] },
     ],
   };
+}
+
+function curvedGrid(): [number, number, number][][] {
+  return [0, 0.02, 0.04].map((x) =>
+    [0, 0.015, 0.03].map((y): [number, number, number] => [x, y, 2 * x * y]),
+  );
 }
 
 describe("§14 surfaceLoft feature — dispatches through rebuild to the kernel op", () => {
@@ -194,6 +202,102 @@ describe("§14 offsetSurface + thicken feature chain", () => {
       params: {},
     };
     expect(() => rebuildDocument(oc, doc)).toThrow(/offsetSurface|distance/i);
+  });
+});
+
+describe("§14 untrim / extendSurface feature chains", () => {
+  it("rebuilds untrim from imported sub-bounds to the full B-spline basis", () => {
+    const full = surfaceFromPoints(oc, curvedGrid(), { degU: 2, degV: 2 });
+    const S = oc.TopAbs_ShapeEnum as unknown as {
+      TopAbs_FACE: import("opencascade.js").TopAbs_ShapeEnum;
+      TopAbs_SHAPE: import("opencascade.js").TopAbs_ShapeEnum;
+    };
+    const exp = new oc.TopExp_Explorer_2(full.shape, S.TopAbs_FACE, S.TopAbs_SHAPE);
+    const face = oc.TopoDS.Face_1(exp.Current());
+    exp.delete();
+    const adaptor = new oc.BRepAdaptor_Surface_2(face, true);
+    const surface = oc.BRep_Tool.Surface_2(face);
+    const u0 = adaptor.FirstUParameter();
+    const u1 = adaptor.LastUParameter();
+    const v0 = adaptor.FirstVParameter();
+    const v1 = adaptor.LastVParameter();
+    const maker = new oc.BRepBuilderAPI_MakeFace_14(
+      surface,
+      u0 + (u1 - u0) * 0.25,
+      u1 - (u1 - u0) * 0.25,
+      v0,
+      v1,
+      1e-7,
+    );
+    const partial = new Solid(oc, maker.Face());
+    let step: string;
+    const fullArea = surfaceArea(full);
+    try {
+      step = exportStep(oc, partial);
+      expect(surfaceArea(partial)).toBeLessThan(fullArea);
+    } finally {
+      partial.delete();
+      maker.delete();
+      surface.delete();
+      adaptor.delete();
+      face.delete();
+      full.delete();
+    }
+
+    const restored = rebuildDocument(oc, {
+      features: [
+        { id: "f1", type: "importStep", data: { step } },
+        { id: "f2", type: "untrim" },
+      ],
+      params: {},
+    })!;
+    try {
+      expect(surfaceArea(restored)).toBeCloseTo(fullArea, 7);
+      expect(restored.isValid()).toBe(true);
+    } finally {
+      restored.delete();
+    }
+  });
+
+  it("resolves the persistent boundary ref and extends it through rebuild", () => {
+    const grid = curvedGrid();
+    const source = surfaceFromPoints(oc, grid, { degU: 2, degV: 2 });
+    const sourceArea = surfaceArea(source);
+    const tagged = tessellateTagged(oc, source);
+    const taggedEdge = tagged.edges[0];
+    const edge = taggedEdge
+      ? {
+          faceNormals: taggedEdge.faceNormals,
+          faceSurfaces: taggedEdge.faceSurfaces,
+          midpoint: taggedEdge.midpoint,
+        }
+      : undefined;
+    source.delete();
+    expect(edge).toBeDefined();
+
+    const extended = rebuildDocument(oc, {
+      features: [
+        {
+          id: "f1",
+          type: "surfaceFromPoints",
+          params: { degU: 2, degV: 2 },
+          data: { grid },
+        },
+        {
+          id: "f2",
+          type: "extendSurface",
+          params: { length: mm(10) },
+          data: { edge, continuity: 2 },
+        },
+      ],
+      params: {},
+    })!;
+    try {
+      expect(surfaceArea(extended)).toBeGreaterThan(sourceArea);
+      expect(extended.isValid()).toBe(true);
+    } finally {
+      extended.delete();
+    }
   });
 });
 

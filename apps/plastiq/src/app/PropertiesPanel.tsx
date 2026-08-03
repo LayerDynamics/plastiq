@@ -529,7 +529,11 @@ function FeatureDataFields({
   const picks = useCadStore((s) => s.picks);
   const selectionRefs = useCadStore((s) => s.selectionRefs);
   const d = data ?? {};
-  const edges = Array.isArray(d["edges"]) ? (d["edges"] as unknown[]).length : 0;
+  const edges = Array.isArray(d["edges"])
+    ? (d["edges"] as unknown[]).length
+    : d["edge"] != null
+      ? 1
+      : 0;
   const faces = Array.isArray(d["faces"])
     ? (d["faces"] as unknown[]).length
     : d["face"] != null
@@ -555,7 +559,7 @@ function FeatureDataFields({
   const opChoices = ["join", "cut", "intersect", "new"] as const;
   const showShellDir = type === "shell";
   const showBooleanOp = type === "boolean";
-  const showLoftRuled = type === "loft";
+  const showLoftRuled = type === "loft" || type === "surfaceLoft";
   const showDeps =
     type === "extrude" ||
     type === "rib" ||
@@ -569,13 +573,19 @@ function FeatureDataFields({
     type === "fillet" ||
     type === "chamfer" ||
     type === "shell" ||
-    type === "draft";
-  const showSweepOpts = type === "sweep";
+    type === "draft" ||
+    type === "patch" ||
+    type === "extendSurface";
+  const showSweepOpts = type === "sweep" || type === "surfaceSweep";
   // Helical spine (data.helix) uses its own editor; polyline/pathEdges use Path.
   const hasHelix = type === "sweep" && d["helix"] != null && typeof d["helix"] === "object";
-  const showSweepPath = type === "sweep" && !hasHelix;
+  const showSweepPath = (type === "sweep" || type === "surfaceSweep") && !hasHelix;
   const showSweepHelix = hasHelix;
   const showChamferFace = type === "chamfer";
+  const showTrimKeep = type === "trim";
+  const showPatchContinuity = type === "patch";
+  const showExtendSurface = type === "extendSurface";
+  const showThickenBothSides = type === "thicken";
   if (
     !showOp &&
     !showShellDir &&
@@ -586,7 +596,11 @@ function FeatureDataFields({
     !showBooleanOp &&
     !showLoftRuled &&
     !showDeps &&
-    !showChamferFace
+    !showChamferFace &&
+    !showTrimKeep &&
+    !showPatchContinuity &&
+    !showExtendSurface &&
+    !showThickenBothSides
   ) {
     return null;
   }
@@ -612,6 +626,15 @@ function FeatureDataFields({
       ? (d["mode"] as string)
       : "correctedFrenet";
   const ruled = Boolean(d["ruled"]);
+  const trimKeep = d["keep"] === "negative" ? "negative" : "positive";
+  const patchContinuity =
+    d["continuity"] === "c1" ||
+    d["continuity"] === "g1" ||
+    d["continuity"] === "c2" ||
+    d["continuity"] === "g2"
+      ? (d["continuity"] as string)
+      : "c0";
+  const extendContinuity = d["continuity"] === 2 || d["continuity"] === 3 ? d["continuity"] : 1;
   const feature = features.find((f) => f.id === featureId);
   const boundDeps = feature?.deps ?? [];
   const sketchCandidates = features.filter(
@@ -645,6 +668,15 @@ function FeatureDataFields({
     setFeatureData(featureId, { edges: edgeRefs });
   };
 
+  /** Replace data.edge with the first selected persistent boundary edge. */
+  const attachBoundaryFromSelection = (): void => {
+    const edgePick = picks.find((p) => p.kind === "edge");
+    if (!edgePick) return;
+    const ref = selectionRefs.edges[edgePick.id];
+    if (!ref) return;
+    setFeatureData(featureId, { edge: ref });
+  };
+
   /** Replace data.faces with currently selected faces (shell/draft multi-face) (C10). */
   const attachFacesFromSelection = (): void => {
     const faceRefs = picks
@@ -656,7 +688,7 @@ function FeatureDataFields({
     setFeatureData(featureId, { faces: faceRefs, face: faceRefs[0] });
   };
 
-  const showAttachEdges = type === "fillet" || type === "chamfer";
+  const showAttachEdges = type === "fillet" || type === "chamfer" || type === "patch";
   const showAttachFaces = type === "shell" || type === "draft";
   const edgePickCount = picks.filter((p) => p.kind === "edge").length;
   const facePickCount = picks.filter((p) => p.kind === "face").length;
@@ -706,6 +738,65 @@ function FeatureDataFields({
             onChange={(e) =>
               setFeatureData(featureId, { ruled: e.currentTarget.checked || undefined })
             }
+          />
+        </label>
+      )}
+      {showTrimKeep && (
+        <label className="flex items-center justify-between gap-2 text-xs text-[#9ab]">
+          <span className="text-[#789]">keep</span>
+          <select
+            data-testid="feature-trim-keep"
+            value={trimKeep}
+            onChange={(e) => setFeatureData(featureId, { keep: e.currentTarget.value })}
+            className="rounded border border-[#2a3444] bg-[#0e1219] px-1.5 py-0.5 text-[#cfe] outline-none focus:border-[#4ea1ff]"
+          >
+            <option value="positive">positive</option>
+            <option value="negative">negative</option>
+          </select>
+        </label>
+      )}
+      {showPatchContinuity && (
+        <label className="flex items-center justify-between gap-2 text-xs text-[#9ab]">
+          <span className="text-[#789]">continuity</span>
+          <select
+            data-testid="feature-patch-continuity"
+            value={patchContinuity}
+            onChange={(e) => setFeatureData(featureId, { continuity: e.currentTarget.value })}
+            className="rounded border border-[#2a3444] bg-[#0e1219] px-1.5 py-0.5 text-[#cfe] outline-none focus:border-[#4ea1ff]"
+          >
+            <option value="c0">C0</option>
+            <option value="c1">C1</option>
+            <option value="g1">G1</option>
+            <option value="c2">C2</option>
+            <option value="g2">G2</option>
+          </select>
+        </label>
+      )}
+      {showExtendSurface && (
+        <label className="flex items-center justify-between gap-2 text-xs text-[#9ab]">
+          <span className="text-[#789]">continuity</span>
+          <select
+            data-testid="feature-extend-continuity"
+            value={String(extendContinuity)}
+            onChange={(e) =>
+              setFeatureData(featureId, { continuity: Number(e.currentTarget.value) })
+            }
+            className="rounded border border-[#2a3444] bg-[#0e1219] px-1.5 py-0.5 text-[#cfe] outline-none focus:border-[#4ea1ff]"
+          >
+            <option value="1">C1</option>
+            <option value="2">C2</option>
+            <option value="3">C3</option>
+          </select>
+        </label>
+      )}
+      {showThickenBothSides && (
+        <label className="flex items-center justify-between gap-2 text-xs text-[#9ab]">
+          <span className="text-[#789]">both sides</span>
+          <input
+            data-testid="feature-thicken-both-sides"
+            type="checkbox"
+            checked={d["bothSides"] === true}
+            onChange={(e) => setFeatureData(featureId, { bothSides: e.currentTarget.checked })}
           />
         </label>
       )}
@@ -817,6 +908,17 @@ function FeatureDataFields({
               className="rounded border border-[#3a5a7a] bg-[#14253a] px-1.5 py-0.5 text-[10px] text-[#bfe] disabled:opacity-40"
             >
               Attach selected faces{facePickCount > 0 ? ` (${facePickCount})` : ""}
+            </button>
+          )}
+          {showExtendSurface && (
+            <button
+              type="button"
+              data-testid="feature-attach-boundary"
+              disabled={edgePickCount === 0}
+              onClick={attachBoundaryFromSelection}
+              className="rounded border border-[#3a5a7a] bg-[#14253a] px-1.5 py-0.5 text-[10px] text-[#bfe] disabled:opacity-40"
+            >
+              Attach selected boundary
             </button>
           )}
         </div>

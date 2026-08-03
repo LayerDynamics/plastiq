@@ -44,6 +44,8 @@ describe("featureUnits classification", () => {
     expect(FEATURE_TYPES).toContain("sew");
     expect(FEATURE_TYPES).toContain("solidify");
     expect(FEATURE_TYPES).toContain("surfaceFromPoints");
+    expect(FEATURE_TYPES).toContain("untrim");
+    expect(FEATURE_TYPES).toContain("extendSurface");
     // Helix is not a FEATURE_TYPES entry — it is data.helix on type "sweep".
     expect(FEATURE_TYPES).not.toContain("helix");
   });
@@ -64,6 +66,7 @@ describe("featureUnits classification", () => {
 
   it("classifies §14 surface length/angle params", () => {
     expect(classifyParam("offsetSurface", "distance")).toBe("length");
+    expect(classifyParam("extendSurface", "length")).toBe("length");
     expect(classifyParam("sew", "tolerance")).toBe("length");
     expect(classifyParam("surfaceRevolve", "angle")).toBe("angle");
     expect(classifyParam("surfaceRevolve", "ox")).toBe("length");

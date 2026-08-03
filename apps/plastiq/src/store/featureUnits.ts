@@ -38,6 +38,9 @@ export const FEATURE_TYPES = [
   "patch",
   // §14 keep-one-side plane trim of the current body.
   "trim",
+  // §14 restore/extend a bounded B-spline face.
+  "untrim",
+  "extendSurface",
   "transform",
   "scale",
   "mirror",
@@ -82,6 +85,7 @@ export const LENGTH_PARAMS: Record<string, readonly string[]> = {
   // §14 surface ops: offset distance, sewing tolerance, revolve origin; surface
   // loft/sweep section/path lengths live in `data` (see schema convData), not params.
   offsetSurface: ["distance"],
+  extendSurface: ["length"],
   sew: ["tolerance"],
   surfaceFromPoints: ["tolerance"],
   surfaceRevolve: ["ox", "oy", "oz"],

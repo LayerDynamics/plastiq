@@ -1,9 +1,9 @@
 // Real-OCCT tests for §14 surface modeling kernel ops: surface loft/sweep/
 // revolve produce SHELL (not SOLID) bodies with positive area; thicken closes
 // them into solids; surfaceFromPoints / offsetSurface / patch exercise the
-// remaining bindings. sew/solidify live in heal.ts — sew free-edge report is
-// checked here; solidify is blocked in this wasm by unbound TopoDS_Shell (see
-// note on the sew integration test).
+// remaining bindings, including basis-surface untrim and boundary extension.
+// sew/solidify live in heal.ts; closure is checked here and solidification has
+// its dedicated real-kernel coverage there.
 
 import { beforeAll, describe, expect, it } from "vitest";
 
@@ -14,17 +14,20 @@ import { Sketch } from "../sketch/sketch.js";
 import { makeBox } from "../solid/primitives.js";
 import { shapeEnums } from "../mesh/normals.js";
 import { Solid } from "../solid/solid.js";
+import { exportStep, importStep } from "../io/index.js";
 import { thicken } from "./thicken.js";
 import { loft } from "./loft.js";
 import { sew } from "./heal.js";
 import {
   offsetSurface,
   patch,
+  extendSurface,
   surfaceArea,
   surfaceFromPoints,
   surfaceLoft,
   surfaceRevolve,
   surfaceSweep,
+  untrimSurface,
 } from "./surface.js";
 import type { TopoDS_Edge, TopoDS_Face } from "opencascade.js";
 
@@ -70,6 +73,23 @@ function firstFaceSolid(box: Solid): { face: Solid; area: number } {
   }
 }
 
+function onlyFace(body: Solid): TopoDS_Face {
+  const S = shapeEnums(oc);
+  const exp = new oc.TopExp_Explorer_2(body.shape, S.TopAbs_FACE, S.TopAbs_SHAPE);
+  try {
+    expect(exp.More()).toBe(true);
+    return oc.TopoDS.Face_1(exp.Current()) as TopoDS_Face;
+  } finally {
+    exp.delete();
+  }
+}
+
+function curvedGrid(): [number, number, number][][] {
+  return [0, 0.02, 0.04].map((x) =>
+    [0, 0.015, 0.03].map((y): [number, number, number] => [x, y, 2 * x * y]),
+  );
+}
+
 describe("surfaceLoft", () => {
   it("lofts two stacked rectangles into a shell with positive area (not a solid)", () => {
     const sections = [square(mm(20), 0), square(mm(10), mm(50))];
@@ -103,6 +123,24 @@ describe("surfaceLoft", () => {
       expect(plate.volume()).toBeGreaterThan(0);
       expect(plate.isValid()).toBe(true);
     } finally {
+      plate.delete();
+      shell.delete();
+    }
+  });
+
+  it("keeps a loft-thickened solid valid and positive-volume through STEP round-trip", () => {
+    const shell = surfaceLoft(oc, [square(mm(20), 0), square(mm(12), mm(40))], {
+      ruled: true,
+    });
+    const plate = thicken(oc, shell, mm(2));
+    const imported = importStep(oc, exportStep(oc, plate));
+    try {
+      expect(plate.isValid()).toBe(true);
+      expect(plate.volume()).toBeGreaterThan(0);
+      expect(imported.isValid()).toBe(true);
+      expect(imported.volume()).toBeGreaterThan(0);
+    } finally {
+      imported.delete();
       plate.delete();
       shell.delete();
     }
@@ -190,11 +228,78 @@ describe("surfaceFromPoints", () => {
   });
 });
 
+describe("untrimSurface / extendSurface", () => {
+  it("restores a sub-bounded B-spline face to its full natural surface", () => {
+    const full = surfaceFromPoints(oc, curvedGrid(), { degU: 2, degV: 2 });
+    const fullFace = onlyFace(full);
+    const restricted = new oc.BRepAdaptor_Surface_2(fullFace, true);
+    const surface = oc.BRep_Tool.Surface_2(fullFace);
+    const u0 = restricted.FirstUParameter();
+    const u1 = restricted.LastUParameter();
+    const v0 = restricted.FirstVParameter();
+    const v1 = restricted.LastVParameter();
+    const partialMaker = new oc.BRepBuilderAPI_MakeFace_14(
+      surface,
+      u0 + (u1 - u0) * 0.25,
+      u1 - (u1 - u0) * 0.25,
+      v0,
+      v1,
+      1e-7,
+    );
+    const partialFace = partialMaker.Face();
+    const partial = new Solid(oc, partialFace);
+    const restored = untrimSurface(oc, partial);
+    try {
+      expect(surfaceArea(oc, partial)).toBeLessThan(surfaceArea(oc, full) * 0.75);
+      expect(surfaceArea(oc, restored)).toBeCloseTo(surfaceArea(oc, full), 8);
+      expect(restored.isValid()).toBe(true);
+    } finally {
+      restored.delete();
+      partial.delete();
+      partialMaker.delete();
+      surface.delete();
+      restricted.delete();
+      fullFace.delete();
+      full.delete();
+    }
+  });
+
+  it("extends the selected B-spline boundary without mutating its source", () => {
+    const source = surfaceFromPoints(oc, curvedGrid(), { degU: 2, degV: 2 });
+    const sourceArea = surfaceArea(oc, source);
+    const S = shapeEnums(oc);
+    const exp = new oc.TopExp_Explorer_2(source.shape, S.TopAbs_EDGE, S.TopAbs_SHAPE);
+    const boundary = oc.TopoDS.Edge_1(exp.Current()) as TopoDS_Edge;
+    exp.delete();
+    const extended = extendSurface(oc, source, boundary, mm(10), { continuity: 2 });
+    try {
+      expect(surfaceArea(oc, extended)).toBeGreaterThan(sourceArea);
+      expect(surfaceArea(oc, source)).toBeCloseTo(sourceArea, 12);
+      expect(extended.isValid()).toBe(true);
+      expect(source.isValid()).toBe(true);
+    } finally {
+      extended.delete();
+      boundary.delete();
+      source.delete();
+    }
+  });
+
+  it("rejects unbounded analytic faces instead of inventing finite bounds", () => {
+    const box = makeBox(oc, mm(10), mm(10), mm(10));
+    const { face } = firstFaceSolid(box);
+    try {
+      expect(() => untrimSurface(oc, face)).toThrow(/basis must be a bounded B-spline/);
+    } finally {
+      face.delete();
+      box.delete();
+    }
+  });
+});
+
 describe("sew (heal.ts) surface-pillar integration", () => {
   it("sews box faces into a closed shell with zero free edges", () => {
-    // solidify is owned by heal.ts and currently blocked by unbound TopoDS_Shell
-    // (`TopoDS.Shell_1` throws UnboundTypeError in this wasm) — not reimplemented
-    // here. Closure is still verified via sew's free-edge report.
+    // solidify is owned and covered by heal.ts; this test isolates the sewing
+    // contract and its free-edge report over the same closed box shell.
     const box = makeBox(oc, mm(40), mm(30), mm(20));
     const S = shapeEnums(oc);
     const faces: Solid[] = [];

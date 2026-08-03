@@ -40,7 +40,7 @@ function mm(v: number): number {
 
 type UV = [number, number];
 
-async function sketchCursorAt(page: Page, x: number, y: number): Promise<UV> {
+async function sketchCursorAt(page: Page, x: number, y: number): Promise<UV | null> {
   await page.mouse.move(x, y);
   return page.evaluate(
     () =>
@@ -61,10 +61,15 @@ async function aimAtSketchUv(
   let distance = Number.POSITIVE_INFINITY;
   for (let i = 0; i < 8; i++) {
     const here = await sketchCursorAt(page, x, y);
+    expect(here, "pointer must intersect the active sketch plane").not.toBeNull();
+    if (!here) throw new Error("pointer does not intersect the active sketch plane");
     distance = Math.hypot(target[0] - here[0], target[1] - here[1]);
     if (distance < 6e-4) break;
     const right = await sketchCursorAt(page, x + probe, y);
     const down = await sketchCursorAt(page, x, y + probe);
+    expect(right, "right probe must intersect the active sketch plane").not.toBeNull();
+    expect(down, "down probe must intersect the active sketch plane").not.toBeNull();
+    if (!right || !down) throw new Error("projection probe misses the active sketch plane");
     const a = (right[0] - here[0]) / probe;
     const b = (down[0] - here[0]) / probe;
     const c = (right[1] - here[1]) / probe;
@@ -108,6 +113,27 @@ test.beforeEach(async ({ page }) => {
 
 async function waitReady(page: Page): Promise<void> {
   await expect(page.getByTestId("status")).toHaveText("ready", { timeout: 240_000 });
+}
+
+/** Wait for one exact history length and fail immediately on a worker feature error. */
+async function waitFeatureBuild(page: Page, featureCount: number): Promise<void> {
+  await page.waitForFunction(
+    (count) => {
+      const state = (globalThis as { __cadStore?: CadApi }).__cadStore!.getState();
+      return (
+        state.features.length === count &&
+        (state.status === "ready" || Object.keys(state.featureErrors).length > 0)
+      );
+    },
+    featureCount,
+    { timeout: 60_000 },
+  );
+  const result = await page.evaluate(() => {
+    const state = (globalThis as { __cadStore?: CadApi }).__cadStore!.getState();
+    return { status: state.status, errors: state.featureErrors };
+  });
+  expect(result.errors).toEqual({});
+  expect(result.status).toBe("ready");
 }
 
 async function loadDoc(page: Page, features: Record<string, unknown>[]): Promise<void> {
@@ -714,4 +740,159 @@ test("ribbon loft + sweep build from real sketch profiles and rebuild cleanly (G
   // Demo loft/sweep produce positive volume solids through the real worker.
   const vol = await page.evaluate(() => partVolume());
   expect(vol!).toBeGreaterThan(0);
+});
+
+test("draw surfaces → sew/solidify + thicken → STEP round-trip stays watertight (§14)", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await waitReady(page);
+
+  // Real pointer authoring: draw a 10–20 mm radial rectangle, 30 mm tall, then
+  // revolve its closed wire around +Y into a closed B-rep shell. Store access in
+  // this test is read-only evidence; every mutation is a rendered user action.
+  await page.getByTestId("enter-sketch").click();
+  await expect(page.getByTestId("sketcher")).toBeVisible();
+  await page.getByTestId("tool-rectangle").click();
+  const canvas = page.locator("#viewport-root canvas");
+  const box = (await canvas.boundingBox())!;
+  const start = await aimAtSketchUv(page, box, [mm(10), 0]);
+  const end = await aimAtSketchUv(page, box, [mm(20), mm(30)]);
+  await page.mouse.move(start.x, start.y);
+  await page.mouse.down();
+  await page.mouse.move(end.x, end.y, { steps: 10 });
+  await page.mouse.up();
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          (
+            globalThis as {
+              __sketchStore: {
+                getState: () => { model: { entities: { kind: string }[] } };
+              };
+            }
+          ).__sketchStore
+            .getState()
+            .model.entities.filter((entity) => entity.kind === "line").length,
+      ),
+    )
+    .toBe(4);
+  await page.getByTestId("sketch-finish").click();
+  await expect(page.getByTestId("sketcher")).toHaveCount(0);
+  await expect(page.getByTestId("feature-row")).toHaveCount(2);
+
+  await page.getByTestId("act-surfaceRevolve").click();
+  await waitFeatureBuild(page, 3);
+  await expect(page.getByTestId("feature-row")).toHaveCount(3);
+
+  // The visible closure workflow. solidify itself runs BRepCheck_Analyzer and
+  // rejects any non-watertight shell before publishing mass properties.
+  await page.getByTestId("act-sew").click();
+  await waitFeatureBuild(page, 4);
+  await page.getByTestId("act-solidify").click();
+  await waitFeatureBuild(page, 5);
+  await expect(page.getByTestId("feature-row")).toHaveCount(5);
+  const solidified = await page.evaluate(() => {
+    const state = (globalThis as { __cadStore?: CadApi }).__cadStore!.getState();
+    return {
+      types: state.features.map((feature) => feature.type),
+      errors: state.featureErrors,
+      volume: state.massProps?.volume ?? 0,
+    };
+  });
+  expect(solidified.types.slice(-3)).toEqual(["surfaceRevolve", "sew", "solidify"]);
+  expect(solidified.errors).toEqual({});
+  expect(solidified.volume).toBeGreaterThan(0);
+
+  // Return to the same authored sketch and exercise the alternate surface→solid
+  // bridge on an OPEN loft shell. A closed revolved shell belongs to Solidify;
+  // Thicken intentionally accepts a sheet body. It also runs BRepCheck_Analyzer
+  // and rejects zero volume.
+  await page.getByTestId("topbar").getByTestId("act-undo").click();
+  await waitFeatureBuild(page, 4);
+  await page.getByTestId("topbar").getByTestId("act-undo").click();
+  await waitFeatureBuild(page, 3);
+  await page.getByTestId("topbar").getByTestId("act-undo").click();
+  await waitFeatureBuild(page, 2);
+  await expect(page.getByTestId("feature-row")).toHaveCount(2);
+
+  // Author the second loft section 40 mm above the first through the visible
+  // sketch launcher and pointer-driven rectangle tool.
+  await page.getByTestId("sketch-offset").fill("40");
+  await page.getByTestId("enter-sketch").click();
+  await expect(page.getByTestId("sketcher")).toBeVisible();
+  await page.getByTestId("tool-rectangle").click();
+  const loftBox = (await canvas.boundingBox())!;
+  const loftStart = {
+    x: loftBox.x + loftBox.width * 0.48,
+    y: loftBox.y + loftBox.height * 0.58,
+  };
+  const loftEnd = {
+    x: loftBox.x + loftBox.width * 0.62,
+    y: loftBox.y + loftBox.height * 0.74,
+  };
+  await page.mouse.move(loftStart.x, loftStart.y);
+  await page.mouse.down();
+  await page.mouse.move(loftEnd.x, loftEnd.y, { steps: 10 });
+  await page.mouse.up();
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          (
+            globalThis as {
+              __sketchStore: {
+                getState: () => { model: { entities: { kind: string }[] } };
+              };
+            }
+          ).__sketchStore
+            .getState()
+            .model.entities.filter((entity) => entity.kind === "line").length,
+      ),
+    )
+    .toBe(4);
+  await page.getByTestId("sketch-finish").click();
+  await expect(page.getByTestId("sketcher")).toHaveCount(0);
+  await expect(page.getByTestId("feature-row")).toHaveCount(3);
+  await page.getByTestId("act-surfaceLoft").click();
+  await waitFeatureBuild(page, 4);
+  await expect(page.getByTestId("feature-row")).toHaveCount(4);
+  await page.getByTestId("act-thicken").click();
+  await waitFeatureBuild(page, 5);
+  await expect(page.getByTestId("feature-row")).toHaveCount(5);
+  const thickened = await page.evaluate(() => {
+    const state = (globalThis as { __cadStore?: CadApi }).__cadStore!.getState();
+    return { errors: state.featureErrors, volume: state.massProps?.volume ?? 0 };
+  });
+  expect(thickened.errors).toEqual({});
+  expect(thickened.volume).toBeGreaterThan(0);
+
+  // Real browser download + file chooser import proves interchange round-trip
+  // through the worker and vendored OCCT, with no fixture or mocked component.
+  const downloadPromise = page.waitForEvent("download");
+  await page.getByTestId("act-export-step").click();
+  const download = await downloadPromise;
+  const stream = await download.createReadStream();
+  const chunks: Buffer[] = [];
+  for await (const chunk of stream) chunks.push(Buffer.from(chunk));
+  const step = Buffer.concat(chunks);
+  expect(step.byteLength).toBeGreaterThan(1_000);
+
+  const chooserPromise = page.waitForEvent("filechooser");
+  await page.getByTestId("act-import-step").click();
+  const chooser = await chooserPromise;
+  await chooser.setFiles({
+    name: "watertight-surface.step",
+    mimeType: "application/step",
+    buffer: step,
+  });
+  await waitFeatureBuild(page, 6);
+  await expect(page.getByTestId("feature-row")).toHaveCount(6);
+  const roundTripped = await page.evaluate(() => {
+    const state = (globalThis as { __cadStore?: CadApi }).__cadStore!.getState();
+    return { errors: state.featureErrors, volume: state.massProps?.volume ?? 0 };
+  });
+  expect(roundTripped.errors).toEqual({});
+  expect(roundTripped.volume).toBeGreaterThan(0);
 });

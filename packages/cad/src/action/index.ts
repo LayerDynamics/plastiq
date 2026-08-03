@@ -60,6 +60,7 @@ export { type HelixHandedness, type HelixSpec, helix } from "./helix.js";
 export {
   type SurfaceFromPointsOptions,
   type PatchOptions,
+  type ExtendSurfaceOptions,
   surfaceArea,
   surfaceLoft,
   surfaceSweep,
@@ -69,6 +70,8 @@ export {
   offsetSurface,
   patch,
   trimSurface,
+  untrimSurface,
+  extendSurface,
 } from "./surface.js";
 // sew / solidify owned by heal.ts (import-time repair + surface-pillar closure).
 export {

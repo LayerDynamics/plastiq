@@ -278,6 +278,7 @@ mainBuild:
     - symbol: Geom_CylindricalSurface
     - symbol: Geom_ConicalSurface
     - symbol: Handle_Geom_Surface
+    - symbol: Handle_Geom_BoundedSurface
     - symbol: Handle_Geom_BSplineSurface
     - symbol: Handle_Geom_Plane
     # 2D curve hierarchy — the helix is a line on a cylindrical/conical surface.
@@ -288,6 +289,10 @@ mainBuild:
     - symbol: Handle_Geom2d_Curve
     # Surface builders / fitting / offset (§14).
     - symbol: GeomAPI_PointsToBSplineSurface
+    # Standards-based B-spline boundary extension. ExtendSurfByLength mutates a
+    # Handle_Geom_BoundedSurface copy, preserving the source face while extending
+    # U/V before/after with requested C1..C3 continuity.
+    - symbol: GeomLib
     - symbol: GeomFill_BSplineCurves
     - symbol: BRepOffsetAPI_MakeFilling
     - symbol: BRepBuilderAPI_Sewing

@@ -1045,7 +1045,7 @@ const RIBBON_ONLY: ActionDef[] = [
   {
     id: "sew",
     label: () => "Sew",
-    icon: " intern",
+    icon: "⌁",
     enabled: always,
     run: () => {
       cad().addFeature({
@@ -1113,6 +1113,37 @@ const RIBBON_ONLY: ActionDef[] = [
         face
           ? "Trim: keep +side of the selected face plane — flip keep in Properties"
           : "Trim: keep +X half at x=20 mm — select a face for the cut plane, or edit in Properties",
+      );
+    },
+  },
+  {
+    id: "untrim",
+    label: () => "Untrim",
+    icon: "□",
+    enabled: always,
+    run: () => {
+      cad().addFeature({ type: "untrim" });
+      cad().setStatus("Untrim: restore the current B-spline face to its natural boundaries");
+    },
+  },
+  {
+    id: "extendSurface",
+    label: () => "Extend Surface",
+    icon: "⇥",
+    enabled: (ctx) => edgeRefsFromPicks(ctx.picks, ctx.refs).length === 1,
+    run: (ctx) => {
+      const edge = edgeRefsFromPicks(ctx.picks, ctx.refs)[0];
+      if (!edge) {
+        cad().setStatus("Extend surface: pick exactly one boundary edge");
+        return;
+      }
+      cad().addFeature({
+        type: "extendSurface",
+        params: { length: 0.01 },
+        data: { edge, continuity: 1 },
+      });
+      cad().setStatus(
+        "Extend surface: extend the selected B-spline boundary by 10 mm — edit length / continuity in Properties",
       );
     },
   },

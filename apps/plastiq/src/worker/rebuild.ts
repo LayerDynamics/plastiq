@@ -28,6 +28,8 @@ import {
   solidify,
   patch,
   trimSurface,
+  untrimSurface,
+  extendSurface,
   extrude,
   extrudeToFace,
   nativePrism,
@@ -1815,6 +1817,34 @@ function evaluateDocument(oc: Occt, doc: CadDocument, isolate: boolean): Isolate
           : ([0, 1, 0] as Vec3);
         const keep = f.data?.["keep"] === "negative" ? "negative" : "positive";
         replace(trimSurface(oc, base, { origin, normal, xAxis }, { keep }));
+        break;
+      }
+      case "untrim": {
+        const base = currentSolid();
+        if (!base) throw new Error(`feature '${f.id}' (untrim): no surface body`);
+        replace(untrimSurface(oc, base));
+        break;
+      }
+      case "extendSurface": {
+        const base = currentSolid();
+        if (!base) throw new Error(`feature '${f.id}' (extendSurface): no surface body`);
+        const ref = f.data?.["edge"] as EdgeRef | undefined;
+        if (!ref) throw new Error(`feature '${f.id}' (extendSurface): data.edge is required`);
+        const edge = resolveEdgeRef(oc, base, ref);
+        if (!edge) {
+          throw new Error(`feature '${f.id}' (extendSurface): boundary edge did not resolve`);
+        }
+        try {
+          const continuityRaw = f.data?.["continuity"];
+          const continuity = continuityRaw === 2 || continuityRaw === 3 ? continuityRaw : 1;
+          replace(
+            extendSurface(oc, base, edge, num(f, "length"), {
+              continuity,
+            }),
+          );
+        } finally {
+          edge.delete();
+        }
         break;
       }
       case "transform": {

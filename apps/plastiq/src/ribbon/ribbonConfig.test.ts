@@ -71,16 +71,14 @@ describe("ribbonConfig — integrity", () => {
     expect(surface.title).toBe("Surface");
     const create = surface.panels.find((p) => p.title === "Create")!;
     const modify = surface.panels.find((p) => p.title === "Modify")!;
-    expect(actionIds(create.items)).toEqual([
-      "surfaceLoft",
-      "surfaceSweep",
-      "surfaceRevolve",
-    ]);
+    expect(actionIds(create.items)).toEqual(["surfaceLoft", "surfaceSweep", "surfaceRevolve"]);
     expect(actionIds(modify.items)).toEqual([
       "offsetSurface",
+      "untrim",
+      "extendSurface",
+      "patch",
       "sew",
       "solidify",
-      "patch",
       "trim",
       "thicken",
     ]);

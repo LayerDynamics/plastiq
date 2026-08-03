@@ -86,6 +86,11 @@ describe("trimmed-wasm bindings the kernel requires", () => {
     expect(oc.GeomAbs_SurfaceType.GeomAbs_Torus).toBeDefined();
   });
 
+  it("binds the bounded-surface extension contract (§14 untrim/extend)", () => {
+    expect(typeof oc.Handle_Geom_BoundedSurface_2).toBe("function");
+    expect(typeof oc.GeomLib.ExtendSurfByLength).toBe("function");
+  });
+
   it("binds ShapeUpgrade_UnifySameDomain — and it CONSTRUCTS (§2.2 boolean robustness)", () => {
     // `typeof oc.X === "function"` is NOT proof: embind exposes the constructor
     // for an under-listed class and only throws UnboundTypeError when it is
