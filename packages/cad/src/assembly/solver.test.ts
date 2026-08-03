@@ -126,4 +126,33 @@ describe("solveMates", () => {
       solveMates([comp([0, 0, 0], true), comp([0.1, 0, 0], false)], []).converged,
     ).toBe(true);
   });
+
+  it("K9: an out-of-range component index returns an 'invalid' verdict, not a TypeError", () => {
+    const comps = [comp([0, 0, 0], true), comp([0.1, 0, 0], false)];
+    // component: 5 indexes past the 2-component array; residuals would read
+    // poses[5] === undefined and throw deep in the solver without the guard.
+    const mates: Mate[] = [
+      { kind: "coincident", a: { component: 0, point: [0, 0, 0] }, b: { component: 5, point: [0, 0, 0] } },
+    ];
+    let r: ReturnType<typeof solveMates>;
+    expect(() => {
+      r = solveMates(comps, mates);
+    }).not.toThrow();
+    expect(r!.verdict).toBe("invalid");
+    expect(r!.converged).toBe(false);
+    expect(typeof r!.reason).toBe("string");
+    expect(r!.reason!.length).toBeGreaterThan(0);
+    // The input poses are echoed back untouched (nothing was solved).
+    expect(r!.poses[1]!.position).toEqual([0.1, 0, 0]);
+  });
+
+  it("K9: the -1 sentinel (a failed id→index lookup) is refused gracefully", () => {
+    const comps = [comp([0, 0, 0], true), comp([0.1, 0, 0], false)];
+    const mates: Mate[] = [
+      { kind: "coincident", a: { component: 0, point: [0, 0, 0] }, b: { component: -1, point: [0, 0, 0] } },
+    ];
+    const r = solveMates(comps, mates);
+    expect(r.verdict).toBe("invalid");
+    expect(r.converged).toBe(false);
+  });
 });

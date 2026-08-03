@@ -35,6 +35,8 @@ vi.mock("@plastiq/cad", async (importOriginal) => {
     ) => ({
       points: points.map((p) => ({ ...p })),
       radii: circles.map((c) => c.radius),
+      ellipseRadmin: [],
+      arcRadii: [],
       verdict: "under-constrained" as const,
       freedom: points.length * 2,
     }),
@@ -262,7 +264,14 @@ describe("Sketcher conflicts panel (driven-dimension filter)", () => {
             { id: "c-dim", kind: "distance", a: pa, b: pb, value: 0.05 },
           ],
         },
-        result: { points: [], radii: [], verdict: "over-constrained", freedom: 0 },
+        result: {
+          points: [],
+          radii: [],
+          ellipseRadmin: [],
+          arcRadii: [],
+          verdict: "over-constrained",
+          freedom: 0,
+        },
       });
     });
     renderSketcher();
@@ -276,5 +285,54 @@ describe("Sketcher conflicts panel (driven-dimension filter)", () => {
     expect(labels).toContain("horizontal");
     expect(labels).toContain("distance");
     expect(labels).not.toContain("vDistance");
+  });
+});
+
+describe("Sketcher curve authoring controls (§13.3)", () => {
+  it("keeps the authoring toolbar out from under the solver panel", () => {
+    act(() => store().enterSketch("XY"));
+    renderSketcher();
+    const toolbar = screen.getByTestId("tool-ellipse").parentElement;
+    expect(toolbar?.classList.contains("flex-wrap")).toBe(true);
+    expect(toolbar?.parentElement?.classList.contains("right-52")).toBe(true);
+    expect(toolbar?.parentElement?.classList.contains("flex-col")).toBe(true);
+  });
+
+  it("drives the real store's selected-entity linear pattern with editable count and spacing", () => {
+    act(() => {
+      store().enterSketch("XY");
+      store().setTool("line");
+      store().clickAt(0, 0);
+      store().clickAt(0.02, 0);
+      store().setTool("select");
+      store().setSelection([store().model.entities[0]!.id]);
+    });
+    renderSketcher();
+    fireEvent.change(screen.getByTestId("sketch-pattern-count"), { target: { value: "4" } });
+    fireEvent.change(screen.getByTestId("sketch-pattern-spacing"), {
+      target: { value: "12" },
+    });
+    fireEvent.click(screen.getByTestId("sketch-pattern-linear"));
+    expect(store().model.entities.filter((e) => e.kind === "line")).toHaveLength(4);
+    expect(store().model.points).toHaveLength(8);
+  });
+
+  it("creates a first-class derived offset from the selected curve", () => {
+    act(() => {
+      store().enterSketch("XY");
+      store().setTool("circle");
+      store().clickAt(0, 0);
+      store().clickAt(0.02, 0);
+      store().setTool("select");
+      store().setSelection([store().model.entities[0]!.id]);
+    });
+    renderSketcher();
+    fireEvent.change(screen.getByTestId("offset-distance"), { target: { value: "7" } });
+    fireEvent.click(screen.getByTestId("offset-selected"));
+    expect(store().model.entities.at(-1)).toMatchObject({
+      kind: "offset",
+      source: store().model.entities[0]!.id,
+      distance: 0.007,
+    });
   });
 });

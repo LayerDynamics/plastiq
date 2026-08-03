@@ -99,12 +99,12 @@ app-docker-run:
 # (point cloud→mesh, MLX), nerf :8002 (posed images→mesh, MLX), nurbs :8003
 # (mesh→NURBS surfaces→STEP, MLX), and photogrammetry :8004 (photos→poses+point
 # cloud, MLX, SPEC-13 P10.2). Conda envs are created from each service's
-# environment.yml on first run. Ctrl-C stops them all.
+# environment.yml on first run. Ctrl-C stops only supervisor-owned processes.
 
-# Start the services with prefixed logs (creates missing envs first).
+# Start and supervise the services (creates missing envs first).
 services:
     ./scripts/dev-services.sh
 
-# Kill any service still listening on :8000/:8001/:8002/:8003/:8004.
+# Stop every supervisor-owned fleet; healthy unowned listeners are preserved.
 services-stop:
-    ./scripts/dev-services.sh stop
+    ./scripts/dev-services.sh stop --all

@@ -28,7 +28,17 @@ export function TopBar(): React.JSX.Element {
       aria-label="Editor toolbar"
       className="flex flex-wrap items-center gap-2 border-b border-[#222a36] bg-black/40 px-3 py-1.5"
     >
-      <span className="text-sm font-bold text-[#dfe]">Plastiq</span>
+      <div
+        data-testid="brand-lockup"
+        aria-label="Plastiq CAD Studio"
+        className="mr-1 flex shrink-0 items-center gap-1.5 border-r border-[#2a3444] pr-2"
+      >
+        <img src="/plastiq.svg" alt="" aria-hidden="true" className="h-5 w-auto" />
+        <span className="text-[13px] font-black tracking-[0.12em] text-[#eafffa]">PLASTIQ</span>
+        <span className="rounded-sm border border-[#3a4657] bg-[#171a21] px-1 py-0.5 text-[8px] font-bold tracking-[0.16em] text-[#b8c5d6]">
+          CAD
+        </span>
+      </div>
       <WorkspaceSwitcher />
       <ProjectsMenu />
       {voxelDoc && (

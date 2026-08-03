@@ -47,7 +47,6 @@ def test_load_pipeline_solve_downscales_sparse_and_forwards_full_dense():
         transforms_json = "{}"
         sparse_ply = "ply\n"
         dense_ply = None
-        images_undistorted = None
         report = {"images_total": 3, "dense_points": 0}
 
     def fake_solve(images, **kwargs):
@@ -62,7 +61,6 @@ def test_load_pipeline_solve_downscales_sparse_and_forwards_full_dense():
         "matching": "exhaustive",
         "max_features": 4096,
         "seed": 0,
-        "undistort": True,
         "sparse_max_dim": 640,
     }
     import app.pipeline as pipeline_mod
@@ -91,7 +89,6 @@ def test_load_pipeline_solve_no_dense_images_when_already_small():
         transforms_json = "{}"
         sparse_ply = "ply\n"
         dense_ply = None
-        images_undistorted = None
         report = {"images_total": 3, "dense_points": 0}
 
     def fake_solve(images, **kwargs):
@@ -105,7 +102,6 @@ def test_load_pipeline_solve_no_dense_images_when_already_small():
         "matching": "exhaustive",
         "max_features": 4096,
         "seed": 0,
-        "undistort": True,
         "sparse_max_dim": 640,
     }
     import app.pipeline as pipeline_mod

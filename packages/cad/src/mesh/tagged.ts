@@ -7,9 +7,10 @@
 // rebuild: the transient integer id is only valid for the current mesh, while
 // the signature re-resolves the same topology after upstream edits.
 
+import type { BodyKind } from "../solid/bodyKind.js";
 import type { SurfaceSignature } from "./surface.js";
 
-export type { SurfaceSignature };
+export type { BodyKind, SurfaceSignature };
 
 // Public tagged-mesh types use MUTABLE [x,y,z] tuples to match the app's
 // worker/protocol contract (which transfers them as plain arrays).
@@ -58,6 +59,31 @@ export interface EdgeRef {
   readonly faceSurfaces?: readonly [SurfaceSignature, SurfaceSignature];
 }
 
+/**
+ * A persistent reference to a B-rep corner vertex (§12.R12).
+ *
+ * A vertex, unlike a face or edge, has NO analytic surface identity — there is
+ * no plane/cylinder signature to read off it. Its `position` (the exact B-rep
+ * corner point, via `BRep_Tool.Pnt`) is therefore the PRIMARY and only intrinsic
+ * signature: {@link resolveVertexRef} re-binds the nearest vertex within the
+ * model's bounding-box diagonal after a parametric rebuild. This is what lets a
+ * measure endpoint or a §13 hole/point placement survive an upstream edit,
+ * mirroring how {@link FaceRef}/{@link EdgeRef} survive via their signatures.
+ *
+ * `adjacentEdgeMidpoints` is the optional positional disambiguator — the
+ * midpoints of the edges meeting at this corner, the analogue of
+ * {@link FaceRef}'s `centroid` and {@link EdgeRef}'s `midpoint`. It separates two
+ * vertices that share the SAME position (the coincident corners of two bodies in
+ * a compound / a non-manifold touch): those score identically on position, so
+ * the closest adjacent-edge-midpoint set decides. Within a single well-formed
+ * solid OCCT sews each corner into ONE `TopoDS_Vertex`, so position alone is
+ * unambiguous there and this field may be omitted.
+ */
+export interface VertexRef {
+  readonly position: V3;
+  readonly adjacentEdgeMidpoints?: readonly V3[];
+}
+
 /** One face's triangles as a contiguous range of the shared index buffer. */
 export interface FaceGroup {
   /** First index (into `TaggedMesh.indices`) of this face's triangles. */
@@ -96,6 +122,13 @@ export interface TaggedEdge {
   /** The edge's mid-parameter point — the EdgeRef positional disambiguator
    * (separates parallel edges sharing `faceNormals`). SI metres. */
   readonly midpoint: V3;
+  /**
+   * True when this edge is free (naked) on an open shell/face — only one face
+   * ancestor (§14 free-edge highlighting). Omitted / false on closed solids so
+   * cylindrical seam edges (also one-face in MapShapesAndAncestors) are not
+   * mis-flagged. Optional for back-compat with partial fixtures.
+   */
+  readonly isFree?: boolean;
 }
 
 /** One B-rep corner vertex. */
@@ -139,6 +172,17 @@ export interface TaggedMesh {
    * B-rep identity.
    */
   readonly unresolvedEdgeFaces: number;
+  /**
+   * Body-kind discriminator (§11 / §17) — `"solid" | "shell" | "face" | …`.
+   * Optional so partial test fixtures need not supply it; real tessellation
+   * always sets it from the shape's TopAbs type.
+   */
+  readonly bodyKind?: BodyKind;
+  /**
+   * Free (naked) edge count from ShapeAnalysis_FreeBounds (§14). Zero on a
+   * watertight solid; positive on open shells/faces. Optional for back-compat.
+   */
+  readonly freeEdgeCount?: number;
 }
 
 /** Tessellation quality knobs. */

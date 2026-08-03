@@ -134,7 +134,7 @@ describe("§2.1 analytic surface signatures", () => {
     }
   });
 
-  it("a hole-wall FaceRef FAILS LOUDLY when the hole radius changes", () => {
+  it("a hole-wall FaceRef FOLLOWS the wall when the hole radius changes (R1: no cliff)", () => {
     const first = plateWithHole(0.008);
     let ref: unknown;
     try {
@@ -143,12 +143,20 @@ describe("§2.1 analytic surface signatures", () => {
     } finally {
       first.delete();
     }
-    // The referenced surface no longer exists. Returning null is CORRECT — the
-    // dress-ups turn it into "N of M selected edge(s) did not resolve", which is
-    // an honest error rather than a silent wrong-face rebind.
+    // R1/§4.3: the exact analytic surface (radius 0.008) no longer matches (the
+    // wall is now radius 0.009), but the wall STILL EXISTS as a cylinder — so the
+    // ref follows it via the surface-KIND + closest-centroid fallback instead of
+    // returning null. This removes the moved/resized-face cliff: a fillet/shell
+    // picked on the wall stays on the wall across a diameter change rather than
+    // throwing "did not resolve". (A genuinely DELETED hole leaves no cylinder, so
+    // the fallback finds nothing and still fails loudly — safety preserved.)
     const resized = plateWithHole(0.009);
     try {
-      expect(resolveFaceRef(oc, resized, ref as never)).toBeNull();
+      const face = resolveFaceRef(oc, resized, ref as never);
+      expect(face).not.toBeNull();
+      // It resolved to the (resized) cylindrical wall, not to some planar face.
+      expect(faceSurfaceSignature(oc, face!).kind).toBe("cylinder");
+      face!.delete();
     } finally {
       resized.delete();
     }

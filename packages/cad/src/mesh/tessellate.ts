@@ -7,7 +7,9 @@
 
 import type { TopoDS_Edge, TopoDS_Face, TopoDS_Shape } from "opencascade.js";
 
+import { analyzeFreeBounds } from "../action/heal.js";
 import type { Occt } from "../oc/init.js";
+import { bodyKindOf, shapeMayHaveFreeEdges } from "../solid/bodyKind.js";
 import type { Solid } from "../solid/solid.js";
 import {
   MESH_PURPOSE,
@@ -193,6 +195,15 @@ export function tessellateTagged(
   };
 
   // --- Edges: world polylines + two adjacent-face normals (EdgeRef signature).
+  // Free-edge flags (§14) only on open sheets: MapShapesAndAncestors Size < 2
+  // also matches cylindrical SEAMS on closed solids, so we never set isFree there.
+  // Body-kind probe is best-effort so unit fakes without ShapeType still tessellate.
+  let mayHaveFreeEdges = false;
+  try {
+    mayHaveFreeEdges = shapeMayHaveFreeEdges(oc, solid);
+  } catch {
+    mayHaveFreeEdges = false;
+  }
   const edges: TaggedEdge[] = [];
   let droppedEdges = 0;
   const edgeFaceMap = new oc.TopTools_IndexedDataMapOfShapeListOfShape_1();
@@ -239,6 +250,8 @@ export function tessellateTagged(
         }
         const positions = discretizeEdge(oc, edge, deflection);
         const mid = edgeMidpoint(oc, edge);
+        // One face ancestor on an open sheet ⇒ free (naked) edge for sew/patch UI.
+        const isFree = mayHaveFreeEdges && faceList.Size() < 2;
         edges.push({
           // Compact id: a skipped edge leaves no gap, so `edges[e.edgeId] === e`
           // always holds — matching faceId, which also renumbers past dropped
@@ -256,6 +269,7 @@ export function tessellateTagged(
           faceSurfaces: [surfA, surfB],
           faceIds: [idA, idB],
           midpoint: [mid[0], mid[1], mid[2]],
+          ...(isFree ? { isFree: true as const } : {}),
         });
       } catch (err) {
         // ONLY the documented case is skippable: an edge bordering a face that was
@@ -287,6 +301,22 @@ export function tessellateTagged(
   }
   vertMap.delete();
 
+  // Body kind + free-edge tally (§17 protocol). FreeBounds is cheap topology and
+  // is the same gate sew/solidify use; closed solids report 0. Both are best-
+  // effort so a missing binding / unit fake never blanks an otherwise-good mesh.
+  let bodyKind: TaggedMesh["bodyKind"];
+  try {
+    bodyKind = bodyKindOf(oc, solid);
+  } catch {
+    bodyKind = undefined;
+  }
+  let freeEdgeCount: number | undefined;
+  try {
+    freeEdgeCount = analyzeFreeBounds(oc, shape).freeEdgeCount;
+  } catch {
+    freeEdgeCount = undefined;
+  }
+
   return {
     vertices,
     indices,
@@ -296,5 +326,7 @@ export function tessellateTagged(
     droppedFaces,
     droppedEdges,
     unresolvedEdgeFaces,
+    ...(bodyKind !== undefined ? { bodyKind } : {}),
+    ...(freeEdgeCount !== undefined ? { freeEdgeCount } : {}),
   };
 }

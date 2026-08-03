@@ -6,7 +6,7 @@ import { beforeAll, describe, expect, it } from "vitest";
 import { initOcct, type Occt } from "../oc/init.js";
 import { mm } from "../unit/index.js";
 import { makeBox, makeBoxAt } from "../solid/primitives.js";
-import { cut, intersect, subtract, union } from "./boolean.js";
+import { cut, intersect, releaseBooleanHistory, subtract, union } from "./boolean.js";
 
 let oc: Occt;
 beforeAll(async () => {
@@ -22,18 +22,21 @@ describe("boolean — smoke", () => {
     expect(u.ok).toBe(true);
     if (u.ok) {
       expect(u.solid.volume()).toBeGreaterThan(0);
+      releaseBooleanHistory(u);
       u.solid.delete();
     }
     const s = subtract(oc, a, b);
     expect(s.ok).toBe(true);
     if (s.ok) {
       expect(s.solid.volume()).toBeGreaterThan(0);
+      releaseBooleanHistory(s);
       s.solid.delete();
     }
     const i = intersect(oc, a, b);
     expect(i.ok).toBe(true);
     if (i.ok) {
       expect(i.solid.volume()).toBeGreaterThan(0);
+      releaseBooleanHistory(i);
       i.solid.delete();
     }
     const c = cut(oc, a, b);

@@ -1,15 +1,12 @@
 // @plastiq/recon — client for services/reconstruct (mesh GLB → B-rep STEP).
 
+import { cancelServiceJob, serviceHttpError } from "@plastiq/ml";
 import type { ReconstructCancelOptions, ReconstructOptions, ReconstructResult } from "./types.js";
 
 const DEFAULT_BASE_URL = "http://localhost:8000";
 
 async function httpError(res: Response, what: string): Promise<string> {
-  const detail = await res
-    .json()
-    .then((b: { detail?: string }) => b.detail ?? "")
-    .catch(() => "");
-  return `reconstruct ${what}: HTTP ${res.status}${detail ? ` — ${detail}` : ""}`;
+  return serviceHttpError(res, "reconstruct", what);
 }
 
 /** Reconstruct a mesh (base64 GLB) into a B-rep STEP via the backend (submit → poll).
@@ -67,14 +64,9 @@ export async function reconstructMesh(
  * AND on 404 (already gone — cancelling twice is not an error). When `opts.apiKey` is set it is
  * sent as `Authorization: Bearer <key>`, matching {@link reconstructMesh}. Other HTTP errors throw. */
 export async function cancelJob(id: string, opts: ReconstructCancelOptions = {}): Promise<void> {
-  const base = (opts.baseURL ?? DEFAULT_BASE_URL).replace(/\/+$/, "");
-  const f = opts.fetchImpl ?? globalThis.fetch;
-  if (!f) throw new Error("reconstruct: no fetch implementation available");
-  const auth: Record<string, string> = opts.apiKey ? { Authorization: `Bearer ${opts.apiKey}` } : {};
-  const res = await f(`${base}/jobs/${id}`, {
-    method: "DELETE",
-    ...(opts.apiKey ? { headers: auth } : {}),
+  await cancelServiceJob(id, {
+    ...opts,
+    defaultBaseURL: DEFAULT_BASE_URL,
+    label: "reconstruct",
   });
-  if (res.ok || res.status === 404) return;
-  throw new Error(await httpError(res, "cancel"));
 }

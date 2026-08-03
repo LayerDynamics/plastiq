@@ -1,9 +1,22 @@
-# Grok.md — Deep Code Analysis: Plastiq CAD + ML (working tree)
+# Grok.md — Deep Code Analysis: Plastiq CAD + ML (audit ledger)
 
-**Date:** 2026-07-16  
-**Branch:** `code-review-fixes` (working tree at analysis time)  
-**Method:** Full read of production modules under `apps/plastiq`, `packages/{cad,sim,capture,nerf,nurbs,photogrammetry,recon,recm,ml}`, and all five `services/*`, plus bring-up (`scripts/dev-services.sh`). Claims are verified at `path` / symbol; prior audit checklists are re-checked against **this** tree, not treated as truth.  
+**Audit snapshot:** 2026-07-16 on branch `code-review-fixes`; later strike-through entries record selected follow-up work.
+
+**Current reconciliation:** 2026-08-03.
+
+**Status boundary:** The body of this file is retained as an audit ledger and is not a canonical description of the current worktree. Current execution status lives in `FablesFindings.md` under **Current execution todo**; historical “Now” and “Should” cells below describe the audit state unless explicitly marked fixed.
+
+**Original method:** Full read of production modules under `apps/plastiq`, `packages/{cad,sim,capture,nerf,nurbs,photogrammetry,recon,recm,ml}`, and all five `services/*`, plus bring-up (`scripts/dev-services.sh`).
+
 **Product rule applied:** **local services never use API keys.** Optional Bearer keys if an env var is set are a deployment option, not a completeness gap and not a user setup step for local studio.
+
+## Current reconciliation summary
+
+Plastiq is a browser CAD studio whose marquee workflow is an editable sketch/feature timeline rebuilt by an OCCT WASM worker, with the same geometry flowing into assembly, physics simulation, sculpting, and scan-to-CAD services.
+
+The present worktree is materially ahead of this audit ledger. Phase 0 R1–R13 is verified: analytic refs survive transfer and parametric rebuild; rollback owns render/export/lower/simulation; Simulate failures recover visibly; selection modes filter real clicks; global expressions are dependency-safe and rebuild geometry; exploded assemblies cannot enter or retain mate mode; extrude/revolve/loft/sweep share the full `new`/`join`/`cut`/`intersect` contract; the NURBS/photogrammetry and AI-context contracts are aligned; `VertexRef` persists through selection, measurement, and placement; and the remaining authoring cleanups are wired. Phase 1 is also verified: operation histories remap downstream face references, native BRepFeat prism/pocket and `LocOpe_LinearForm` rib paths are product-wired, exact B-rep distance narrows interference candidates, IGES imports through the feature timeline and real browser file chooser, and the sketcher now carries exact ellipses, signed derived offsets, circle/arc equal-radius and tangency constraints, projected edges, and reachable parameterized sketch patterns through the real product workflow. The five local services are now tied to both the Vite and packaged Unix desktop lifecycles through an ownership-safe, health-gated, restart-supervised fleet manager. Current checkpoint evidence is recorded in `FablesFindings.md`.
+
+Remaining work is tracked sequentially in `FablesFindings.md`: surface untrim/extend, freeform control-net UX, sculpt product UX, and the final full validation gates.
 
 ---
 
@@ -23,7 +36,7 @@
 
 ### 2.1 Parametric path (sketch → solid → viewport)
 
-```
+```text
 User action (ribbon / context menu / AI tools)
   → apps/plastiq store (features[], placement, sketches)
   → geometry worker: rebuildDocument(oc, document)
@@ -50,7 +63,7 @@ User action (ribbon / context menu / AI tools)
 
 ### 2.2 Capture / ML path (photos / cloud / mesh → CAD)
 
-```
+```text
 Photos ──:8004 photogrammetry──► transforms.json + sparse/dense PLY
                                   │                    │
                                   ▼                    ▼
@@ -79,7 +92,9 @@ Photos ──:8004 photogrammetry──► transforms.json + sparse/dense PLY
 | 8003 | nurbs | Mesh regions → B-spline STEP (open + closed cube-map) |
 | 8004 | photogrammetry | Unposed photos → poses + PLYs |
 
-Bring-up: `scripts/dev-services.sh` starts all five; for reconstruct it exports  
+Bring-up: `pnpm dev` starts `scripts/dev-services.sh` with the editor; packaged Unix desktop
+releases bundle and start the same supervisor. It health-gates all five, restarts owned failures,
+adopts healthy pre-existing listeners without killing them, and exports
 `RECONSTRUCT_NURBS_URL=http://127.0.0.1:8003` so freeform/closed organic can delegate to NURBS.
 
 Browser clients: `@plastiq/{capture,nerf,nurbs,photogrammetry,recon}` under `packages/*`. App wrappers in `apps/plastiq/src/ai/{capture,nerf,nurbs,photogrammetry,reconstruct}.ts`. Panel: `GenerationPanel.tsx`. Agent tools: `ai/tools/*` including `cloud_to_mesh` / `complete_scan`.
@@ -108,7 +123,7 @@ Order in `services/reconstruct/app/pipeline.py`:
 | `packages/sim` | Production physics backends (Rapier/Cannon/Ammo/MuJoCo) |
 | `packages/capture`, `nerf`, `nurbs`, `photogrammetry`, `recon` | Real submit→poll clients |
 | `packages/recm` | Radial context-menu UI package (used by app) |
-| `packages/ml` | **Empty** — README only; no `submitPollJob` implementation |
+| `packages/ml` | Shared job knobs + `cancelServiceJob` / `serviceHttpError` (used by five domain clients) |
 | `packages/data`, `segment`, `rl`, `embed` | Scaffold / empty — not product surface |
 | `services/*` (five) | Real FastAPI services with pytest |
 | `apps/plastiq` | Product editor + AI panel |
@@ -233,9 +248,9 @@ For each gap: **how it fails for the user**, **how the code behaves now**, **how
 
 | | |
 |--|--|
-| **Fails** | Main panel “Complete scan” can look like real completion with synthetic weights. |
-| **Now** | Server sets `demo_weights`; client maps `demoWeights`; agent + `cloudActions` surface it. **GenerationPanel CaptureScanSection** opens mesh and clears status without reading the flag. |
-| **Should** | Panel refuses or banners demo; separate “Demo complete” or require checkpoint. |
+| **Fails** | ~~Main panel “Complete scan” can look like real completion with synthetic weights.~~ |
+| **Now** | Server sets `demo_weights`; client maps `demoWeights`. **Panel** shows sticky `capture-demo-weights` banner + status `completed (demo weights)`. Agent `complete_scan` appends demo-weights note. Tests: `GenerationPanel.capture.test.tsx`, `cloudCapture.unit.test.ts`. |
+| **Should** | ✅ Banner honesty shipped. Optional later: hard-fail without checkpoint / separate “Demo complete” control. |
 
 ### M3 — NeRF production quality defaults
 
@@ -249,33 +264,33 @@ For each gap: **how it fails for the user**, **how the code behaves now**, **how
 
 | Service | Server | Client `cancelJob` | Client `onJob` | Panel Cancel |
 |---------|--------|--------------------|----------------|--------------|
-| capture | **Process kill** on cancel (`jobs.py` cancel + `submit_process`) | yes | **no** | **Abort only** |
+| capture | **Process kill** on cancel (`jobs.py` cancel + `submit_process`) | yes (`@plastiq/ml`) | yes | Abort + DELETE |
 | nerf | Drop record (thread work may continue) | yes | yes | Abort + DELETE |
 | photogrammetry | Drop record | yes | yes | Abort + DELETE |
-| reconstruct | Drop record only | **no** | **no** | Abort only |
-| nurbs | Drop record | **no** | **no** | Abort only |
+| reconstruct | Drop record only | yes | yes | Abort + DELETE |
+| nurbs | Drop record | yes | yes | Abort + DELETE |
 
 | | |
 |--|--|
-| **Fails** | Capture Cancel looks like stop but never DELETEs — server **can** kill if DELETE is called, but panel never gets a job id. Recon/nurbs keep running after UI cancel. |
-| **Now** | Capture server is the strongest cancel (force-kill spawn child). Client/panel lag. |
-| **Should** | `onJob` on capture/recon/nurbs; panel DELETE like nerf; recon/nurbs process isolation if true resource free is required. |
+| **Fails** | ~~Capture abort-only / recon·nurbs no cancel.~~ |
+| **Now** | All five clients: `onJob` + `cancelJob` via `@plastiq/ml` `cancelServiceJob`. Panel sections DELETE on Cancel (capture, mesh convert reconstruct/nurbs, nerf, photo). |
+| **Should** | ✅ UI cancel parity done. Optional later: recon/nurbs process isolation if true resource free is required. |
 
 ### M5 — Agent cloud tools
 
 | | |
 |--|--|
-| **Fails** | Agent cannot drive photo solve end-to-end as fully as cloud→mesh. |
-| **Now** | `cloud_to_mesh` / `complete_scan` wired + unit-tested. No full photogrammetry agent tool suite. |
-| **Should** | Photo + capture chain tools with real wiring tests. |
+| **Fails** | ~~Agent cannot drive cloud→mesh.~~ Full photo-solve agent tool suite still optional. |
+| **Now** | `cloud_to_mesh` / `complete_scan` wired in `agentTurn` + unit-tested (`cloudCapture.unit.test.ts`); demo-weights honesty on complete. Canvas drop + panel cover photo solve outside the agent. |
+| **Should** | ✅ Cloud tools shipped. Optional later: dedicated photogrammetry agent tool suite. |
 
 ### M6 — `@plastiq/recon`
 
 | | |
 |--|--|
 | **Fails** | N/A as “missing package” — it exists. |
-| **Now** | Real package; missing cancel/onJob parity. |
-| **Should** | Add cancel/onJob. |
+| **Now** | Real package with `cancelJob` / `onJob` + tests; shared cancel via `@plastiq/ml`. |
+| **Should** | ✅ Cancel/onJob parity done. |
 
 ### M7 — Topology FR-6 general case
 
@@ -297,17 +312,17 @@ For each gap: **how it fails for the user**, **how the code behaves now**, **how
 
 | | |
 |--|--|
-| **Fails** | Full-res sparse can collapse registration (pixel-absolute thresholds). |
-| **Now** | Server `sparse_max_dim` + dense full frames; client `sparseMaxDim`. **App never passes it.** Default `None` = native both stages. |
-| **Should** | Panel default ~640–1600; always dual-res for large images. |
+| **Fails** | ~~App never sends sparse cap.~~ |
+| **Now** | Server `sparse_max_dim` + dense full frames; client `sparseMaxDim`. App default `DEFAULT_SPARSE_MAX_DIM = 1600` in `ai/photogrammetry.ts` (panel, canvas drop, any solve path). Tests: `photogrammetry.unit.test.ts`, `GenerationPanel.photo.test.tsx`. |
+| **Should** | ✅ Dual-res default shipped. |
 
 ### M10 — `packages/ml`
 
 | | |
 |--|--|
-| **Fails** | Five clients drift (exactly: onJob/cancel inconsistency). |
-| **Now** | Empty reserved README; still claims reconstruct “until extracted” — **stale** (recon is extracted). |
-| **Should** | Implement shared poll/cancel **or** delete the package claim. |
+| **Fails** | ~~Empty package / cancel drift.~~ |
+| **Now** | `@plastiq/ml` exports `JobClientOptions` / `JobCancelOptions` / `cancelServiceJob` / `serviceHttpError`. All five domain clients depend on it and route `cancelJob` through the shared helper. |
+| **Should** | ✅ Shared cancel/types shipped (not a mega-pipeline package). |
 
 ### Local API keys
 
@@ -332,18 +347,17 @@ These are **present in the working tree** and must not be marked product-complet
 | demo-transform | `tx: 0.02` feature | Not Move body |
 | AI prompt replace-body | `prompt.ts` | Contradicts rebuild join |
 | Transform order/pivot | `rebuild.ts` | Comment lies; origin pivot |
-| Capture panel cancel | Abort only | Server can kill; UI never DELETEs |
-| Complete panel silent demo | no `demoWeights` UI | Looks trained |
+| Capture panel cancel | ~~Abort only~~ | **Fixed** — onJob + DELETE |
+| Complete panel silent demo | ~~no `demoWeights` UI~~ | **Fixed** — banner |
 | NeRF “proposal” naming | hierarchical PDF | Not proposal MLP |
 | WeightNorm default off | `sdf_field.py` | Not production-on |
-| packages/ml empty | README only | Promised infra missing |
-| packages/ml README reconstruct claim | “until extracted” | recon already extracted |
+| packages/ml empty | ~~README only~~ | **Fixed** — shared cancel/types |
 
 ---
 
 ## 7. Architecture diagram (logical)
 
-```
+```text
 ┌──────────────────────── apps/plastiq ─────────────────────────┐
 │  Ribbon / Context / Properties / Sketcher / AI GenerationPanel │
 │  store (CadDocument | MeshDoc | PointCloudDoc | Voxel)         │
@@ -372,14 +386,14 @@ These are **present in the working tree** and must not be marked product-complet
 2. **Loft/sweep replace body** — join-by-default or explicit new; stop destroying prior solid silently.  
 3. **Demo loft/sweep/boolean as product ribbon paths** — selection wizards only; remove demos from primary UI.  
 4. **Transform feature order + pivot** — R then T about COM; fix comment; separate placement UX.  
-5. **Capture Complete silent demo weights** — banner or hard-fail without checkpoint.  
-6. **Capture cancel abort-only** — `onJob` + DELETE (server already force-kills).
+5. ~~**Capture Complete silent demo weights**~~ — ✅ panel banner + agent note.
+6. ~~**Capture cancel abort-only**~~ — ✅ onJob + DELETE (server force-kills).
 
 ### High
 
 1. Boolean / mirror / pattern selection authoring.  
-2. Recon + nurbs `cancelJob`/`onJob` + panel DELETE.  
-3. Photo `sparseMaxDim` default in app.  
+2. ~~Recon + nurbs `cancelJob`/`onJob` + panel DELETE.~~ ✅
+3. ~~Photo `sparseMaxDim` default in app.~~ ✅ (`DEFAULT_SPARSE_MAX_DIM=1600`)
 4. Properties deps/refs/loft/pattern/boolean data editors.  
 5. Variable fillet / 2-dist chamfer UI + schema.
 
@@ -388,7 +402,7 @@ These are **present in the working tree** and must not be marked product-complet
 1. Hole containment + revolve holes policy.  
 2. NeRF doc honesty (PDF vs proposal MLP; WN default).  
 3. Live closed-organic reconstruct↔nurbs gate when services up.  
-4. `packages/ml` implement or remove claim.  
+4. ~~`packages/ml` implement or remove claim.~~ ✅ shared cancel/types
 5. Seed/join E2E face-count honesty.
 
 ### Long-horizon (honest open engineering)
@@ -412,14 +426,14 @@ Do **not** treat a prior “T01–T40 ✅” checklist as product-complete. Snap
 | Mirror/pattern | Linear tools real | Hardcoded ribbon | **Not product-complete** |
 | Dress-ups selection | Real | Real context menu | **Working** |
 | Transform feature | Exists | Wrong order/pivot; gizmo=placement | **Broken product semantics** |
-| Capture process cancel | Real kill | Panel no DELETE | **Server ahead of UI** |
-| Complete demo honesty | Wire flag | Panel silent | **Partial** |
+| Capture process cancel | Real kill | Panel Abort + DELETE | **Working** |
+| Complete demo honesty | Wire flag | Panel banner + agent note | **Working** |
 | NeRF neus defaults | learnable β + PDF | WN off; “proposal” naming | **Improved, not research-parity** |
 | Reconstruct topology | cut_sphere + cut_cylinder | N/A | **Family routes working** |
 | Closed NURBS path | Real when URL set | Live E2E weak | **Partial** |
-| Photo dual-res | Server+client | App unused | **Plumbing only** |
-| `@plastiq/recon` | Real package | No cancel | **Partial client** |
-| `packages/ml` | Empty | N/A | **Scaffold** |
+| Photo sparse dual-res | Server + client | App default 1600 | **Working** |
+| packages/ml shared cancel | Real helpers | Five clients wired | **Working** |
+| `@plastiq/recon` | Real package | cancelJob + onJob | **Working** |
 | Local API keys | Optional | Not required | **By design open** |
 
 ---
@@ -432,7 +446,7 @@ Do **not** treat a prior “T01–T40 ✅” checklist as product-complete. Snap
 | **Rebuild** | Join for pad/revolve is real; loft/sweep/transform policies still hurt multi-feature designs |
 | **CAD authoring** | Strong for sketch + pad/pocket/revolve + selection dress-ups; **weak/demo for loft, sweep, boolean, pattern, mirror** |
 | **ML services** | Five real pipelines; fleet wiring improved (`RECONSTRUCT_NURBS_URL`, cut_sphere, dual-res plumbing, capture force-cancel) |
-| **ML product UX** | Cancel and demo honesty **inconsistent** across panels; photo quality knobs not exposed |
+| **ML product UX** | Cancel parity, complete-scan demo banner, and photo `sparseMaxDim=1600` default are wired; NeRF quality claims still need honest docs |
 | **Docs / prior Grok checklists** | Often overclaimed “complete” where only unit wires or kernel APIs existed |
 
 **Making CAD feel finished** is primarily **authoring contract + join policy + killing demos**, against an already-capable kernel.  
@@ -453,17 +467,17 @@ Do **not** treat a prior “T01–T40 ✅” checklist as product-complete. Snap
 | AI replace prompt | `apps/plastiq/src/ai/prompt.ts` ~40–44 |
 | Seed box | `apps/plastiq/src/store/seed.ts` |
 | Capture process cancel | `services/capture/app/jobs.py` `cancel` / `submit_process` |
-| Capture panel abort-only | `GenerationPanel.tsx` CaptureScanSection cancel ~1188 |
-| Complete demo flag | `services/capture/app/pipeline.py` `complete_partial_job`; panel silence ~1170–1178 |
+| Capture panel Abort + DELETE | `GenerationPanel.tsx` CaptureScanSection `onJob` + `cancelCaptureJob` |
+| Complete demo banner | `pipeline.py` `complete_partial_job`; panel `capture-demo-weights` |
 | NeRF neus defaults | `services/nerf/app/engine/pipeline.py` ~107–118 |
 | WeightNorm default off | `services/nerf/app/fields/sdf_field.py` `use_weight_norm=False` |
 | ProposalSampler | `services/nerf/app/generators/ray_samplers.py` — helper; hierarchical PDF in model |
 | Reconstruct auto chain | `services/reconstruct/app/pipeline.py` header + routes |
 | Closed nurbs delegate | `services/reconstruct/app/nurbs_delegate.py` `delegate_closed_solid`; `fitted.py` |
 | RECONSTRUCT_NURBS_URL | `scripts/dev-services.sh` ~126–129 |
-| sparse_max_dim | `services/photogrammetry/app/main.py` SolveBody; app unused |
-| @plastiq/recon | `packages/recon/src/client.ts` |
-| packages/ml empty | `packages/ml/README.md` only |
+| sparse_max_dim app default | `apps/plastiq/src/ai/photogrammetry.ts` `DEFAULT_SPARSE_MAX_DIM=1600` |
+| @plastiq/recon cancel | `packages/recon/src/client.ts` `cancelJob` / `onJob` |
+| packages/ml shared cancel | `packages/ml/src/{types,http}.ts`; used by five domain clients |
 
 ---
 

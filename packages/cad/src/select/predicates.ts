@@ -10,7 +10,7 @@
 
 import type { Occt } from "../oc/init.js";
 import type { Solid } from "../solid/solid.js";
-import type { FaceRef, EdgeRef } from "../mesh/tagged.js";
+import type { FaceRef, EdgeRef, FaceGroup, TaggedEdge } from "../mesh/tagged.js";
 import { tessellateTagged } from "../mesh/tessellate.js";
 import { edgeConvexity, filletFaces, growTangentFaces } from "./topology.js";
 
@@ -94,15 +94,18 @@ export function resolveSelector(oc: Occt, solid: Solid, selector: Selector): Sel
   // dihedral convexity test (M2) mis-reads tangent fillet joins as sharp. 0.1 rad ≈ 5.7° keeps the
   // nearest-triangle normal within ~3° of the edge tangent, inside the 5° smooth gate.
   const mesh = tessellateTagged(oc, solid, { angularDeflection: 0.1 });
-  const faceRef = (g: { normal: V3; centroid: V3 }): FaceRef => ({ normal: g.normal, centroid: g.centroid });
-  const edgeRef = (e: { faceNormals: readonly [V3, V3]; midpoint: V3 }): EdgeRef => ({ faceNormals: e.faceNormals, midpoint: e.midpoint });
-  const groups = mesh.faceGroups as ReadonlyArray<{ normal: V3; centroid: V3; start: number; count: number }>;
-  const edges = mesh.edges as ReadonlyArray<{
-    faceNormals: readonly [V3, V3];
-    midpoint: V3;
-    positions: number[];
-    faceIds: readonly [number, number];
-  }>;
+  // R1/§4.2: carry the PRIMARY analytic signatures (face `surface`, edge
+  // `faceSurfaces`) onto every selector-authored ref, not just the legacy
+  // normal + positional pair. Selector-driven dress-ups then survive parameter
+  // edits on curved topology exactly as interactive picks now do.
+  const faceRef = (g: FaceGroup): FaceRef => ({ normal: g.normal, centroid: g.centroid, surface: g.surface });
+  const edgeRef = (e: TaggedEdge): EdgeRef => ({
+    faceNormals: e.faceNormals,
+    midpoint: e.midpoint,
+    faceSurfaces: e.faceSurfaces,
+  });
+  const groups = mesh.faceGroups as ReadonlyArray<FaceGroup>;
+  const edges = mesh.edges as ReadonlyArray<TaggedEdge>;
   // A SEAM edge (a cylinder/cone/sphere's parameterisation seam) borders ONE face,
   // so its two adjacent face ids are equal. It is not a real edge the user can
   // select, and feeding one to MakeFillet/MakeChamfer typically fails the WHOLE

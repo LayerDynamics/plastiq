@@ -31,7 +31,9 @@ const SURFACE_WIRE = {
 
 const RESULT_WIRE = {
   step: "ISO-10303-21;\nHEADER;\nENDSEC;\nEND-ISO-10303-21;",
-  surfaces: [SURFACE_WIRE],
+  // The §6.2 wire NESTS the surface list under a `surfaces` key (services/nurbs pipeline.py:410 +
+  // pipeline_closed.py; tests/test_api.py:382-383) — the client unwraps it to the flat array.
+  surfaces: { surfaces: [SURFACE_WIRE] },
   report: {
     patches: 6,
     fitted_patches: 5,
@@ -101,7 +103,8 @@ describe("fitNurbs (SPEC-12 §6.1, U9.2)", () => {
       { baseURL: "http://localhost:8003/", fetchImpl, delay: async () => {}, onState: (s) => states.push(s) },
     );
     expect(res.step).toBe(RESULT_WIRE.step);
-    // surfaces pass through VERBATIM — the §6.2 snake_case serialization, untranslated
+    // The wire nests surfaces under a `surfaces` key; the client UNWRAPS it to the flat array, and
+    // each surface object is the §6.2 snake_case serialization passed through untranslated.
     expect(res.surfaces).toEqual([SURFACE_WIRE]);
     expect(res.surfaces[0]?.u_knots).toEqual([0, 1]);
     expect(res.surfaces[0]?.u_periodic).toBe(false);
@@ -125,6 +128,28 @@ describe("fitNurbs (SPEC-12 §6.1, U9.2)", () => {
     expect(states).toContain("completed");
     // trailing slash on the base URL is normalized (no //fit)
     expect(calls[0]).toBe("http://localhost:8003/fit");
+  });
+
+  it("maps the closed-mode watertightness fields (free_edges/volume) and a null fidelity_tol", async () => {
+    // The closed-mode report (services/nurbs pipeline_closed.py) adds free_edges + volume; the
+    // default (no fidelity_tol sent) path reports fidelity_tol: null. Both must survive to the client.
+    const closedWire = {
+      ...RESULT_WIRE,
+      report: { ...RESULT_WIRE.report, fidelity_tol: null, free_edges: 0, volume: 1.25e-6 },
+    };
+    const { fetchImpl } = scriptedFetch({ result: closedWire });
+    const res = await fitNurbs({ glbBase64: "Z2xURg==" }, { fetchImpl, delay: async () => {} });
+    expect(res.report.fidelityTol).toBeNull();
+    expect(res.report.freeEdges).toBe(0);
+    expect(res.report.volume).toBeCloseTo(1.25e-6);
+  });
+
+  it("omits free_edges/volume from the report when the service does not send them (open mode)", async () => {
+    // RESULT_WIRE has no free_edges/volume — the open-mode report; the client must not invent them.
+    const { fetchImpl } = scriptedFetch();
+    const res = await fitNurbs({ glbBase64: "Z2xURg==" }, { fetchImpl, delay: async () => {} });
+    expect(res.report).not.toHaveProperty("freeEdges");
+    expect(res.report).not.toHaveProperty("volume");
   });
 
   it("forwards glb_base64 + options on the submit body (snake_case wire form)", async () => {

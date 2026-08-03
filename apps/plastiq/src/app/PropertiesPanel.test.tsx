@@ -46,10 +46,54 @@ describe("PropertiesPanel", () => {
     expect(screen.getByTestId("feature-editor")).toBeTruthy();
   });
 
+  it("authors a global expression binding and displays its evaluated dimension", () => {
+    useCadStore.getState().setParam("size", 0.03);
+    render(<PropertiesPanel />);
+
+    const expression = screen.getByTestId("feature-expr-dx");
+    fireEvent.change(expression, { target: { value: "size / 2" } });
+    fireEvent.blur(expression);
+
+    expect(useCadStore.getState().features[0]!.exprs).toEqual({ dx: "size / 2" });
+    const numeric = screen
+      .getByTestId("feature-param-dx")
+      .querySelector('input[type="number"]') as HTMLInputElement;
+    expect(numeric.value).toBe("15");
+  });
+
+  it("rejects an invalid expression without changing the feature", () => {
+    render(<PropertiesPanel />);
+    const expression = screen.getByTestId("feature-expr-dx");
+    fireEvent.change(expression, { target: { value: "missing * 2" } });
+    fireEvent.blur(expression);
+
+    expect(screen.getByTestId("feature-expr-error-dx").textContent).toMatch(/Unknown parameter/);
+    expect(useCadStore.getState().features[0]!.exprs).toBeUndefined();
+  });
+
+  it("turns a numeric edit into an explicit expression unbind", () => {
+    useCadStore.getState().setParam("size", 0.03);
+    useCadStore.getState().setFeatureExpr("f1", "dx", "size");
+    render(<PropertiesPanel />);
+
+    const numeric = screen
+      .getByTestId("feature-param-dx")
+      .querySelector('input[type="number"]') as HTMLInputElement;
+    fireEvent.change(numeric, { target: { value: "40" } });
+    fireEvent.blur(numeric);
+
+    expect(useCadStore.getState().features[0]!.params?.dx).toBe(0.04);
+    expect(useCadStore.getState().features[0]!.exprs).toBeUndefined();
+  });
+
   it("edits extrude data.op join/new via the data panel (T15)", () => {
     useCadStore.getState().loadDocument({
       features: [
-        { id: "s1", type: "sketch", data: { profile: { kind: "circle", center: [0, 0], radius: 0.01 } } },
+        {
+          id: "s1",
+          type: "sketch",
+          data: { profile: { kind: "circle", center: [0, 0], radius: 0.01 } },
+        },
         { id: "e1", type: "extrude", params: { height: 0.02 }, data: { op: "join" }, deps: ["s1"] },
       ],
       params: {},
@@ -89,8 +133,16 @@ describe("PropertiesPanel", () => {
   it("rebinds extrude sketch deps via the data panel (C10)", () => {
     useCadStore.getState().loadDocument({
       features: [
-        { id: "s1", type: "sketch", data: { profile: { kind: "circle", center: [0, 0], radius: 0.01 } } },
-        { id: "s2", type: "sketch", data: { profile: { kind: "circle", center: [0, 0], radius: 0.005 } } },
+        {
+          id: "s1",
+          type: "sketch",
+          data: { profile: { kind: "circle", center: [0, 0], radius: 0.01 } },
+        },
+        {
+          id: "s2",
+          type: "sketch",
+          data: { profile: { kind: "circle", center: [0, 0], radius: 0.005 } },
+        },
         { id: "e1", type: "extrude", params: { height: 0.02 }, deps: ["s1"] },
       ],
       params: {},
@@ -131,7 +183,17 @@ describe("PropertiesPanel", () => {
           id: "ch1",
           type: "chamfer",
           params: { distance: 0.001, distance2: 0.002 },
-          data: { edges: [{ midpoint: [0, 0, 0], faceNormals: [[0, 0, 1], [1, 0, 0]] }] },
+          data: {
+            edges: [
+              {
+                midpoint: [0, 0, 0],
+                faceNormals: [
+                  [0, 0, 1],
+                  [1, 0, 0],
+                ],
+              },
+            ],
+          },
         },
       ],
       params: {},
@@ -155,7 +217,17 @@ describe("PropertiesPanel", () => {
           id: "fil1",
           type: "fillet",
           params: { radius: 0.002, radius2: 0.003 },
-          data: { edges: [{ midpoint: [0, 0, 0], faceNormals: [[0, 0, 1], [1, 0, 0]] }] },
+          data: {
+            edges: [
+              {
+                midpoint: [0, 0, 0],
+                faceNormals: [
+                  [0, 0, 1],
+                  [1, 0, 0],
+                ],
+              },
+            ],
+          },
         },
       ],
       params: {},
@@ -261,8 +333,12 @@ describe("round primitive properties", () => {
           params: {
             radius: 0.01,
             height: 0.03,
-            ox: 0, oy: 0, oz: 0,
-            ax: 0, ay: 0, az: 1,
+            ox: 0,
+            oy: 0,
+            oz: 0,
+            ax: 0,
+            ay: 0,
+            az: 1,
             angle: 2 * Math.PI,
           },
           data,
@@ -300,10 +376,14 @@ describe("round primitive properties", () => {
     expect((screen.getByTestId("feature-op") as HTMLSelectElement).value).toBe("cut");
   });
 
-  it("extrude still offers only join/new — ops are per-type, not global", () => {
+  it("extrude offers the full op set since R9 (cut/intersect no longer silently join)", () => {
     useCadStore.getState().loadDocument({
       features: [
-        { id: "s1", type: "sketch", data: { profile: { kind: "circle", center: [0, 0], radius: 0.01 } } },
+        {
+          id: "s1",
+          type: "sketch",
+          data: { profile: { kind: "circle", center: [0, 0], radius: 0.01 } },
+        },
         { id: "e1", type: "extrude", params: { height: 0.02 }, data: { op: "join" }, deps: ["s1"] },
       ],
       params: {},
@@ -313,6 +393,44 @@ describe("round primitive properties", () => {
     const values = [...(screen.getByTestId("feature-op") as HTMLSelectElement).options].map(
       (o) => o.value,
     );
-    expect(values).toEqual(["join", "new"]);
+    expect(values).toEqual(["join", "cut", "intersect", "new"]);
+  });
+
+  it("edits a sweep typed path via Properties → Path (R13/C1)", () => {
+    useCadStore.getState().loadDocument({
+      features: [
+        {
+          id: "sw1",
+          type: "sweep",
+          data: {
+            profile: { kind: "circle", center: [0, 0], radius: 0.005 },
+            path: {
+              kind: "polyline",
+              points: [
+                [0, 0, 0],
+                [0, 0, 0.04],
+              ],
+            },
+          },
+        },
+      ],
+      params: {},
+    });
+    useCadStore.setState({ selectedFeatureId: "sw1" });
+    render(<PropertiesPanel />);
+    expect(screen.getByTestId("feature-path-editor")).toBeTruthy();
+    expect(screen.getByTestId("feature-path-point-0")).toBeTruthy();
+    expect(screen.getByTestId("feature-path-point-1")).toBeTruthy();
+    // Commit Z of the second point to 50 mm.
+    const zInputs = screen.getByTestId("feature-path-point-1").querySelectorAll("input");
+    expect(zInputs.length).toBe(3);
+    fireEvent.change(zInputs[2]!, { target: { value: "50" } });
+    fireEvent.blur(zInputs[2]!);
+    const path = useCadStore.getState().features.find((f) => f.id === "sw1")?.data?.["path"] as {
+      kind: string;
+      points: number[][];
+    };
+    expect(path.kind).toBe("polyline");
+    expect(path.points[1]![2]).toBeCloseTo(0.05, 6);
   });
 });

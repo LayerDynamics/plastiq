@@ -7,6 +7,7 @@
 // polling machinery. The STEP then feeds the app's existing stepToImportDocument → importStep
 // path. Self-hosted, reached by base URL.
 
+import { cancelServiceJob, serviceHttpError } from "@plastiq/ml";
 import type {
   NurbsCancelOptions,
   NurbsFitInput,
@@ -32,26 +33,30 @@ interface NurbsReportWire {
   scd: number;
   rms_deviation: number;
   max_deviation: number;
-  fidelity_tol: number;
+  /** The accuracy gate the deviations were judged against — `null` when the caller sent no
+   * `fidelity_tol` (the service default: `pipeline.py` reports `fidelity_tol: null`). */
+  fidelity_tol: number | null;
   is_solid: boolean;
   is_valid: boolean;
+  /** Closed-mode only (`pipeline_closed.py`): free boundary edges (0 ⇔ watertight) and the GProp
+   * solid volume in metres³. Absent from the open-mode report. */
+  free_edges?: number;
+  volume?: number;
   mode: string;
 }
 
-/** Shape of `GET /jobs/{id}/result` on the nurbs service. `surfaces` is already the §6.2 contract
- * form the client returns verbatim; only the report is snake→camel mapped. */
+/** Shape of `GET /jobs/{id}/result` on the nurbs service. The §6.2 payload nests the surface list
+ * under a `surfaces` key (`pipeline.py`'s `surfaces_payload = {"surfaces": [...]}`); the client
+ * unwraps it to the flat `NurbsSurfaceJson[]` its `NurbsResult` exposes. Only the report is
+ * snake→camel mapped. */
 interface NurbsResultWire {
   step: string;
-  surfaces: NurbsSurfaceJson[];
+  surfaces: { surfaces: NurbsSurfaceJson[] };
   report: NurbsReportWire;
 }
 
 async function httpError(res: Response, what: string): Promise<string> {
-  const detail = await res
-    .json()
-    .then((b: { detail?: string }) => b.detail ?? "")
-    .catch(() => "");
-  return `nurbs ${what}: HTTP ${res.status}${detail ? ` — ${detail}` : ""}`;
+  return serviceHttpError(res, "nurbs", what);
 }
 
 /** Fit NURBS surfaces to a GLB mesh and return STEP + surfaces JSON + report (submit → poll).
@@ -124,8 +129,13 @@ export async function fitNurbs(input: NurbsFitInput, opts: NurbsOptions = {}): P
         isSolid: wire.report.is_solid,
         isValid: wire.report.is_valid,
         mode: wire.report.mode,
+        // Closed-mode watertightness detail — mapped only when the service reports it (open mode omits).
+        ...(wire.report.free_edges !== undefined ? { freeEdges: wire.report.free_edges } : {}),
+        ...(wire.report.volume !== undefined ? { volume: wire.report.volume } : {}),
       };
-      return { step: wire.step, surfaces: wire.surfaces, report };
+      // The §6.2 wire nests the surface list under a `surfaces` key; unwrap to the flat array the
+      // NurbsResult contract exposes (so `result.surfaces[i]` is a surface, not `undefined`).
+      return { step: wire.step, surfaces: wire.surfaces.surfaces, report };
     }
     if (status.state === "failed") {
       throw new Error(`nurbs fit failed: ${status.error ?? "unknown error"}`);
@@ -140,14 +150,9 @@ export async function fitNurbs(input: NurbsFitInput, opts: NurbsOptions = {}): P
  * job was dropped, is not an error). When `opts.apiKey` is set it is sent as
  * `Authorization: Bearer <key>`, matching {@link fitNurbs}. Other HTTP errors throw with detail. */
 export async function cancelJob(id: string, opts: NurbsCancelOptions = {}): Promise<void> {
-  const base = (opts.baseURL ?? DEFAULT_BASE_URL).replace(/\/+$/, "");
-  const f = opts.fetchImpl ?? globalThis.fetch;
-  if (!f) throw new Error("nurbs: no fetch implementation available");
-  const auth: Record<string, string> = opts.apiKey ? { Authorization: `Bearer ${opts.apiKey}` } : {};
-  const res = await f(`${base}/jobs/${id}`, {
-    method: "DELETE",
-    ...(opts.apiKey ? { headers: auth } : {}),
+  await cancelServiceJob(id, {
+    ...opts,
+    defaultBaseURL: DEFAULT_BASE_URL,
+    label: "nurbs",
   });
-  if (res.ok || res.status === 404) return;
-  throw new Error(await httpError(res, "cancel"));
 }

@@ -39,14 +39,18 @@ export const RIBBON: Record<Workspace, RibbonTab[]> = {
           items: [
             w("sketchLauncher"),
             a("sketch-rect"),
+            // §13.3 — project coplanar body edges into the active sketch.
+            a("project-edges"),
             // Quick starter sketch — a rectangle profile without opening the
             // sketcher (the action was previously wired nowhere).
             a("sample-rect"),
             a("extrude"),
+            a("rib"),
             a("cut"),
             a("revolve"),
             a("loft"),
             a("sweep"),
+            a("helixSweep"),
           ],
         },
         {
@@ -54,6 +58,11 @@ export const RIBBON: Record<Workspace, RibbonTab[]> = {
           // round geometry no longer depends on the sketcher working.
           title: "Primitives",
           items: [a("cylinder"), a("sphere"), a("cone"), a("torus"), a("bore")],
+        },
+        {
+          // §15 freeform NURBS surfaces (plane/cylinder/sphere control lattices).
+          title: "Freeform",
+          items: [a("freeform-plane"), a("freeform-cylinder"), a("freeform-sphere")],
         },
         {
           title: "Modify",
@@ -73,6 +82,8 @@ export const RIBBON: Record<Workspace, RibbonTab[]> = {
             a("mirror"),
             a("linearPattern"),
             a("circularPattern"),
+            a("pathPattern"),
+            a("split"),
             a("booleanBody"),
             a("transform"),
           ],
@@ -109,12 +120,35 @@ export const RIBBON: Record<Workspace, RibbonTab[]> = {
       panels: [{ title: "Sketch", items: [a("sk-finish")] }],
     },
     {
+      // §14 surface pillar — open shells/faces, offset, sew/solidify, thicken.
+      // Solid Create (loft/sweep/revolve) stays on the Solid tab; these install
+      // sheet bodies that Thicken (or Solidify after Sew) turns into solids.
+      id: "surface",
+      title: "Surface",
+      panels: [
+        {
+          title: "Create",
+          items: [a("surfaceLoft"), a("surfaceSweep"), a("surfaceRevolve")],
+        },
+        {
+          title: "Modify",
+          items: [a("offsetSurface"), a("sew"), a("solidify"), a("patch"), a("trim"), a("thicken")],
+        },
+      ],
+    },
+    {
       id: "utilities",
       title: "Utilities",
       panels: [
         {
           title: "Interchange",
-          items: [a("import-step"), a("export-gltf"), a("export-step"), a("export-iges")],
+          items: [
+            a("import-step"),
+            a("import-iges"),
+            a("export-gltf"),
+            a("export-step"),
+            a("export-iges"),
+          ],
         },
         { title: "Edit", items: [a("undo"), a("redo")] },
       ],
@@ -150,15 +184,27 @@ export const RIBBON: Record<Workspace, RibbonTab[]> = {
       ],
     },
   ],
-  // Voxel sculpting (ADR-0010): New Sculpt opens a default grid; Add/Erase are the
-  // click tools; Output hands the surface mesh off (Convert-to-CAD via the mesh
-  // reconstruct path, or a GLB download). Undo/redo route to the sculpt history.
+  // Voxel sculpting (ADR-0010 + §16): New Sculpt opens a default grid; Add/Erase
+  // are single-cell tools; Brushes are the seven SDF tools (draw…grab). Output
+  // hands the surface mesh off (Convert-to-CAD / GLB). Undo/redo → sculpt history.
   sculpt: [
     {
       id: "sculpt",
       title: "Sculpt",
       panels: [
         { title: "Sculpt", items: [a("voxel-new"), a("voxel-add"), a("voxel-erase")] },
+        {
+          title: "Brushes",
+          items: [
+            a("voxel-brush-draw"),
+            a("voxel-brush-clay"),
+            a("voxel-brush-smooth"),
+            a("voxel-brush-flatten"),
+            a("voxel-brush-inflate"),
+            a("voxel-brush-pinch"),
+            a("voxel-brush-grab"),
+          ],
+        },
         { title: "Output", items: [a("voxel-convert-cad"), a("voxel-export-glb")] },
         { title: "Edit", items: [a("undo"), a("redo")] },
       ],
@@ -181,6 +227,14 @@ export const RIBBON_LABELS: Record<string, string> = {
   "ml-fit-nurbs": "Fit NURBS",
   "cloud-to-mesh": "To Mesh",
   "cloud-complete": "Complete",
+  surfaceLoft: "Srf Loft",
+  surfaceSweep: "Srf Sweep",
+  surfaceRevolve: "Srf Revolve",
+  offsetSurface: "Offset",
+  sew: "Sew",
+  solidify: "Solidify",
+  thicken: "Thicken",
+  helixSweep: "Helix",
 };
 
 /** Carry-forward data-testids so the existing E2E suite keeps targeting the same
@@ -217,4 +271,12 @@ export const RIBBON_ICONS: Record<string, string> = {
   "ml-fit-nurbs": "◠",
   "cloud-to-mesh": "⁙",
   "cloud-complete": "⊛",
+  surfaceLoft: "◇",
+  surfaceSweep: "⌒",
+  surfaceRevolve: "◌",
+  offsetSurface: "⧉",
+  sew: " intern",
+  solidify: "⬢",
+  thicken: "▥",
+  helixSweep: "🌀",
 };

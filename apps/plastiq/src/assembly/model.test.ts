@@ -98,6 +98,34 @@ describe("assembly model → kernel solveMates bridge (M4.1 seam)", () => {
     // B actually moved from its offset seed (not a no-op solve).
     expect(result.poses[1]!.position[0]).not.toBeCloseTo(0.2, 2);
   });
+
+  it("S5/K9: a mate referencing a missing instance is dropped, never emitted as component:-1", () => {
+    // "i9" doesn't exist → instanceIndex → findIndex → -1. The bridge must skip the
+    // dangling mate rather than hand the kernel a component:-1 (which the solver
+    // would refuse for the WHOLE assembly). The good mate still solves.
+    const model: AssemblyModel = {
+      instances: [
+        { id: "i0", name: "A", pose: { position: [0, 0, 0], orientation: [0, 0, 0, 1] }, fixed: true },
+        { id: "i1", name: "B", pose: { position: [0.2, 0, 0], orientation: [0, 0, 0, 1] } },
+      ],
+      mates: [
+        { id: "m0", kind: "coincident", a: { instance: "i0", point: [0, 0, 0] }, b: { instance: "i1", point: [0, 0, 0] } },
+        // Dangling: references a removed instance.
+        { id: "m1", kind: "coincident", a: { instance: "i0", point: [0, 0, 0] }, b: { instance: "i9", point: [0, 0, 0] } },
+      ],
+      joints: [],
+    };
+    const input = toAssemblyInput(model);
+    expect(input.mates).toHaveLength(1); // the dangling m1 was dropped
+    for (const m of input.mates) {
+      expect((m as { a: { component: number } }).a.component).toBeGreaterThanOrEqual(0);
+      expect((m as { b: { component: number } }).b.component).toBeGreaterThanOrEqual(0);
+    }
+    // The surviving mate still solves to a valid (not "invalid") verdict.
+    const result = solveMates(input.components, input.mates);
+    expect(result.verdict).not.toBe("invalid");
+    expect(result.residualNorm).toBeLessThan(1e-5);
+  });
 });
 
 describe("joint kinematics — drive preview (M4.3/M4.4)", () => {

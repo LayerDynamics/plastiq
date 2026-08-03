@@ -25,6 +25,7 @@ function sampleMesh(): TransferMesh {
           [0, 0, 1],
           [0, -1, 0],
         ],
+        faceSurfaces: [PLANE_Z0, { kind: "plane", normal: [0, -1, 0], origin: [0, 0, 0] }],
         midpoint: [0.5, 0, 0],
       },
       {
@@ -34,6 +35,7 @@ function sampleMesh(): TransferMesh {
           [0, 0, 1],
           [1, 0, 0],
         ],
+        faceSurfaces: [PLANE_Z0, { kind: "plane", normal: [1, 0, 0], origin: [0, 0, 0] }],
         midpoint: [1, 1, 0],
       },
     ],

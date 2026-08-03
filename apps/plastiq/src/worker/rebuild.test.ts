@@ -1,5 +1,15 @@
 import { beforeAll, describe, expect, it } from "vitest";
-import { exportStep, importStep, initOcct, makeBox, mm, type Occt, type Solid } from "@plastiq/cad";
+import {
+  exportStep,
+  exportIges,
+  importStep,
+  initOcct,
+  makeBox,
+  mm,
+  surfacesMatch,
+  type Occt,
+  type Solid,
+} from "@plastiq/cad";
 import type { CadDocument, EditorFeature } from "../store/types.js";
 import type { Profile } from "../sketch/profile.js";
 import type { TopAbs_ShapeEnum } from "opencascade.js";
@@ -103,7 +113,11 @@ describe("CAD Studio rebuild (SPEC-5 M0.4)", () => {
   });
 
   it("rebuildTaggedWithProps returns null for a document with no geometry", () => {
-    const built = rebuildTaggedWithProps(oc, { features: [], params: {} }, { linearDeflection: mm(0.5) });
+    const built = rebuildTaggedWithProps(
+      oc,
+      { features: [], params: {} },
+      { linearDeflection: mm(0.5) },
+    );
     expect(built).toBeNull();
   });
 
@@ -218,7 +232,13 @@ describe("CAD Studio rebuild (SPEC-5 M0.4)", () => {
         features: [
           small(),
           large(),
-          { id: "e1", type: "extrude", deps: ["sA"], params: { height: m(10) }, data: { op: "new" } },
+          {
+            id: "e1",
+            type: "extrude",
+            deps: ["sA"],
+            params: { height: m(10) },
+            data: { op: "new" },
+          },
         ],
         params: {},
       };
@@ -232,7 +252,13 @@ describe("CAD Studio rebuild (SPEC-5 M0.4)", () => {
       const doc: CadDocument = {
         features: [
           large(), // only B remains; the extrude still names sA
-          { id: "e1", type: "extrude", deps: ["sA"], params: { height: m(10) }, data: { op: "new" } },
+          {
+            id: "e1",
+            type: "extrude",
+            deps: ["sA"],
+            params: { height: m(10) },
+            data: { op: "new" },
+          },
         ],
         params: {},
       };
@@ -244,7 +270,13 @@ describe("CAD Studio rebuild (SPEC-5 M0.4)", () => {
         features: [
           { ...small(), suppressed: true },
           large(),
-          { id: "e1", type: "extrude", deps: ["sA"], params: { height: m(10) }, data: { op: "new" } },
+          {
+            id: "e1",
+            type: "extrude",
+            deps: ["sA"],
+            params: { height: m(10) },
+            data: { op: "new" },
+          },
         ],
         params: {},
       };
@@ -255,7 +287,12 @@ describe("CAD Studio rebuild (SPEC-5 M0.4)", () => {
       const doc: CadDocument = {
         features: [
           large(),
-          { id: "e1", type: "extrude", data: { sketchId: "sA", op: "new" }, params: { height: m(10) } },
+          {
+            id: "e1",
+            type: "extrude",
+            data: { sketchId: "sA", op: "new" },
+            params: { height: m(10) },
+          },
         ],
         params: {},
       };
@@ -266,7 +303,10 @@ describe("CAD Studio rebuild (SPEC-5 M0.4)", () => {
       // The legitimate last-wins fallback must survive: a ribbon extrude carries no
       // deps and no sketchId, so it uses the most recent sketch (B here).
       const doc: CadDocument = {
-        features: [large(), { id: "e1", type: "extrude", params: { height: m(10) }, data: { op: "new" } }],
+        features: [
+          large(),
+          { id: "e1", type: "extrude", params: { height: m(10) }, data: { op: "new" } },
+        ],
         params: {},
       };
       const solid = rebuildDocument(oc, doc)!;
@@ -351,11 +391,20 @@ describe("CAD Studio rebuild (SPEC-5 M0.4)", () => {
             id: "f2",
             type: "sketch",
             deps: ["f1"],
-            data: { profile: rect, plane: { kind: "face", face: { normal: [0, 0, 1] }, offset: faceOffset } },
+            data: {
+              profile: rect,
+              plane: { kind: "face", face: { normal: [0, 0, 1] }, offset: faceOffset },
+            },
           },
           // op:"new" keeps the pad a SEPARATE body (§2.4) so join-by-default can't
           // merge it into the box and blur where the sketch plane actually landed.
-          { id: "f3", type: "extrude", deps: ["f2"], params: { height: m(20) }, data: { op: "new" } },
+          {
+            id: "f3",
+            type: "extrude",
+            deps: ["f2"],
+            params: { height: m(20) },
+            data: { op: "new" },
+          },
         ],
         params: {},
       };
@@ -372,6 +421,68 @@ describe("CAD Studio rebuild (SPEC-5 M0.4)", () => {
     expect(onFace).toBeCloseTo(m(50), 6);
     // A 10 mm face offset lifts the pad a further 10 mm along the face normal.
     expect(topZ(m(10)) - onFace).toBeCloseTo(m(10), 6);
+  });
+
+  it("a zero-offset on-face join uses the native local prism result", () => {
+    const r = mm(5);
+    const h = mm(10);
+    const baseVolume = mm(40) * mm(40) * mm(20);
+    const doc: CadDocument = {
+      features: [
+        { id: "base", type: "box", params: { dx: mm(40), dy: mm(40), dz: mm(20) } },
+        {
+          id: "profile",
+          type: "sketch",
+          data: {
+            profile: { kind: "circle", center: [mm(20), mm(20)], radius: r },
+            plane: { kind: "face", face: { normal: [0, 0, 1] }, offset: 0 },
+          },
+        },
+        {
+          id: "boss",
+          type: "extrude",
+          deps: ["profile"],
+          params: { height: h },
+          data: { op: "join" },
+        },
+      ],
+      params: {},
+    };
+    const solid = rebuildDocument(oc, doc)!;
+    try {
+      expect(solid.isValid()).toBe(true);
+      expect(solidVolume(oc, solid)).toBeCloseTo(baseVolume + Math.PI * r * r * h, 10);
+    } finally {
+      solid.delete();
+    }
+  });
+
+  it("a rib feature rebuilds a native LocOpe linear form from its bound sketch", () => {
+    const r = mm(4);
+    const length = mm(12);
+    const doc: CadDocument = {
+      features: [
+        {
+          id: "profile",
+          type: "sketch",
+          data: { profile: { kind: "circle", center: [0, 0], radius: r } },
+        },
+        {
+          id: "rib",
+          type: "rib",
+          deps: ["profile"],
+          params: { length },
+          data: { sketchId: "profile", op: "new" },
+        },
+      ],
+      params: {},
+    };
+    const solid = rebuildDocument(oc, doc)!;
+    try {
+      expect(solidVolume(oc, solid)).toBeCloseTo(Math.PI * r * r * length, 10);
+    } finally {
+      solid.delete();
+    }
   });
 
   it("cut with back produces a two-sided pocket tool (G5)", () => {
@@ -538,7 +649,12 @@ describe("CAD Studio rebuild (SPEC-5 M0.4)", () => {
           data: {
             op: "new",
             // +Z top and +X side → edge along +Y at x=40, z=20 (typical box edge).
-            axisEdge: { faceNormals: [[0, 0, 1], [1, 0, 0]] as [[number, number, number], [number, number, number]] },
+            axisEdge: {
+              faceNormals: [
+                [0, 0, 1],
+                [1, 0, 0],
+              ] as [[number, number, number], [number, number, number]],
+            },
           },
         },
       ],
@@ -654,6 +770,70 @@ describe("CAD Studio rebuild (SPEC-5 M0.4)", () => {
     // the fillet must still apply (no R2 throw, still rounded).
     const b = rebuildTagged(oc, doc(mm(80)), { linearDeflection: mm(0.5) })!;
     expect(b.faceGroups.length).toBe(a.faceGroups.length);
+  });
+
+  it("§13.1 fillet history rewrites the right face when two bodies share one plane", () => {
+    const probe: CadDocument = {
+      features: [
+        { id: "a", type: "box", params: { dx: mm(40), dy: mm(30), dz: mm(20) } },
+        {
+          id: "b",
+          type: "box",
+          params: { dx: mm(40), dy: mm(30), dz: mm(20), ox: mm(60), oy: 0, oz: 0 },
+          data: { op: "new" },
+        },
+      ],
+      params: {},
+    };
+    const tagged = rebuildTagged(oc, probe, { linearDeflection: mm(0.5) })!;
+    const topFaces = tagged.faceGroups.filter((face) => Math.round(face.normal[2]) === 1);
+    expect(topFaces).toHaveLength(2);
+    expect(surfacesMatch(topFaces[0]!.surface!, topFaces[1]!.surface!)).toBe(true);
+    const topA = topFaces.find((face) => face.centroid[0] < mm(40))!;
+    const edgeA = tagged.edges.find(
+      (edge) =>
+        edge.midpoint[0] < mm(40) && edge.faceNormals.some((normal) => Math.round(normal[2]) === 1),
+    )!;
+    const downstreamFace = {
+      normal: topA.normal,
+      centroid: topA.centroid,
+      surface: topA.surface,
+    };
+    const before = [...topA.centroid];
+    const doc: CadDocument = {
+      features: [
+        ...probe.features,
+        {
+          id: "fillet",
+          type: "fillet",
+          params: { radius: mm(3) },
+          data: {
+            edges: [
+              {
+                faceNormals: edgeA.faceNormals,
+                midpoint: edgeA.midpoint,
+                faceSurfaces: edgeA.faceSurfaces,
+              },
+            ],
+          },
+        },
+        {
+          id: "later-shell",
+          type: "shell",
+          suppressed: true,
+          params: { thickness: mm(2) },
+          data: { faces: [downstreamFace] },
+        },
+      ],
+      params: {},
+    };
+
+    const built = rebuildDocument(oc, doc)!;
+    built.delete();
+    const rewritten = (doc.features[3]!.data!.faces as (typeof downstreamFace)[])[0]!;
+    expect(rewritten.centroid).not.toEqual(before); // successor, not stale pre-fillet centroid
+    expect(rewritten.centroid![0]).toBeLessThan(mm(40)); // stayed on body A, not coplanar body B
+    expect(rewritten.surface).toEqual(topA.surface);
   });
 
   it("chamfer on a picked EdgeRef bevels the edge (FR-30)", () => {
@@ -938,6 +1118,115 @@ describe("CAD Studio rebuild (SPEC-5 M0.4)", () => {
     expect(Math.max(...xs)).toBeLessThan(mm(75));
   });
 
+  it("circularPattern with toolFeatures unions N tool copies onto the base (C6 parity)", () => {
+    const m = (x: number): number => mm(x);
+    // Base plate; circular-pattern a small boss about Z through the plate centre.
+    const doc: CadDocument = {
+      features: [
+        { id: "f1", type: "box", params: { dx: m(40), dy: m(40), dz: m(10) } },
+        {
+          id: "f2",
+          type: "circularPattern",
+          params: {
+            count: 4,
+            angle: Math.PI * 2,
+            ox: m(20),
+            oy: m(20),
+            oz: 0,
+            az: 1,
+          },
+          data: {
+            toolFeatures: [
+              {
+                id: "t0",
+                type: "sketch",
+                data: {
+                  profile: loopProfile([
+                    [m(28), m(18)],
+                    [m(34), m(18)],
+                    [m(34), m(24)],
+                    [m(28), m(24)],
+                  ]),
+                  plane: { base: "XY", offset: m(10) },
+                },
+              },
+              {
+                id: "t1",
+                type: "extrude",
+                deps: ["t0"],
+                params: { height: m(4) },
+                data: { op: "new" },
+              },
+            ],
+          },
+        },
+      ],
+      params: {},
+    };
+    const built = rebuildTaggedWithProps(oc, doc, { linearDeflection: mm(0.5) });
+    expect(built).not.toBeNull();
+    const baseVol = m(40) * m(40) * m(10);
+    const bossVol = m(6) * m(6) * m(4);
+    // Base + 4 non-overlapping bosses.
+    expect(built!.volume).toBeCloseTo(baseVol + 4 * bossVol, 5);
+  });
+
+  it("sweep joins onto an existing body by default (C4)", () => {
+    const m = (x: number): number => mm(x);
+    const boxVol = m(40) * m(40) * m(10);
+    const doc: CadDocument = {
+      features: [
+        { id: "f0", type: "box", params: { dx: m(40), dy: m(40), dz: m(10) } },
+        {
+          id: "f1",
+          type: "sweep",
+          data: {
+            profile: { kind: "circle", center: [m(5), m(5)], radius: m(3) },
+            plane: { base: "XY", offset: m(10) },
+            path: {
+              kind: "polyline",
+              points: [
+                [0, 0, 0],
+                [0, 0, m(20)],
+              ],
+            },
+          },
+        },
+      ],
+      params: {},
+    };
+    const built = rebuildTaggedWithProps(oc, doc, { linearDeflection: mm(0.5) });
+    expect(built).not.toBeNull();
+    expect(built!.volume).toBeGreaterThan(boxVol * 1.01);
+  });
+
+  it("variable-radius fillet (radius2) builds without error (C8)", () => {
+    const m = (x: number): number => mm(x);
+    const doc: CadDocument = {
+      features: [
+        { id: "f1", type: "box", params: { dx: m(30), dy: m(20), dz: m(15) } },
+        {
+          id: "f2",
+          type: "fillet",
+          params: { radius: m(1), radius2: m(3) },
+          data: {
+            selector: { kind: "convexEdges" },
+          },
+        },
+      ],
+      params: {},
+    };
+    // Kernel accepts variable fillet; volume should drop vs sharp box.
+    const sharp = rebuildTaggedWithProps(
+      oc,
+      { features: [doc.features[0]!], params: {} },
+      { linearDeflection: mm(0.5) },
+    )!;
+    const filleted = rebuildTaggedWithProps(oc, doc, { linearDeflection: mm(0.5) });
+    expect(filleted).not.toBeNull();
+    expect(filleted!.volume).toBeLessThan(sharp.volume);
+  });
+
   it("loft joins onto an existing body by default (C4)", () => {
     const m = (x: number): number => mm(x);
     const boxVol = m(40) * m(40) * m(10);
@@ -1010,6 +1299,24 @@ describe("CAD Studio rebuild (SPEC-5 M0.4)", () => {
   it("importStep with no STEP text throws", () => {
     const doc: CadDocument = { features: [{ id: "f1", type: "importStep", data: {} }], params: {} };
     expect(() => rebuildDocument(oc, doc)).toThrow(/missing STEP text/);
+  });
+
+  it("an importIges feature rebuilds an imported IGES solid", () => {
+    const box = makeBox(oc, mm(25), mm(20), mm(15));
+    const iges = exportIges(oc, box);
+    box.delete();
+    const built = rebuildDocument(oc, {
+      features: [{ id: "f1", type: "importIges", name: "part.igs", data: { iges } }],
+      params: {},
+    });
+    expect(built).not.toBeNull();
+    expect(solidVolume(oc, built!)).toBeCloseTo(mm(25) * mm(20) * mm(15), 12);
+    built!.delete();
+  });
+
+  it("importIges with no IGES text throws", () => {
+    const doc: CadDocument = { features: [{ id: "f1", type: "importIges", data: {} }], params: {} };
+    expect(() => rebuildDocument(oc, doc)).toThrow(/missing IGES text/);
   });
 
   it("a circle sketch → extrude builds a true cylinder (FR-16 curved profile)", () => {
@@ -1370,7 +1677,7 @@ describe("CAD Studio rebuild (SPEC-5 M0.4)", () => {
     solid.delete();
   });
 
-  describe("§2.4 multi-body documents: \"new body\" no longer destroys the part", () => {
+  describe('§2.4 multi-body documents: "new body" no longer destroys the part', () => {
     const m = (x: number): number => mm(x);
 
     /** Box, then a second box as a NEW body offset clear of the first. */
@@ -1614,7 +1921,11 @@ describe("CAD Studio rebuild (SPEC-5 M0.4)", () => {
         const pts = single.edges[0]!.positions;
         let len = 0;
         for (let i = 3; i < pts.length; i += 3) {
-          len += Math.hypot(pts[i]! - pts[i - 3]!, pts[i + 1]! - pts[i - 2]!, pts[i + 2]! - pts[i - 1]!);
+          len += Math.hypot(
+            pts[i]! - pts[i - 3]!,
+            pts[i + 1]! - pts[i - 2]!,
+            pts[i + 2]! - pts[i - 1]!,
+          );
         }
         expect(removed).toBeCloseTo((1 - Math.PI / 4) * m(1) ** 2 * len, 9);
       } finally {
@@ -2411,7 +2722,9 @@ describe("CAD Studio rebuild (SPEC-5 M0.4)", () => {
     ]);
     const withHole = {
       ...outer,
-      holes: [{ kind: "circle" as const, center: [m(20), m(15)] as [number, number], radius: m(5) }],
+      holes: [
+        { kind: "circle" as const, center: [m(20), m(15)] as [number, number], radius: m(5) },
+      ],
     };
     const solidDoc = (profile: typeof outer | typeof withHole): CadDocument => ({
       features: [
@@ -2420,8 +2733,12 @@ describe("CAD Studio rebuild (SPEC-5 M0.4)", () => {
       ],
       params: {},
     });
-    const vOuter = rebuildTaggedWithProps(oc, solidDoc(outer), { linearDeflection: mm(0.5) })!.volume;
-    const vHole = rebuildTaggedWithProps(oc, solidDoc(withHole), { linearDeflection: mm(0.5) })!.volume;
+    const vOuter = rebuildTaggedWithProps(oc, solidDoc(outer), {
+      linearDeflection: mm(0.5),
+    })!.volume;
+    const vHole = rebuildTaggedWithProps(oc, solidDoc(withHole), {
+      linearDeflection: mm(0.5),
+    })!.volume;
     expect(vOuter).toBeCloseTo(m(40) * m(30) * m(10), 7);
     expect(vHole).toBeLessThan(vOuter);
     // Cylinder hole ≈ π r² h
@@ -2515,7 +2832,12 @@ describe("round primitive features", () => {
   it("builds a cylinder with the exact analytic volume", () => {
     const doc: CadDocument = {
       features: [
-        { id: "f1", type: "cylinder", params: { radius: mm(10), height: mm(20) }, data: { op: "join" } },
+        {
+          id: "f1",
+          type: "cylinder",
+          params: { radius: mm(10), height: mm(20) },
+          data: { op: "join" },
+        },
       ],
       params: {},
     };
@@ -2628,7 +2950,11 @@ describe("round primitive features", () => {
         { radius1: mm(10), radius2: mm(5), height: mm(20) },
         ((Math.PI * mm(20)) / 3) * (mm(10) ** 2 + mm(10) * mm(5) + mm(5) ** 2),
       ],
-      ["torus", { majorRadius: mm(20), minorRadius: mm(5) }, 2 * Math.PI ** 2 * mm(20) * mm(5) ** 2],
+      [
+        "torus",
+        { majorRadius: mm(20), minorRadius: mm(5) },
+        2 * Math.PI ** 2 * mm(20) * mm(5) ** 2,
+      ],
     ];
     for (const [type, params, expected] of cases) {
       const doc: CadDocument = {
@@ -2636,7 +2962,7 @@ describe("round primitive features", () => {
         params: {},
       };
       const solid = rebuildDocument(oc, doc);
-    expect(solid).not.toBeNull();
+      expect(solid).not.toBeNull();
       expect(solidVolume(oc, solid!), `${type} volume`).toBeCloseTo(expected, 12);
       solid!.delete();
     }
@@ -2659,8 +2985,12 @@ describe("round primitive features", () => {
           params: {
             radius: mm(10),
             height: mm(30),
-            ox: mm(20), oy: mm(20), oz: mm(20), // top-face centroid
-            ax: 0, ay: 0, az: 1,                // OUTWARD normal
+            ox: mm(20),
+            oy: mm(20),
+            oz: mm(20), // top-face centroid
+            ax: 0,
+            ay: 0,
+            az: 1, // OUTWARD normal
             angle: 2 * Math.PI,
           },
           data: { op: "cut" },
@@ -2689,8 +3019,12 @@ describe("round primitive features", () => {
           params: {
             radius: mm(5),
             height: depth + OVERSHOOT,
-            ox: mm(20), oy: mm(20), oz: mm(20) + OVERSHOOT, // proud of the face
-            ax: 0, ay: 0, az: -1,                            // INWARD normal
+            ox: mm(20),
+            oy: mm(20),
+            oz: mm(20) + OVERSHOOT, // proud of the face
+            ax: 0,
+            ay: 0,
+            az: -1, // INWARD normal
             angle: 2 * Math.PI,
           },
           data: { op: "cut" },

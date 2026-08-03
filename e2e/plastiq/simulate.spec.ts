@@ -19,6 +19,15 @@ interface SimApi {
   stop: () => void;
 }
 
+interface CadStateApi {
+  getState: () => {
+    featureErrors: Record<string, string>;
+    picks: { kind: string; id: number }[];
+    simulating: boolean;
+    workspace: string;
+  };
+}
+
 declare global {
   // eslint-disable-next-line no-var
   var faceCount: () => number;
@@ -124,4 +133,85 @@ test("rewind restores the spawned pose (snapshot/restore round-trip, MuJoCo defa
   expect(r.zBack).not.toBeNull();
   expect(r.zFell!).toBeLessThan(r.z0! - 1e-3); // it genuinely fell while stepping
   expect(r.zBack!).toBeCloseTo(r.z0!, 6); // rewind restored the exact spawned height
+});
+
+test("a failed Simulate start reports the reason and returns to Design", async ({ page }) => {
+  await page.goto("/");
+  await expect(page.getByTestId("status")).toHaveText("ready", { timeout: 240_000 });
+  await page.waitForFunction(
+    () =>
+      (globalThis as { __plastiqViewport?: { builtPart: unknown } }).__plastiqViewport?.builtPart !=
+      null,
+    undefined,
+    { timeout: 240_000 },
+  );
+  await page.evaluate(() => {
+    (
+      globalThis as { __plastiqViewport?: { fitToView?: () => void } }
+    ).__plastiqViewport?.fitToView?.();
+  });
+  await page.waitForTimeout(700);
+
+  // Author a real downstream feature through the visible controls.
+  await page.getByTestId("act-selmode-edge").click();
+  const edge = await page.evaluate(
+    () =>
+      (
+        globalThis as {
+          __plastiqViewport?: { candidatePx?: (mode: string) => { x: number; y: number } | null };
+        }
+      ).__plastiqViewport?.candidatePx?.("edge") ?? null,
+  );
+  if (!edge) throw new Error("no edge candidate on the seeded body");
+  await page.mouse.click(edge.x, edge.y);
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          (globalThis as { __cadStore?: CadStateApi })
+            .__cadStore!.getState()
+            .picks.filter((pick) => pick.kind === "edge").length,
+      ),
+    )
+    .toBe(1);
+  await page.getByTestId("act-fillet").click();
+  await expect(page.getByTestId("status")).toHaveText("ready", { timeout: 240_000 });
+  await expect(page.getByTestId("feature-row")).toHaveCount(2);
+  if (await page.getByTestId("feature-edit-commit").isVisible()) {
+    await page.getByTestId("feature-edit-commit").click();
+  }
+
+  // Make the fillet impossible through Properties. Per-feature isolation keeps
+  // the preceding box visible, but lower() must reject this invalid history.
+  await page.getByTestId("feature-row").nth(1).click();
+  const radiusInput = page
+    .getByTestId("feature-editor")
+    .locator("label")
+    .filter({ hasText: /^radius \(mm\)$/ })
+    .locator("input");
+  await radiusInput.fill("1000");
+  await radiusInput.press("Enter");
+  await expect(page.getByTestId("status")).toContainText("1 feature failed:", {
+    timeout: 240_000,
+  });
+  await expect(page.getByTestId("badge-error")).toBeVisible();
+
+  // The workspace switch drives the actual asynchronous start path. Its catch
+  // must surface the lower failure and restore the Design workspace authority.
+  await page.getByTestId("workspace-switcher").selectOption("simulate");
+  await expect(page.getByTestId("status")).toContainText("Simulate failed:", {
+    timeout: 240_000,
+  });
+  await expect(page.getByTestId("workspace-switcher")).toHaveValue("design");
+  const recovered = await page.evaluate(() => {
+    const state = (globalThis as { __cadStore?: CadStateApi }).__cadStore!.getState();
+    return {
+      simulating: state.simulating,
+      workspace: state.workspace,
+      featureErrors: state.featureErrors,
+    };
+  });
+  expect(recovered.simulating).toBe(false);
+  expect(recovered.workspace).toBe("design");
+  expect(Object.keys(recovered.featureErrors)).toHaveLength(1);
 });

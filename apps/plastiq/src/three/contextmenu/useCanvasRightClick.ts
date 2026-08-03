@@ -99,7 +99,8 @@ export function useCanvasRightClick(part: BuiltPart | null): void {
       const worldPoint: [number, number, number] = surface
         ? [surface.x, surface.y, surface.z]
         : fallbackPoint(v);
-      const mode = useCadStore.getState().selMode;
+      // R5: null selMode = permissive cascade (face raycast first for menus; GPU face fallback).
+      const mode = useCadStore.getState().selMode ?? "face";
       let hit: RightClickHit | null = pickers.picker.pick(p, v, camera, mode);
       if (!hit && (mode === "face" || mode === "body") && pickers.gpu.rayHitsPart(p, camera, ndc)) {
         const id = pickers.gpu.pick(gl, camera, p, ndc);

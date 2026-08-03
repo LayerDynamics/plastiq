@@ -4,8 +4,10 @@ import {
   emptySketch,
   perpDistance,
   regularPolygonVertices,
+  resolveOffsetCurve,
   slotOutline,
   toSolverInput,
+  type OffsetEntity,
   type SketchModel,
 } from "./model.js";
 
@@ -102,6 +104,88 @@ describe("concentric + tangent constraints (D7, kernel-backed)", () => {
     const r = solveSketch(input.points, input.circles, input.constraints);
     // Perp distance from the fixed centre (0.05,0.03) to the line y=0 is 0.03.
     expect(r.radii[0]).toBeCloseTo(0.03, 6);
+  });
+});
+
+describe("ellipse + curved constraint bridge (§13.3)", () => {
+  it("maps an ellipse and point-on-ellipse into native planegcs input", () => {
+    const model: SketchModel = {
+      ...emptySketch(),
+      points: [
+        { id: "center", u: 0, v: 0, fixed: true },
+        { id: "focus", u: 0.04, v: 0, fixed: true },
+        { id: "point", u: 0.02, v: 0.028, fixed: true },
+      ],
+      entities: [
+        { id: "ellipse", kind: "ellipse", center: "center", focus1: "focus", radmin: 0.02 },
+      ],
+      constraints: [{ id: "on", kind: "pointOnObject", point: "point", object: "ellipse" }],
+    };
+    const input = toSolverInput(model);
+    expect(input.ellipses).toEqual([{ center: 0, focus1: 1, radmin: 0.02 }]);
+    expect(input.constraints).toEqual([{ kind: "pointOnEllipse", p: 2, ellipse: 0 }]);
+    const result = solveSketch(
+      input.points,
+      input.circles,
+      input.constraints,
+      input.ellipses,
+      input.arcs,
+    );
+    expect(result.ellipseRadmin[0]).toBeGreaterThan(0);
+  });
+
+  it("resolves signed line and circle offsets from the latest source geometry", () => {
+    const model: SketchModel = {
+      ...emptySketch(),
+      points: [
+        { id: "a", u: 0, v: 0 },
+        { id: "b", u: 0.04, v: 0 },
+        { id: "c", u: 0.02, v: 0.02 },
+      ],
+      entities: [
+        { id: "line", kind: "line", a: "a", b: "b" },
+        { id: "circle", kind: "circle", center: "c", radius: 0.01 },
+        { id: "line-off", kind: "offset", source: "line", distance: 0.005 },
+        { id: "circle-off", kind: "offset", source: "circle", distance: 0.005 },
+      ],
+      constraints: [],
+    };
+    expect(resolveOffsetCurve(model, model.entities[2]! as OffsetEntity)).toEqual({
+      kind: "line",
+      a: [0, 0.005],
+      b: [0.04, 0.005],
+    });
+    expect(resolveOffsetCurve(model, model.entities[3]! as OffsetEntity)).toEqual({
+      kind: "circle",
+      center: [0.02, 0.02],
+      radius: 0.015,
+    });
+  });
+
+  it("maps equal-radius and tangency across circle/arc pairs", () => {
+    const model: SketchModel = {
+      ...emptySketch(),
+      points: [
+        { id: "cc", u: 0, v: 0 },
+        { id: "a", u: 0.04, v: 0 },
+        { id: "t", u: 0.05, v: 0.01 },
+        { id: "b", u: 0.04, v: 0.02 },
+      ],
+      entities: [
+        { id: "circle", kind: "circle", center: "cc", radius: 0.01 },
+        { id: "arc", kind: "arc", a: "a", through: "t", b: "b" },
+      ],
+      constraints: [
+        { id: "eq", kind: "equalRadius", curve1: "circle", curve2: "arc" },
+        { id: "tan", kind: "tangent", curve1: "circle", curve2: "arc" },
+      ],
+    };
+    const input = toSolverInput(model);
+    expect(input.arcEntityIds).toEqual(["arc"]);
+    expect(input.constraints).toEqual([
+      { kind: "equalRadiusCircleArc", circle: 0, arc: 0 },
+      { kind: "tangentArcCircle", circle: 0, arc: 0 },
+    ]);
   });
 });
 

@@ -69,7 +69,6 @@ def solve_sparse(
     self_calibrate: bool = False,
     image_names=None,
     detect_kwargs=None,
-    undistort: bool = True,
 ) -> SparseResult:
     """Run the sparse SfM pipeline on ``images`` (a list of ``(H, W, 3)`` uint8 arrays).
 
@@ -139,7 +138,7 @@ def solve_sparse(
     # --- emit ----------------------------------------------------------------------------------
     reg_names = [names[v] for v in reg]
     transforms_json = emit_transforms_json(
-        norm.poses_w2c, K, w, h, reg_names, undistort=undistort,
+        norm.poses_w2c, K, w, h, reg_names,
         applied_transform=norm.applied_transform,
     )
     import io
@@ -159,8 +158,8 @@ def solve_sparse(
         "mean_reprojection_error_px": sfm.mean_reproj,
         "mean_track_length": float(np.mean(track_lengths)) if track_lengths else 0.0,
         # The self-calibrated shared camera (§6.2). Distortion is 0 here: the default path holds the
-        # EXIF-prior intrinsics fixed and does not estimate Brown-Conrady coefficients, and `undistort`
-        # zeroes them on the wire regardless (D-6).
+        # EXIF-prior intrinsics fixed and does not estimate Brown-Conrady coefficients, so the emitted
+        # k1..p2 are always zero.
         "camera": {
             "model": "OPENCV",
             "w": w,
@@ -181,7 +180,6 @@ def solve_sparse(
         },
         "matching": matching,
         "seed": seed,
-        "undistorted": undistort,
     }
 
     return SparseResult(
@@ -202,7 +200,6 @@ class SolveResult:
     transforms_json: str            # nerfstudio/OpenGL transforms.json (→ services/nerf)
     sparse_ply: str                 # ASCII PLY (x y z r g b)
     dense_ply: str | None           # ASCII PLY (x y z nx ny nz r g b) or None when dense off / empty
-    images_undistorted: list | None  # parallel undistorted images, or None when none produced
     report: dict                    # FR-8 report (sparse fields + dense_points)
 
 
@@ -377,6 +374,5 @@ def solve(
         transforms_json=res.transforms_json,
         sparse_ply=res.sparse_ply,
         dense_ply=dense_ply,
-        images_undistorted=None,
         report=report,
     )

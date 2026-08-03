@@ -3,10 +3,10 @@
 // single-body fallback that geometry.worker.ts wires to onmessage/postMessage.
 
 import { beforeAll, describe, expect, it } from "vitest";
-import { importStep, initOcct, massProperties, mm, type Occt } from "@plastiq/cad";
+import { importStep, initOcct, massProperties, mm, type Occt, type TaggedMesh } from "@plastiq/cad";
 import type { CadDocument } from "../store/types.js";
 import { eulerXYZQuat } from "../viewport/placement.js";
-import { effectiveAssembly, handleRequest } from "./geometry.worker.core.js";
+import { effectiveAssembly, handleRequest, toTransfer } from "./geometry.worker.core.js";
 
 const INIT_TIMEOUT_MS = 120_000;
 
@@ -110,6 +110,86 @@ describe("effectiveAssembly", () => {
   });
 });
 
+describe("toTransfer — §17 bodyKind / free edges", () => {
+  const plane = {
+    kind: "plane" as const,
+    normal: [0, 0, 1] as [number, number, number],
+    origin: [0, 0, 0] as [number, number, number],
+  };
+
+  it("forwards bodyKind and freeEdgeCount from TaggedMesh for a solid", () => {
+    const tagged: TaggedMesh = {
+      vertices: [0, 0, 0, 1, 0, 0, 0, 1, 0],
+      indices: [0, 1, 2],
+      faceGroups: [
+        {
+          faceId: 0,
+          start: 0,
+          count: 3,
+          normal: [0, 0, 1],
+          centroid: [0.33, 0.33, 0],
+          surface: plane,
+        },
+      ],
+      edges: [
+        {
+          edgeId: 0,
+          positions: [0, 0, 0, 1, 0, 0],
+          faceNormals: [
+            [0, 0, 1],
+            [0, -1, 0],
+          ],
+          faceSurfaces: [plane, { kind: "plane", normal: [0, -1, 0], origin: [0, 0, 0] }],
+          faceIds: [0, 0],
+          midpoint: [0.5, 0, 0],
+        },
+      ],
+      vertexPoints: [{ vertexId: 0, position: [0, 0, 0] }],
+      droppedFaces: 0,
+      droppedEdges: 0,
+      unresolvedEdgeFaces: 0,
+      bodyKind: "solid",
+      freeEdgeCount: 0,
+    };
+    const mesh = toTransfer(tagged, 1e-3, [0.5, 0.5, 0.5], [1e-3]);
+    expect(mesh.bodyKind).toBe("solid");
+    expect(mesh.freeEdgeCount).toBe(0);
+    expect(mesh.edges[0]!.isFree).toBeUndefined();
+  });
+
+  it("forwards per-edge isFree flags for open shells", () => {
+    const tagged: TaggedMesh = {
+      vertices: [0, 0, 0, 1, 0, 0, 0, 1, 0],
+      indices: [0, 1, 2],
+      faceGroups: [],
+      edges: [
+        {
+          edgeId: 0,
+          positions: [0, 0, 0, 1, 0, 0],
+          faceNormals: [
+            [0, 0, 1],
+            [0, 0, 1],
+          ],
+          faceSurfaces: [plane, plane],
+          faceIds: [0, 0],
+          midpoint: [0.5, 0, 0],
+          isFree: true,
+        },
+      ],
+      vertexPoints: [],
+      droppedFaces: 0,
+      droppedEdges: 0,
+      unresolvedEdgeFaces: 0,
+      bodyKind: "shell",
+      freeEdgeCount: 4,
+    };
+    const mesh = toTransfer(tagged, 0, [0, 0, 0], []);
+    expect(mesh.bodyKind).toBe("shell");
+    expect(mesh.freeEdgeCount).toBe(4);
+    expect(mesh.edges[0]!.isFree).toBe(true);
+  });
+});
+
 describe("handleRequest — build", () => {
   it("rebuilds a box doc into a transferable mesh and lists its buffers", async () => {
     const { response, transfer } = await handleRequest(oc, {
@@ -126,6 +206,23 @@ describe("handleRequest — build", () => {
     // The transfer list carries the mesh's typed-array buffers (zero-copy hand-off).
     expect(transfer).toContain(response.mesh!.vertices.buffer);
     expect(transfer).toContain(response.mesh!.indices.buffer);
+  });
+
+  it("sets bodyKind=solid and freeEdgeCount=0 on a closed box (§17)", async () => {
+    const { response } = await handleRequest(oc, {
+      id: 16,
+      op: "build",
+      doc: boxDoc(),
+      deflection: mm(0.5),
+    });
+    expect(response.ok).toBe(true);
+    if (!response.ok || response.op !== "build") throw new Error("expected a build response");
+    expect(response.mesh).not.toBeNull();
+    // Real rebuild → tessellateTagged → toTransfer: body kind + free-edge tally.
+    expect(response.mesh!.bodyKind).toBe("solid");
+    expect(response.mesh!.freeEdgeCount).toBe(0);
+    // Closed solid: no free-edge flags on any transferred edge.
+    expect(response.mesh!.edges.every((e) => !e.isFree)).toBe(true);
   });
 
   it("returns mesh=null (no transfer) for a document with no geometry", async () => {
@@ -191,10 +288,22 @@ describe("handleRequest — export", () => {
   });
 
   it("bakes the placement pose into the exported STEP (§2.11.1 WYSIWYG)", async () => {
-    const unposed = await handleRequest(oc, { id: 11, op: "export", doc: boxDoc(), format: "step" });
-    const posed = await handleRequest(oc, { id: 12, op: "export", doc: placedBoxDoc(), format: "step" });
-    if (!unposed.response.ok || unposed.response.op !== "export") throw new Error("unposed export failed");
-    if (!posed.response.ok || posed.response.op !== "export") throw new Error("posed export failed");
+    const unposed = await handleRequest(oc, {
+      id: 11,
+      op: "export",
+      doc: boxDoc(),
+      format: "step",
+    });
+    const posed = await handleRequest(oc, {
+      id: 12,
+      op: "export",
+      doc: placedBoxDoc(),
+      format: "step",
+    });
+    if (!unposed.response.ok || unposed.response.op !== "export")
+      throw new Error("unposed export failed");
+    if (!posed.response.ok || posed.response.op !== "export")
+      throw new Error("posed export failed");
     // Round-trip both files through importStep: the posed file's COM must be the
     // unposed COM rotated π/2 about Z ((x, y, z) → (−y, x, z)) then lifted 0.5 m.
     const c0 = stepCom(oc, unposed.response.content);
@@ -206,9 +315,15 @@ describe("handleRequest — export", () => {
 
   it("§2.11.2: a 3-instance assembly exports ALL THREE posed bodies (STEP)", async () => {
     const one = await handleRequest(oc, { id: 13, op: "export", doc: boxDoc(), format: "step" });
-    const many = await handleRequest(oc, { id: 14, op: "export", doc: assemblyDoc(), format: "step" });
+    const many = await handleRequest(oc, {
+      id: 14,
+      op: "export",
+      doc: assemblyDoc(),
+      format: "step",
+    });
     if (!one.response.ok || one.response.op !== "export") throw new Error("single export failed");
-    if (!many.response.ok || many.response.op !== "export") throw new Error("assembly export failed");
+    if (!many.response.ok || many.response.op !== "export")
+      throw new Error("assembly export failed");
 
     // The response says how many bodies shipped — the UI reports this.
     expect(one.response.bodyCount).toBe(1);
@@ -295,7 +410,8 @@ describe("handleRequest — facePlane", () => {
       face: { normal: top.normal, centroid: top.centroid },
     });
     expect(response.ok).toBe(true);
-    if (!response.ok || response.op !== "facePlane") throw new Error("expected a facePlane response");
+    if (!response.ok || response.op !== "facePlane")
+      throw new Error("expected a facePlane response");
     expect(response.plane).not.toBeNull();
     expect(Math.abs(response.plane!.normal[2])).toBeCloseTo(1, 6);
   });
@@ -308,7 +424,55 @@ describe("handleRequest — facePlane", () => {
       face: { normal: [0, 0, 1] },
     });
     expect(response.ok).toBe(true);
-    if (!response.ok || response.op !== "facePlane") throw new Error("expected a facePlane response");
+    if (!response.ok || response.op !== "facePlane")
+      throw new Error("expected a facePlane response");
     expect(response.plane).toBeNull();
+  });
+});
+
+describe("handleRequest — exact assembly interference (§13.2)", () => {
+  it("keeps positive-volume overlap but rejects touching and distant AABB candidates", async () => {
+    const doc: CadDocument = {
+      ...boxDoc(),
+      assembly: {
+        instances: [
+          { id: "base", name: "Base", pose: { position: [0, 0, 0], orientation: [0, 0, 0, 1] } },
+          {
+            id: "overlap",
+            name: "Overlap",
+            pose: { position: [mm(20), 0, 0], orientation: [0, 0, 0, 1] },
+          },
+          {
+            id: "touch",
+            name: "Touch",
+            pose: { position: [mm(40), 0, 0], orientation: [0, 0, 0, 1] },
+          },
+          {
+            id: "far",
+            name: "Far",
+            pose: { position: [mm(100), 0, 0], orientation: [0, 0, 0, 1] },
+          },
+        ],
+        mates: [],
+        joints: [],
+      },
+    };
+    const { response } = await handleRequest(oc, {
+      id: 30,
+      op: "interference",
+      doc,
+      // Include the far pair deliberately: the exact distance stage must reject
+      // even a conservative/incorrect broad-phase candidate safely.
+      candidates: [
+        { a: "base", b: "overlap" },
+        { a: "base", b: "touch" },
+        { a: "base", b: "far" },
+      ],
+    });
+    expect(response.ok).toBe(true);
+    if (!response.ok || response.op !== "interference") {
+      throw new Error("expected an interference response");
+    }
+    expect(response.clashes).toEqual([{ a: "base", b: "overlap" }]);
   });
 });

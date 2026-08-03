@@ -6,7 +6,10 @@
   "type": "module",
   "description": "Plastiq CAD Studio: an interactive parametric CAD editor (React + three.js) on @plastiq/cad (SPEC-5).",
   "scripts": {
-    "dev": "vite",
+    "dev": "../../scripts/dev-services.sh with ../../node_modules/.bin/vite",
+    "dev:ui": "vite",
+    "dev:web": "../../scripts/dev-services.sh with ../../node_modules/.bin/vite --host 0.0.0.0",
+    "dev:mobile": "../../scripts/dev-services.sh with ../../node_modules/.bin/vite --host 0.0.0.0",
     "build": "tsc --noEmit -p tsconfig.json && vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit -p tsconfig.json",

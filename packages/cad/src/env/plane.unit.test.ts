@@ -2,7 +2,15 @@
 
 import { describe, expect, it } from "vitest";
 
-import { offsetPlane, planePointToWorld, planeXY, planeXZ, planeYAxis, planeYZ } from "./plane.js";
+import {
+  offsetPlane,
+  planePointToWorld,
+  planeXY,
+  planeXZ,
+  planeYAxis,
+  planeYZ,
+  worldPointToPlane,
+} from "./plane.js";
 
 describe("datum planes (unit)", () => {
   it("planeXY: origin at 0, normal +Z, xAxis +X", () => {
@@ -26,5 +34,18 @@ describe("datum planes (unit)", () => {
   it("planePointToWorld maps (u,v) along (xAxis,yAxis) from the origin", () => {
     expect(planePointToWorld(planeXY(), 2, 3)).toEqual([2, 3, 0]);
     expect(planePointToWorld(planeYZ(), 2, 3)).toEqual([0, 2, 3]);
+  });
+  it("worldPointToPlane is the inverse of planePointToWorld on-plane", () => {
+    const w = planePointToWorld(planeXY(), 2, 3);
+    const p = worldPointToPlane(planeXY(), w);
+    expect(p.u).toBeCloseTo(2, 12);
+    expect(p.v).toBeCloseTo(3, 12);
+    expect(p.height).toBeCloseTo(0, 12);
+  });
+  it("worldPointToPlane reports signed height off the plane", () => {
+    const p = worldPointToPlane(planeXY(), [1, 0, 0.5]);
+    expect(p.u).toBeCloseTo(1, 12);
+    expect(p.v).toBeCloseTo(0, 12);
+    expect(p.height).toBeCloseTo(0.5, 12);
   });
 });

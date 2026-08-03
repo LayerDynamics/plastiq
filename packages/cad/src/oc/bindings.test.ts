@@ -23,6 +23,52 @@ beforeAll(async () => {
 });
 
 describe("trimmed-wasm bindings the kernel requires", () => {
+  it("binds the native local-form and exact-distance surface (§13.2)", () => {
+    expect(typeof oc.BRepFeat_Form).toBe("function");
+    expect(typeof oc.BRepFeat_MakePrism_2).toBe("function");
+    expect(typeof oc.BRepFeat_MakeDPrism_1).toBe("function");
+    expect(typeof oc.LocOpe_LinearForm_2).toBe("function");
+    expect(typeof oc.BRepExtrema_DistShapeShape_1).toBe("function");
+
+    // Construct and perform the exact-distance class: typeof alone does not
+    // detect an omitted embind base/argument type.
+    const a = makeBox(oc, 0.01, 0.01, 0.01);
+    const b = translate(oc, a, [0.02, 0, 0]);
+    try {
+      expect(a.distanceTo(b).distance).toBeCloseTo(0.01, 10);
+    } finally {
+      b.delete();
+      a.delete();
+    }
+  });
+
+  it("binds and constructs exact ellipse edges (§13.3)", () => {
+    expect(typeof oc.gp_Elips_2).toBe("function");
+    expect(typeof oc.BRepBuilderAPI_MakeEdge_12).toBe("function");
+
+    const center = new oc.gp_Pnt_3(0, 0, 0);
+    const normal = new oc.gp_Dir_4(0, 0, 1);
+    const majorDirection = new oc.gp_Dir_4(1, 0, 0);
+    const axes = new oc.gp_Ax2_2(center, normal, majorDirection);
+    const ellipse = new oc.gp_Elips_2(axes, 0.02, 0.01);
+    const edgeMaker = new oc.BRepBuilderAPI_MakeEdge_12(ellipse);
+    const edge = edgeMaker.Edge();
+    try {
+      expect(edgeMaker.IsDone()).toBe(true);
+      expect(edge.IsNull()).toBe(false);
+      expect(ellipse.MajorRadius()).toBeCloseTo(0.02, 12);
+      expect(ellipse.MinorRadius()).toBeCloseTo(0.01, 12);
+    } finally {
+      edge.delete();
+      edgeMaker.delete();
+      ellipse.delete();
+      axes.delete();
+      majorDirection.delete();
+      normal.delete();
+      center.delete();
+    }
+  });
+
   it("binds BRepAdaptor_Surface + the gp_ surface types (§2.1 per-surface-type FaceRefs)", () => {
     // A face's persistent signature is derived from its ACTUAL surface via
     // GetType(); without these a closed curved face can only be described by its
@@ -235,6 +281,53 @@ describe("trimmed-wasm bindings the kernel requires", () => {
     // …so the honest generic message is what the user gets.
     expect(describeOcctError(caught)).toMatch(/geometry kernel rejected this operation/);
     expect(isRawOcctFailure(caught)).toBe(true);
+  });
+
+  /**
+   * §13.2 helix pcurve path is LIVE: gp_Pnt2d / gp_Dir2d are bound, so
+   * Geom2d_Line_3 + MakeEdge_31 + BuildCurves3d construct without UnboundTypeError.
+   */
+  it("binds helix pcurve symbols — gp_Pnt2d / Geom2d_Line construct (§13.2)", () => {
+    expect(typeof oc.Geom_CylindricalSurface_1).toBe("function");
+    expect(typeof oc.Geom_ConicalSurface_1).toBe("function");
+    expect(typeof oc.Geom2d_Line_3).toBe("function");
+    expect(typeof oc.gp_Pnt2d_3).toBe("function");
+    expect(typeof oc.gp_Dir2d_4).toBe("function");
+    expect(typeof oc.Handle_Geom2d_Curve_2).toBe("function");
+    expect(typeof oc.Handle_Geom_Surface_2).toBe("function");
+    expect(typeof oc.BRepBuilderAPI_MakeEdge_31).toBe("function");
+    expect(typeof oc.BRepLib.BuildCurves3d_2).toBe("function");
+
+    // Surfaces actually construct.
+    const o = new oc.gp_Pnt_3(0, 0, 0);
+    const d = new oc.gp_Dir_4(0, 0, 1);
+    const ax = new oc.gp_Ax3_4(o, d);
+    const cyl = new oc.Geom_CylindricalSurface_1(ax, 0.01);
+    expect(cyl.Radius()).toBeCloseTo(0.01, 12);
+
+    // Exact pcurve path: 2d line on the cylinder over one turn UV span.
+    const p0 = new oc.gp_Pnt2d_3(0, 0);
+    const d2 = new oc.gp_Dir2d_4(1, 0); // pure-U direction for construct pin
+    const line2d = new oc.Geom2d_Line_3(p0, d2);
+    const hC = new oc.Handle_Geom2d_Curve_2(line2d);
+    const hS = new oc.Handle_Geom_Surface_2(cyl);
+    const edgeMaker = new oc.BRepBuilderAPI_MakeEdge_31(hC, hS, 0, Math.PI / 2);
+    expect(edgeMaker.IsDone()).toBe(true);
+    const edge = edgeMaker.Edge();
+    expect(edge.IsNull()).toBe(false);
+    expect(oc.BRepLib.BuildCurves3d_2(edge)).toBe(true);
+
+    edge.delete();
+    edgeMaker.delete();
+    hS.delete();
+    hC.delete();
+    // line2d owned by handle; p0/d2 still ours
+    p0.delete();
+    d2.delete();
+    cyl.delete();
+    ax.delete();
+    d.delete();
+    o.delete();
   });
 
   it("classifies a real face through BRepAdaptor_Surface.GetType() (the §2.1 keystone)", () => {

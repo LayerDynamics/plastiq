@@ -9,7 +9,13 @@ import { useThree } from "@react-three/fiber";
 import { useCadStore } from "../store/store.js";
 import { boxSelect, ndcRect } from "../viewport/pick.js";
 import { applyHighlight } from "../viewport/highlight.js";
-import { nextMeasure } from "../viewport/measure.js";
+import {
+  edgeEndpoint,
+  nextMeasure,
+  type MeasureEndpoint,
+  vertexEndpoint,
+  worldEndpoint,
+} from "../viewport/measure.js";
 import { useSharedPickers } from "./sharedPickers.js";
 import type { BuiltPart } from "../viewport/buildMesh.js";
 import type { Pick, SelectionMode } from "../store/types.js";
@@ -183,8 +189,9 @@ export function Picking({ part }: { part: BuiltPart | null }): null {
   const hoverRef = useRef<Pick | null>(null);
   const autoFaceKeysRef = useRef(new Set<string>());
   const manualFaceKeysRef = useRef(new Set<string>());
-  // The first world point banked by the measure tool, awaiting its second click.
-  const measureFirstRef = useRef<THREE.Vector3 | null>(null);
+  // The first measure endpoint banked by the tool (VertexRef / EdgeRef / world),
+  // awaiting its second click (FR-13 + R12).
+  const measureFirstRef = useRef<MeasureEndpoint | null>(null);
   // Picker + GpuPicker shared with the right-click context menu (one GPU-id
   // render target / id-mesh build between them); ref-count-released on unmount.
   const pickers = useSharedPickers();
@@ -321,15 +328,37 @@ export function Picking({ part }: { part: BuiltPart | null }): null {
     const bodyHit = (pt: BuiltPart, ndc: { x: number; y: number }): Pick | null => {
       return gpuFaceId(pt, ndc) != null ? { kind: "body", id: 0 } : null;
     };
+    // R5 — `selMode` is a real click filter. When a specific mode is set, only that
+    // entity kind is considered (raycast + the 14 px screen-nearest fallback). When
+    // mode is null (permissive / "all"), keep the historical priority cascade
+    // vertex → edge → face so a bare click still lands on the most precise target.
     const entityHit = (
       pt: BuiltPart,
-      mode: SelectionMode,
+      mode: SelectionMode | null,
       ndc: { x: number; y: number },
     ): Pick | null => {
       if (mode === "body") return bodyHit(pt, ndc);
-      const v = pickers.picker.pick(pt, new THREE.Vector2(ndc.x, ndc.y), camera, "vertex") ?? screenNearest(pt, "vertex", ndc);
+      if (mode === "vertex") {
+        return (
+          pickers.picker.pick(pt, new THREE.Vector2(ndc.x, ndc.y), camera, "vertex") ??
+          screenNearest(pt, "vertex", ndc)
+        );
+      }
+      if (mode === "edge") {
+        return (
+          pickers.picker.pick(pt, new THREE.Vector2(ndc.x, ndc.y), camera, "edge") ??
+          screenNearest(pt, "edge", ndc)
+        );
+      }
+      if (mode === "face") return faceHit(pt, ndc);
+      // null / unknown → permissive cascade (vertex > edge > face).
+      const v =
+        pickers.picker.pick(pt, new THREE.Vector2(ndc.x, ndc.y), camera, "vertex") ??
+        screenNearest(pt, "vertex", ndc);
       if (v) return v;
-      const e = pickers.picker.pick(pt, new THREE.Vector2(ndc.x, ndc.y), camera, "edge") ?? screenNearest(pt, "edge", ndc);
+      const e =
+        pickers.picker.pick(pt, new THREE.Vector2(ndc.x, ndc.y), camera, "edge") ??
+        screenNearest(pt, "edge", ndc);
       if (e) return e;
       return faceHit(pt, ndc);
     };
@@ -387,16 +416,19 @@ export function Picking({ part }: { part: BuiltPart | null }): null {
           if (p) {
             const a = ndcFrom(start.x, start.y);
             const b = ndcFrom(e.clientX, e.clientY);
+            // Box-select needs a concrete entity kind; null mode falls back to face
+            // (the CAD-standard multi-select target for rubber-band).
+            const boxMode: SelectionMode = store.selMode ?? "face";
             const ids = boxSelect(
               ndcRect({ x: a.x, y: a.y }, { x: b.x, y: b.y }),
-              selectionCandidates(p, store.selMode, camera),
+              selectionCandidates(p, boxMode, camera),
             );
             const picks: Pick[] =
-              store.selMode === "body"
+              boxMode === "body"
                 ? ids.length > 0
                   ? [{ kind: "body", id: 0 }]
                   : []
-                : ids.map((id) => ({ kind: store.selMode, id }));
+                : ids.map((id) => ({ kind: boxMode, id }));
             store.setPicks(picks, additive);
           }
           return;
@@ -410,15 +442,34 @@ export function Picking({ part }: { part: BuiltPart | null }): null {
       downAt = null;
       if (dist > CLICK_TOL_PX || !p) return; // a drag = orbit, not a click
       const ndc = ndcFrom(e.clientX, e.clientY);
-      // Measure tool (FR-13): a click banks the world point under the cursor; the
-      // second click resolves the distance + axis deltas. This suppresses normal
-      // selection while measuring is active.
+      // Measure tool (FR-13 + R12): a click banks an endpoint under the cursor;
+      // the second click resolves the distance + axis deltas. Vertex/edge hits
+      // store VertexRef/EdgeRef analytic signatures (not bare pick indices);
+      // surface hits fall back to a world point. Suppresses normal selection
+      // while measuring is active.
       if (store.measuring) {
-        const wp = pickers.picker.pickPoint(p, new THREE.Vector2(ndc.x, ndc.y), camera);
-        if (!wp) return; // clicked empty space — keep waiting for a point on the part
-        const step = nextMeasure(measureFirstRef.current, wp);
+        // Prefer the entity cascade (vertex → edge → face) so a corner click
+        // captures a VertexRef even when selMode is null / face.
+        const hit = entityHit(p, store.selMode, ndc);
+        let endpoint: MeasureEndpoint | null = null;
+        if (hit?.kind === "vertex") {
+          const ref = store.selectionRefs.vertices?.[hit.id];
+          if (ref) endpoint = vertexEndpoint(ref);
+        } else if (hit?.kind === "edge") {
+          const ref = store.selectionRefs.edges[hit.id];
+          if (ref) endpoint = edgeEndpoint(ref);
+        }
+        if (!endpoint) {
+          const wp = pickers.picker.pickPoint(p, new THREE.Vector2(ndc.x, ndc.y), camera);
+          if (!wp) return; // clicked empty space — keep waiting for a point on the part
+          endpoint = worldEndpoint(wp);
+        }
+        const step = nextMeasure(measureFirstRef.current, endpoint);
         measureFirstRef.current = step.first;
         store.setMeasureResult(step.result);
+        store.setMeasureEndpoints(
+          step.a ? { a: step.a, b: step.b } : null,
+        );
         return;
       }
       const hit = entityHit(p, store.selMode, ndc);

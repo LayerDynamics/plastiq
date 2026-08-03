@@ -10,15 +10,9 @@ import { useThree } from "@react-three/fiber";
 import type { DatumPlane } from "@plastiq/cad";
 import { useSketchStore } from "./sketchStore.js";
 import { hitTest } from "./hit.js";
+import { ellipsePoints, resolveOffsetCurve } from "./model.js";
 import { projectPlanePoint, useCameraOrientation } from "../viewport/cameraOrientation.js";
-import {
-  arcWorld,
-  circleWorld,
-  uvToWorld,
-  worldToUv,
-  type UV,
-  type Vec3,
-} from "./worldMap.js";
+import { arcWorld, circleWorld, uvToWorld, worldToUv, type UV, type Vec3 } from "./worldMap.js";
 
 type P3 = [number, number, number];
 
@@ -95,11 +89,7 @@ function SketchPlanePick({ plane }: { plane: DatumPlane }): React.JSX.Element {
     // If normal×xAxis is degenerate, fall back.
     if (y.lengthSq() < 1e-12) y.set(0, 1, 0);
     else y.normalize();
-    m.makeBasis(
-      new THREE.Vector3(...plane.xAxis),
-      y,
-      new THREE.Vector3(...plane.normal),
-    );
+    m.makeBasis(new THREE.Vector3(...plane.xAxis), y, new THREE.Vector3(...plane.normal));
     q.setFromRotationMatrix(m);
     return q;
   }, [plane]);
@@ -284,11 +274,7 @@ function SketchPlanePick({ plane }: { plane: DatumPlane }): React.JSX.Element {
       // Keep camera reference used so the mesh participates in the frame.
       userData={{ sketchPick: true, cameraId: camera.uuid, canvas: gl.domElement }}
     >
-      <meshBasicMaterial
-        visible={false}
-        side={THREE.DoubleSide}
-        depthWrite={false}
-      />
+      <meshBasicMaterial visible={false} side={THREE.DoubleSide} depthWrite={false} />
     </mesh>
   );
 }
@@ -297,16 +283,10 @@ function PlaneGrid({ plane }: { plane: DatumPlane }): React.JSX.Element {
   const lines = useMemo(() => {
     const out: P3[][] = [];
     for (let u = -GRID_EXTENT; u <= GRID_EXTENT + 1e-9; u += GRID_STEP) {
-      out.push([
-        asP3(uvToWorld(plane, u, -GRID_EXTENT)),
-        asP3(uvToWorld(plane, u, GRID_EXTENT)),
-      ]);
+      out.push([asP3(uvToWorld(plane, u, -GRID_EXTENT)), asP3(uvToWorld(plane, u, GRID_EXTENT))]);
     }
     for (let v = -GRID_EXTENT; v <= GRID_EXTENT + 1e-9; v += GRID_STEP) {
-      out.push([
-        asP3(uvToWorld(plane, -GRID_EXTENT, v)),
-        asP3(uvToWorld(plane, GRID_EXTENT, v)),
-      ]);
+      out.push([asP3(uvToWorld(plane, -GRID_EXTENT, v)), asP3(uvToWorld(plane, GRID_EXTENT, v))]);
     }
     return out;
   }, [plane]);
@@ -390,6 +370,35 @@ function SketchEntities({ plane }: { plane: DatumPlane }): React.JSX.Element {
             selected,
           });
         }
+      } else if (e.kind === "ellipse") {
+        const uvs = ellipsePoints(model, e);
+        if (uvs.length >= 2)
+          out.push({
+            id: e.id,
+            pts: uvs.map(([u, v]) => asP3(uvToWorld(plane, u, v))),
+            construction: e.construction,
+            selected,
+          });
+      } else {
+        const resolved = resolveOffsetCurve(model, e);
+        if (!resolved) continue;
+        let uvs: UV[];
+        if (resolved.kind === "line") uvs = [resolved.a, resolved.b];
+        else if (resolved.kind === "circle")
+          uvs = circleWorld(plane, resolved.center, resolved.radius).map((p) =>
+            worldToUv(plane, p),
+          );
+        else if (resolved.kind === "arc")
+          uvs = arcWorld(plane, resolved.a, resolved.through, resolved.b).map((p) =>
+            worldToUv(plane, p),
+          );
+        else uvs = resolved.points;
+        out.push({
+          id: e.id,
+          pts: uvs.map(([u, v]) => asP3(uvToWorld(plane, u, v))),
+          construction: e.construction,
+          selected,
+        });
       }
     }
     return out;

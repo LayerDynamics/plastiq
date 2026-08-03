@@ -121,6 +121,37 @@ describe("sketch drawing tools (M3.2)", () => {
     expect(circles[0]!.radius).toBeCloseTo(0.05, 9);
   });
 
+  it("the ellipse tool authors centre/focus/minor-radius geometry in three clicks", () => {
+    s().setTool("ellipse");
+    s().clickAt(0, 0);
+    s().clickAt(0.05, 0);
+    s().clickAt(0, 0.02);
+    const ellipse = s().model.entities.find((e) => e.kind === "ellipse");
+    expect(ellipse).toMatchObject({ kind: "ellipse", radmin: 0.02 });
+    if (!ellipse || ellipse.kind !== "ellipse") throw new Error("expected ellipse");
+    const focus = s().model.points.find((p) => p.id === ellipse.focus1)!;
+    expect(focus.u).toBeCloseTo(Math.sqrt(0.05 ** 2 - 0.02 ** 2), 9);
+    expect(focus.v).toBeCloseTo(0, 9);
+    expect(s().result?.ellipseRadmin[0]).toBeCloseTo(0.02, 9);
+  });
+
+  it("offsetSelection creates a derived circle that follows a solved source radius", () => {
+    s().setTool("circle");
+    s().clickAt(0, 0);
+    s().clickAt(0.02, 0);
+    const circle = s().model.entities.find((e) => e.kind === "circle")!;
+    s().setSelection([circle.id]);
+    s().offsetSelection(0.005);
+    const offset = s().model.entities.find((e) => e.kind === "offset");
+    expect(offset).toMatchObject({ kind: "offset", source: circle.id, distance: 0.005 });
+    s().setSelection([circle.id]);
+    s().addDimension("radius");
+    const dim = s().model.constraints.find((c) => c.kind === "radius")!;
+    s().setConstraintValue(dim.id, 0.03);
+    const source = s().model.entities.find((e) => e.id === circle.id);
+    expect(source).toMatchObject({ radius: 0.03 });
+  });
+
   it("the polygon tool builds a regular n-gon from centre + vertex", () => {
     s().setPolygonSides(5);
     s().setTool("polygon");
@@ -345,7 +376,11 @@ describe("sketch-local undo/redo (FR — Fusion-style sketch history)", () => {
     ]);
     // The dims landed, but no extra history was pushed (so the shape + its dims are
     // a single undo step alongside the clickAt that placed them).
-    expect(s().model.constraints.map((c) => c.kind).sort()).toEqual(["distance", "lineAngle"]);
+    expect(
+      s()
+        .model.constraints.map((c) => c.kind)
+        .sort(),
+    ).toEqual(["distance", "lineAngle"]);
     expect(s().past.length).toBe(pastLen);
   });
 

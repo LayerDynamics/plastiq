@@ -887,8 +887,8 @@ function NerfCaptureSection(): React.JSX.Element {
  * hand-offs to the SAME "Convert to CAD" terminus. The user picks photos; `solvePhotogrammetry` runs
  * the SfM + MLX plane-sweep MVS solve server-side (:8004, minutes-long, abortable, Cancel DELETEs the
  * job). On success the panel offers two routes:
- *   (a) Poses → NeRF surface — the emitted transforms.json + undistorted frames train an MLX surface
- *       (`captureFromPhotos` → MeshDoc), and
+ *   (a) Poses → NeRF surface — the emitted transforms.json + the uploads (paired to its frames by
+ *       filename) train an MLX surface (`captureFromPhotos` → MeshDoc), and
  *   (b) Dense cloud → mesh — the dense oriented cloud is reconstructed to a watertight MeshDoc via the
  *       capture service (`denseCloudToMeshDoc`).
  * Both persist a MeshDoc and OPEN it, so the panel switches to MeshConvertSection ("Convert to CAD" —
@@ -961,6 +961,8 @@ function PhotoSolveSection(): React.JSX.Element {
         {
           ...(baseURL ? { baseURL } : {}),
           signal: controller.signal,
+          // Real job state on every poll (M4) — replaces the static "solving…" line with live progress.
+          onState: (s: string) => setStatus(`solving (SfM + MVS — minutes)… [${s}]`),
           onJob: (id: string) => {
             jobIdRef.current = id;
           },
@@ -1031,22 +1033,17 @@ function PhotoSolveSection(): React.JSX.Element {
     }
   }, [result, busy]);
 
-  /** Hand-off (a): train an MLX surface from the emitted poses + undistorted frames via the NeRF
-   * service, then open it (→ Convert-to-CAD). Frames go in FRAME order: the undistorted images (already
-   * frame-ordered) when present, else the original uploads paired to the emitted frames by filename. */
+  /** Hand-off (a): train an MLX surface from the emitted poses + the uploaded frames via the NeRF
+   * service, then open it (→ Convert-to-CAD). Frames go in FRAME order: the original uploads paired
+   * to the emitted frames by filename. */
   const toNerfSurface = useCallback(async (): Promise<void> => {
     if (!result || busy) return;
-    let orderedImages: string[];
-    if (result.imagesUndistorted && result.imagesUndistorted.length > 0) {
-      orderedImages = result.imagesUndistorted;
-    } else {
-      const pairing = pairImagesToFrames(images, result.transformsJson);
-      if (!pairing.ok) {
-        setError(pairing.error);
-        return;
-      }
-      orderedImages = pairing.order.map((i) => i.data);
+    const pairing = pairImagesToFrames(images, result.transformsJson);
+    if (!pairing.ok) {
+      setError(pairing.error);
+      return;
     }
+    const orderedImages = pairing.order.map((i) => i.data);
     setBusy(true);
     setError(null);
     setStatus("checking NeRF service…");

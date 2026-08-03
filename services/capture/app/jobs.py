@@ -37,6 +37,20 @@ _TERMINAL = (JobState.completed, JobState.failed)
 _JOIN_GRACE_S = 2.0
 
 
+def _process_entry(
+    q: "multiprocessing.Queue", target: Callable[..., dict], args: tuple, kwargs: dict
+) -> None:
+    """Spawn-child entry point (module-level so it is picklable under the spawn context).
+
+    Runs ``target(*args, **kwargs)`` and puts ``("ok", result)`` or ``("err", message)``
+    on the queue so the parent can publish the result or surface the failure.
+    """
+    try:
+        q.put(("ok", target(*args, **kwargs)))
+    except Exception as e:  # noqa: BLE001 — surface any worker failure to the parent
+        q.put(("err", f"{type(e).__name__}: {e}"))
+
+
 @dataclass
 class Job:
     id: str
@@ -95,13 +109,11 @@ class JobStore:
         ctx = multiprocessing.get_context("spawn")
         queue: multiprocessing.Queue = ctx.Queue()
 
-        def _entry(q: multiprocessing.Queue, *a: Any, **k: Any) -> None:
-            try:
-                q.put(("ok", target(*a, **k)))
-            except Exception as e:  # noqa: BLE001 — surface any worker failure
-                q.put(("err", f"{type(e).__name__}: {e}"))
-
-        proc = ctx.Process(target=_entry, args=(queue, *args), kwargs=kwargs, daemon=True)
+        # The worker entry must be a MODULE-LEVEL callable (`_process_entry`), not a local
+        # closure: under the spawn context (the default on macOS — the M4 Max target) the
+        # Process target is pickled, and a nested closure is unpicklable
+        # ("Can't pickle local object …"), which would fail EVERY process-isolated job.
+        proc = ctx.Process(target=_process_entry, args=(queue, target, args, kwargs), daemon=True)
         job.process = proc
         proc.start()
         try:

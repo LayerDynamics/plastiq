@@ -20,6 +20,8 @@ import {
   shellFeature,
   sweepFeature,
   sweepFromSketchFeature,
+  helixSweepFromSketchFeature,
+  vertexRefsFromPicks,
 } from "./dressup.js";
 import type { EditorFeature } from "../store/types.js";
 
@@ -38,6 +40,10 @@ const refs: SelectionRefs = {
         [0, 1, 0],
       ],
     },
+  },
+  vertices: {
+    11: { position: [0, 0, 0] },
+    12: { position: [0.06, 0.04, 0.03] },
   },
 };
 
@@ -63,6 +69,20 @@ describe("dressup — picks + refs → persistent feature data (FR-30/FR-16)", (
       },
     ]);
     expect(faceRefsFromPicks(picks, refs)).toEqual([{ normal: [0, 0, 1] }]);
+  });
+
+  it("resolves picked vertices to their persistent VertexRefs (R12)", () => {
+    const picks: Pick[] = [
+      { kind: "vertex", id: 11 },
+      { kind: "vertex", id: 12 },
+      { kind: "face", id: 1 },
+    ];
+    expect(vertexRefsFromPicks(picks, refs)).toEqual([
+      { position: [0, 0, 0] },
+      { position: [0.06, 0.04, 0.03] },
+    ]);
+    // Unresolved id is skipped (no invented ref from a bare index).
+    expect(vertexRefsFromPicks([{ kind: "vertex", id: 99 }], refs)).toEqual([]);
   });
 
   it("filletFeature stores the EdgeRefs + radius; null with no edges", () => {
@@ -215,6 +235,35 @@ describe("dressup — picks + refs → persistent feature data (FR-30/FR-16)", (
     expect(f!.data!["plane"]).toEqual({ base: "XZ", offset: 0 });
     expect(f!.data!["transition"]).toBe("round");
     expect(sweepFromSketchFeature(feats, "missing", path)).toBeNull();
+  });
+
+  it("helixSweepFromSketchFeature stores data.helix on a sweep feature (§13.2)", () => {
+    const circle: Profile = { kind: "circle", center: [0, 0], radius: 0.001 };
+    const feats: EditorFeature[] = [
+      {
+        id: "s1",
+        type: "sketch",
+        data: { profile: circle, plane: { base: "XY", offset: 0 } },
+      },
+    ];
+    const helix = {
+      radius: 0.01,
+      pitch: 0.005,
+      turns: 3,
+      handedness: "right" as const,
+    };
+    const f = helixSweepFromSketchFeature(feats, "s1", helix);
+    // Profile is recentered on the helix start; plane forced to XZ (⊥ start tangent).
+    expect(f).toMatchObject({
+      type: "sweep",
+      data: {
+        profile: { kind: "circle", center: [helix.radius, 0], radius: 0.001 },
+        helix,
+        plane: { base: "XZ", offset: 0 },
+      },
+    });
+    expect(f!.data!["path"]).toBeUndefined();
+    expect(helixSweepFromSketchFeature(feats, "missing", helix)).toBeNull();
   });
 
   it("loftFeature needs ≥2 sections; sweepFeature carries profile + path (FR-32)", () => {

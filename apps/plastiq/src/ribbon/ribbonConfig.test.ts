@@ -65,6 +65,27 @@ describe("ribbonConfig — integrity", () => {
     expect(actionIds(cloudPanel.items)).toEqual(["cloud-to-mesh", "cloud-complete"]);
   });
 
+  it("the design workspace has a Surface tab with create + modify surface ops (§14)", () => {
+    const surface = RIBBON.design.find((t) => t.id === "surface")!;
+    expect(surface, "design must have a Surface tab").toBeDefined();
+    expect(surface.title).toBe("Surface");
+    const create = surface.panels.find((p) => p.title === "Create")!;
+    const modify = surface.panels.find((p) => p.title === "Modify")!;
+    expect(actionIds(create.items)).toEqual([
+      "surfaceLoft",
+      "surfaceSweep",
+      "surfaceRevolve",
+    ]);
+    expect(actionIds(modify.items)).toEqual([
+      "offsetSurface",
+      "sew",
+      "solidify",
+      "patch",
+      "trim",
+      "thicken",
+    ]);
+  });
+
   it("no duplicate action id within a single panel", () => {
     for (const tabs of Object.values(RIBBON)) {
       for (const tab of tabs) {

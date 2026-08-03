@@ -62,12 +62,19 @@ The AI features live in [`src/ai`](src/ai). The agent surface (`build_part`,
 
 ## Scripts
 
-```sh
-pnpm -C apps/plastiq run dev      # Vite dev server
+```bash
+pnpm -C apps/plastiq run dev      # five-service supervisor + Vite
+pnpm -C apps/plastiq run dev:ui   # Vite only (tests or an externally managed fleet)
 pnpm -C apps/plastiq run build    # tsc --noEmit + production build
-pnpm exec vitest run                 # unit/integration suite (from the repo root)
-pnpm exec playwright test            # no-mock E2E (served on :4177)
+pnpm exec vitest run              # unit/integration suite (from the repo root)
+pnpm exec playwright test         # no-mock E2E (served on :4177)
 ```
+
+The development wrapper creates missing conda environments, requires every `/health` gate,
+restarts an owned service after sustained health loss, and shuts the fleet down with Vite. A
+healthy process already on a service port is adopted but never killed. Service logs and
+owner-scoped PID/token records live under the platform state directory (`~/.local/state/plastiq/services`
+unless `XDG_STATE_HOME` is set).
 
 ### AI / reconstruction E2E
 

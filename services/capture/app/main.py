@@ -3,6 +3,7 @@
 POST /points-from-depth {depth, fx, fy, cx, cy} → { points, normals }   (sync: depth scan → /capture cloud)
 POST /capture {points, normals}  → { id, state }          (submit a job)
 POST /complete {points}          → { id, state }          (submit a shape-completion job, M8)
+POST /remesh {vertices, faces, mode} → { id, state }      (submit a mesh remesh/decimate job, §16)
 GET  /jobs/{id}/status           → { id, state, error? }
 GET  /jobs/{id}/result           → { glb_base64, vertices, faces }   (when completed)
 DELETE /jobs/{id}                → 204 / 404               (cancel/cleanup a job record)
@@ -32,6 +33,7 @@ from .geometry import PinholeCamera, depth_to_normals, unproject_depth
 from .jobs import JobState, JobStore
 from .logging_setup import setup_logging
 from .pipeline import complete_partial_job, reconstruct_surface_job
+from .remesh import remesh_job
 
 setup_logging()
 logger = logging.getLogger(__name__)
@@ -259,6 +261,67 @@ async def submit_complete(body: CompleteBody) -> JobView:
         complete_partial_job,
         args=(pts.tolist(),),
         kwargs={"grid_res": body.grid_res},
+    )
+    return JobView(id=job.id, state=job.state.value)
+
+
+class RemeshBody(BaseModel):
+    """A triangle mesh to remesh or decimate (§16 mesh lane heavy-op delegation).
+
+    ``mode`` selects the operation:
+      • "remesh"   — isotropic refinement toward ``target_edge_length`` (or half the mean
+                     edge length when omitted);
+      • "decimate" — reduce toward ``target_faces`` (or ``target_ratio`` of the input).
+    """
+
+    vertices: list[list[float]]
+    faces: list[list[int]]
+    mode: str = "remesh"
+    target_edge_length: float | None = None
+    target_faces: int | None = None
+    target_ratio: float = 0.5
+
+
+@app.post("/remesh", response_model=JobView, dependencies=[Depends(require_auth)])
+async def submit_remesh(body: RemeshBody) -> JobView:
+    if len(body.vertices) > MAX_POINTS:
+        logger.warning("rejected /remesh submit: %d vertices exceeds the %d cap", len(body.vertices), MAX_POINTS)
+        raise HTTPException(status_code=422, detail=f"too many vertices ({len(body.vertices)} > {MAX_POINTS})")
+    if store.running_count() >= _MAX_CONCURRENT:
+        logger.warning(
+            "rejected /remesh submit: %d jobs already in flight (cap %d)", store.running_count(), _MAX_CONCURRENT
+        )
+        raise HTTPException(status_code=429, detail="too many jobs in flight; retry shortly")
+    verts = np.asarray(body.vertices, dtype=np.float64)
+    faces = np.asarray(body.faces, dtype=np.int64)
+    if verts.ndim != 2 or verts.shape[1] != 3:
+        logger.warning("rejected /remesh submit: vertices not an Nx3 array")
+        raise HTTPException(status_code=400, detail="vertices must be Nx3")
+    if faces.ndim != 2 or faces.shape[1] != 3:
+        logger.warning("rejected /remesh submit: faces not an Mx3 array")
+        raise HTTPException(status_code=400, detail="faces must be Mx3")
+    if not np.isfinite(verts).all():
+        logger.warning("rejected /remesh submit: non-finite vertices")
+        raise HTTPException(status_code=400, detail="vertices must contain only finite values")
+    if len(verts) < 3 or len(faces) < 1:
+        logger.warning("rejected /remesh submit: %d verts / %d faces (need a real mesh)", len(verts), len(faces))
+        raise HTTPException(status_code=400, detail="need at least 3 vertices and 1 triangle")
+    if int(faces.max()) >= len(verts) or int(faces.min()) < 0:
+        logger.warning("rejected /remesh submit: face index out of range")
+        raise HTTPException(status_code=400, detail="face indices must be within [0, vertex count)")
+    if body.mode not in ("remesh", "decimate"):
+        raise HTTPException(status_code=400, detail="mode must be 'remesh' or 'decimate'")
+
+    # Process-isolated so DELETE cancel force-kills the remesh worker (P0.2).
+    job = await store.submit_process(
+        remesh_job,
+        args=(verts.tolist(), faces.tolist()),
+        kwargs={
+            "mode": body.mode,
+            "target_edge_length": body.target_edge_length,
+            "target_faces": body.target_faces,
+            "target_ratio": body.target_ratio,
+        },
     )
     return JobView(id=job.id, state=job.state.value)
 

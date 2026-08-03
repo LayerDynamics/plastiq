@@ -27,4 +27,14 @@ describe("Sketch — profile → extrude (integration)", () => {
     expect(solid.volume()).toBeCloseTo(Math.PI * 0.05 * 0.05 * 0.1, 5);
     solid.delete();
   });
+
+  it("an ellipse extrudes to an exact elliptic prism", () => {
+    const a = 0.05;
+    const b = 0.02;
+    const h = 0.03;
+    const focus = Math.sqrt(a * a - b * b);
+    const solid = extrude(oc, Sketch.ellipse(planeXY(), [0, 0], [focus, 0], b), h);
+    expect(solid.volume()).toBeCloseTo(Math.PI * a * b * h, 9);
+    solid.delete();
+  });
 });

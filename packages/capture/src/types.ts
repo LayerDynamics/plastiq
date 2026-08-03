@@ -7,6 +7,8 @@
 // Optional bearer auth: when CAPTURE_API_KEY is set on the server, pass `apiKey` so
 // Authorization: Bearer is sent on mutating requests (T36; open when unset).
 
+import type { JobClientOptions } from "@plastiq/ml";
+
 /** The server's minimum point count — `POST /capture` and `POST /complete` both 400 below this
  * (services/capture/app/main.py: "need at least 16 points"). Exported so callers can pre-check
  * before serializing a large request body. */
@@ -60,25 +62,5 @@ export interface CaptureResult {
 }
 
 /** Knobs for {@link capturePointCloud} / {@link completePartialScan}: where the service lives,
- * how to talk to it, and how to poll. */
-export interface CaptureOptions {
-  /** Base URL of the capture service. Default `http://localhost:8001` (the documented dev port:
-   * reconstruct=8000, capture=8001, nerf=8002). */
-  baseURL?: string;
-  /** Bearer token when the service is deployed with CAPTURE_API_KEY (T36). */
-  apiKey?: string;
-  /** Injectable fetch (tests pass a fake; defaults to the global `fetch`). */
-  fetchImpl?: typeof fetch;
-  signal?: AbortSignal;
-  /** Poll interval in ms (default 1000 — capture jobs run seconds-to-minutes, not the
-   * minutes-to-hours of NeRF training). */
-  pollIntervalMs?: number;
-  /** Max poll attempts before timing out (default 600 ≈ 10 min at 1s). */
-  maxPolls?: number;
-  /** Per-poll delay (a constant `pollIntervalMs`, not a backoff; tests inject an instant resolver). */
-  delay?: (ms: number) => Promise<void>;
-  /** Job-state callback for UI progress (`"queued" | "running" | "completed" | "failed"`). */
-  onState?: (state: string) => void;
-  /** Job-id callback, fired once after submit returns — handle for {@link cancelJob} (M4). */
-  onJob?: (id: string) => void;
-}
+ * how to talk to it, and how to poll. Defaults: baseURL `http://localhost:8001`, poll 1s / 600. */
+export type CaptureOptions = JobClientOptions;

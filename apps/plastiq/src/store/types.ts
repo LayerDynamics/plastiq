@@ -27,6 +27,12 @@ export interface EditorFeature {
   deps?: FeatureId[];
   /** Numeric parameters (kernel-serializable). */
   params?: Record<string, number>;
+  /** R6: per-param expressions over the document's global params (`doc.params`).
+   * When present, `exprs[key]` is evaluated at rebuild entry and OVERRIDES
+   * `params[key]` — this is how a global parameter drives a feature's dimension.
+   * Kept as a sibling of `params` (rather than a `number | {expr}` union) so every
+   * existing numeric reader — opt/num, the panel, the AI schema — is unaffected. */
+  exprs?: Record<string, string>;
   /** Non-numeric payload (sketch geometry, selection refs, enums). */
   data?: Record<string, unknown>;
   /** Suppressed features are skipped during rebuild but kept in the tree. */
@@ -65,21 +71,44 @@ export interface MeshDoc {
   source: MeshSource;
 }
 
-/** An opt-in voxel-sculpt document (M10). A dense occupancy grid persisted compactly as the linear
- * indices of its occupied cells; the grid is re-derived on load (voxel/doc.ts). Like a MeshDoc it is
- * a non-parametric mode (B-rep ops don't apply); its surface mesh feeds reconstruct (mesh→B-rep).
+/** §16 Phase 4 — the narrow-band signed-distance field a v2 VoxelDoc carries alongside its
+ * occupancy shadow. `field` holds one signed distance (metres; negative INSIDE) per cell centre,
+ * laid out `(z·ny + y)·nx + x`, saturated to ±`band`. Persisted as a plain JSON `number[]` (like
+ * `cells`) so a sculpt round-trips as ordinary JSON; re-loaded to a `Float32Array` in voxel/sdf.ts. */
+export interface VoxelSdf {
+  /** Signed distance per cell centre (metres); |value| ≤ `band`. Length = dims product. */
+  field: number[];
+  /** Narrow-band half-width in metres; distances saturate here. */
+  band: number;
+}
+
+/** An opt-in voxel-sculpt document (M10, grown into a true SDF sculpt engine in §16). Persisted
+ * compactly as the linear indices of its occupied cells; a v2 document ALSO carries a narrow-band
+ * signed-distance field (`sdf`) that the marching-cubes mesher and the brush set operate on. Like a
+ * MeshDoc it is a non-parametric mode (B-rep ops don't apply); its surface mesh feeds reconstruct
+ * (mesh→B-rep).
+ *
+ * Schema versioning (`version`): absent/`1` ⇒ a legacy occupancy-only document (no `sdf`), migrated
+ * to a field on demand by voxel/sdf.ts `sdfFromDoc` (the store/types → persistence migration
+ * precedent); `2` ⇒ carries `sdf`. `cells` stays authoritative for the occupancy shadow and is kept
+ * in sync with the field (`cells` = the cells whose signed distance is negative) so every consumer
+ * that reads `doc.cells.length` keeps working across the schema bump.
  *
  * A full member of `PersistedDoc`: projectsStore opens/saves/autosaves/recovers voxel projects, the
  * Sculpt workspace edits them (voxel/voxelStore.ts + three/VoxelSculpt.tsx), and the Convert-to-CAD
  * handoff stages the surface mesh as a MeshDoc for the existing reconstruct path (docs/adr/0010). */
 export interface VoxelDoc {
   readonly kind: "voxel";
+  /** Schema version: absent/1 = legacy occupancy only; 2 = carries `sdf`. */
+  version?: 1 | 2;
   name?: string;
   dims: [number, number, number];
   voxelSize: number;
   origin: [number, number, number];
   /** Occupied cell linear indices, `(z·ny + y)·nx + x`. */
   cells: number[];
+  /** §16 narrow-band signed-distance field (v2). Absent ⇒ derive from occupancy on demand. */
+  sdf?: VoxelSdf;
 }
 
 /** How a point cloud entered the app. `photos3d` = the photogrammetry dense cloud (SPEC-13),
@@ -126,7 +155,8 @@ export function isPointCloudDoc(doc: unknown): doc is PointCloudDoc {
   return typeof doc === "object" && doc !== null && (doc as Partial<PointCloudDoc>).kind === "pointcloud";
 }
 
-/** Which kind of sub-entity the 3D viewport selects. */
+/** Which kind of sub-entity the 3D viewport selects.
+ * `null` = permissive / "all" (vertex→edge→face cascade on click — R5). */
 export type SelectionMode = "face" | "edge" | "vertex" | "body";
 
 /** Top-level editor mode (Fusion-style workspace). Reconfigures the ribbon + side

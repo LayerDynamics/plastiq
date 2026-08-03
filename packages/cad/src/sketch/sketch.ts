@@ -10,7 +10,7 @@ import type { TopoDS_Edge, TopoDS_Face, TopoDS_Wire, GeomAbs_Shape } from "openc
 
 import type { Occt } from "../oc/init.js";
 import type { Vec3 } from "../math/index.js";
-import { planePointToWorld, type DatumPlane } from "../env/plane.js";
+import { planePointToWorld, planeYAxis, type DatumPlane } from "../env/plane.js";
 
 type UV = readonly [number, number];
 
@@ -27,6 +27,7 @@ export class Sketch {
   readonly plane: DatumPlane;
   private readonly ops: SketchOp[] = [];
   private circle: { center: UV; radius: number } | null = null;
+  private ellipse: { center: UV; focus1: UV; minorRadius: number } | null = null;
 
   constructor(plane: DatumPlane) {
     this.plane = plane;
@@ -36,6 +37,13 @@ export class Sketch {
   static circle(plane: DatumPlane, cx: number, cy: number, r: number): Sketch {
     const s = new Sketch(plane);
     s.circle = { center: [cx, cy], radius: r };
+    return s;
+  }
+
+  /** A full ellipse parameterised like planegcs: centre, one focus, minor radius. */
+  static ellipse(plane: DatumPlane, center: UV, focus1: UV, minorRadius: number): Sketch {
+    const s = new Sketch(plane);
+    s.ellipse = { center, focus1, minorRadius };
     return s;
   }
 
@@ -63,6 +71,52 @@ export class Sketch {
 
   /** Build the closed OCCT wire for this profile (caller owns the result). */
   toWire(oc: Occt): TopoDS_Wire {
+    if (this.ellipse) {
+      const { center, focus1, minorRadius } = this.ellipse;
+      const fu = focus1[0] - center[0];
+      const fv = focus1[1] - center[1];
+      const focal = Math.hypot(fu, fv);
+      const majorRadius = Math.hypot(focal, minorRadius);
+      if (
+        !Number.isFinite(minorRadius) ||
+        minorRadius <= 0 ||
+        !Number.isFinite(majorRadius) ||
+        majorRadius < minorRadius ||
+        focal <= 1e-12
+      ) {
+        throw new Error("Sketch: ellipse needs a positive minor radius and a distinct focus");
+      }
+      const trash: Array<{ delete(): void }> = [];
+      const own = <T extends { delete(): void }>(t: T): T => {
+        trash.push(t);
+        return t;
+      };
+      try {
+        const c = own(pnt(oc, this.world(center)));
+        const n = own(
+          new oc.gp_Dir_4(this.plane.normal[0], this.plane.normal[1], this.plane.normal[2]),
+        );
+        const inv = 1 / focal;
+        const yAxis = planeYAxis(this.plane);
+        const x = own(
+          new oc.gp_Dir_4(
+            this.plane.xAxis[0] * fu * inv + yAxis[0] * fv * inv,
+            this.plane.xAxis[1] * fu * inv + yAxis[1] * fv * inv,
+            this.plane.xAxis[2] * fu * inv + yAxis[2] * fv * inv,
+          ),
+        );
+        const ax = own(new oc.gp_Ax2_2(c, n, x));
+        const ellipse = own(new oc.gp_Elips_2(ax, majorRadius, minorRadius));
+        const edgeMaker = own(new oc.BRepBuilderAPI_MakeEdge_12(ellipse));
+        const edge = own(edgeMaker.Edge());
+        const wireMaker = own(new oc.BRepBuilderAPI_MakeWire_2(edge));
+        if (!wireMaker.IsDone()) throw new Error("Sketch: failed to build ellipse wire");
+        return wireMaker.Wire();
+      } finally {
+        for (let i = trash.length - 1; i >= 0; i--) trash[i]!.delete();
+      }
+    }
+
     if (this.circle) {
       // Reject a degenerate radius BEFORE allocating any OCCT temporaries:
       // gp_Circ_2 raises an opaque Standard_Failure for r < 0, and r = 0 (or a

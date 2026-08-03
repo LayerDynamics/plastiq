@@ -1,23 +1,30 @@
-# @plastiq/ml (reserved scaffold)
+# @plastiq/ml
 
-**Status:** intentionally empty — not a shipping client.
+Shared **submit→poll + cancel** primitives for Plastiq’s five domain ML clients.
 
-## What this package is for
+## What this package exports
 
-Future home for **shared submit→poll + cancel helpers** only, if/when the five
-domain clients are refactored to share one HTTP loop. Until then:
+| Export | Role |
+|--------|------|
+| `JobClientOptions` / `JobCancelOptions` / `JobState` | Common connection, poll, and cancel knobs |
+| `cancelServiceJob` | `DELETE /jobs/{id}` (204/404 ok; bearer when `apiKey` set) |
+| `serviceHttpError` | Stable FastAPI-detail error strings |
 
-| Domain client | Package / path |
-|---------------|----------------|
+Domain packages own request/result payloads and still ship their own `cancelJob` /
+`onJob` wrappers:
+
+| Domain client | Package |
+|---------------|---------|
 | Capture | `@plastiq/capture` |
 | NeRF | `@plastiq/nerf` |
 | NURBS | `@plastiq/nurbs` |
 | Photogrammetry | `@plastiq/photogrammetry` |
-| Reconstruct | `@plastiq/recon` (extracted) |
+| Reconstruct | `@plastiq/recon` |
 
 Service pipelines live under `services/*` (Python).
 
-## Not a defect
+## Not a mega-package
 
-An empty `packages/ml` is **not** a missing product feature. Do not treat this
-README as a promise of a mega-package. Domain APIs stay in the packages above.
+This is **not** a single HTTP client for all ML features. Pipelines and wire
+schemas stay domain-local; only the shared job lifecycle helpers live here so
+cancel/onJob/auth cannot drift across clients.

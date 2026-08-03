@@ -7,6 +7,7 @@
 // as a MeshDoc (app-side) and reconstructed into an editable B-rep. Self-hosted, reached by base
 // URL. Optional CAPTURE_API_KEY → Authorization: Bearer on mutating requests (T36).
 
+import { cancelServiceJob, serviceHttpError } from "@plastiq/ml";
 import type { CaptureInput, CaptureOptions, CaptureResult, CompleteInput } from "./types.js";
 
 /** The documented dev port for services/capture (reconstruct=8000, capture=8001, nerf=8002). */
@@ -22,31 +23,17 @@ interface CaptureResultWire {
   demo_weights?: boolean;
 }
 
-async function httpError(res: Response, label: string, what: string): Promise<string> {
-  const detail = await res
-    .json()
-    .then((b: { detail?: string }) => b.detail ?? "")
-    .catch(() => "");
-  return `${label} ${what}: HTTP ${res.status}${detail ? ` — ${detail}` : ""}`;
-}
-
 /** Cancel a job server-side (`DELETE /jobs/{id}`). Capture force-stops the spawn worker
  * (services/capture JobStore.cancel). Idempotent on 404. */
 export async function cancelJob(
   jobId: string,
   opts: Pick<CaptureOptions, "baseURL" | "fetchImpl" | "signal" | "apiKey"> = {},
 ): Promise<void> {
-  const base = (opts.baseURL ?? DEFAULT_BASE_URL).replace(/\/+$/, "");
-  const f = opts.fetchImpl ?? globalThis.fetch;
-  if (!f) throw new Error("capture cancelJob: no fetch implementation available");
-  const auth: Record<string, string> = opts.apiKey ? { Authorization: `Bearer ${opts.apiKey}` } : {};
-  const res = await f(`${base}/jobs/${jobId}`, {
-    method: "DELETE",
-    headers: { ...auth },
-    ...(opts.signal ? { signal: opts.signal } : {}),
+  await cancelServiceJob(jobId, {
+    ...opts,
+    defaultBaseURL: DEFAULT_BASE_URL,
+    label: "capture",
   });
-  if (res.status === 204 || res.status === 404) return;
-  throw new Error(await httpError(res, "cancelJob", "cancel"));
 }
 
 /** Shared submit→poll runner for both endpoints. Throws on submit/status/result HTTP errors
@@ -77,7 +64,7 @@ async function runJob(
     body: JSON.stringify(body),
     ...(opts.signal ? { signal: opts.signal } : {}),
   });
-  if (!submitRes.ok) throw new Error(await httpError(submitRes, label, "submit"));
+  if (!submitRes.ok) throw new Error(await serviceHttpError(submitRes, label, "submit"));
   const submitted = (await submitRes.json()) as { id?: string };
   if (!submitted.id) throw new Error(`${label}: submit returned no job id`);
   const id = submitted.id;
@@ -86,12 +73,12 @@ async function runJob(
   for (let i = 0; i < maxPolls; i++) {
     if (opts.signal?.aborted) throw new DOMException("aborted", "AbortError");
     const statusRes = await f(`${base}/jobs/${id}/status`, getInit);
-    if (!statusRes.ok) throw new Error(await httpError(statusRes, label, "status"));
+    if (!statusRes.ok) throw new Error(await serviceHttpError(statusRes, label, "status"));
     const status = (await statusRes.json()) as { state?: string; error?: string };
     opts.onState?.(status.state ?? "?");
     if (status.state === "completed") {
       const resultRes = await f(`${base}/jobs/${id}/result`, getInit);
-      if (!resultRes.ok) throw new Error(await httpError(resultRes, label, "result"));
+      if (!resultRes.ok) throw new Error(await serviceHttpError(resultRes, label, "result"));
       const wire = (await resultRes.json()) as CaptureResultWire;
       return {
         glb: wire.glb_base64,

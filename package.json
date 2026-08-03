@@ -11,7 +11,7 @@
   },
   "scripts": {
     "dev": "pnpm --filter @plastiq/app run dev",
-    "dev:desktop": "pnpm --filter @plastiq/app run dev",
+    "dev:desktop": "pnpm --filter @plastiq/desktop run dev",
     "dev:web": "pnpm --filter @plastiq/app run dev:web",
     "dev:mobile": "pnpm --filter @plastiq/app run dev:mobile",
     "build": "pnpm --filter @plastiq/app run build",
@@ -22,7 +22,9 @@
     "test:smoke": "vitest run smoke.test",
     "test:unit": "vitest run unit.test",
     "test:integration": "vitest run integration.test",
+    "test:services": "bash scripts/dev-services.test.sh",
     "e2e": "playwright test",
+    "capture:readme": "node scripts/capture-readme-screenshots.mjs",
     "lint": "eslint apps packages --max-warnings 0",
     "format": "prettier --write ."
   },

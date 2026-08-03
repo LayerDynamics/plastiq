@@ -9,6 +9,9 @@ export interface VoxelMesh {
   vertices: number[];
   /** Flat triangle indices into `vertices`. */
   indices: number[];
+  /** Optional flat `[x,y,z,…]` per-vertex normals (marching-cubes populates these; the
+   * cube-face mesher omits them and lets the renderer compute per-face normals). */
+  normals?: number[];
 }
 
 const NEIGHBORS: V3[] = [

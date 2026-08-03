@@ -24,7 +24,7 @@ export interface ContextTarget {
   kind: ContextKind;
   /** The effective 3D selection the menu acts on (post select-then-menu). */
   picks: Pick[];
-  selMode: SelectionMode;
+  selMode: SelectionMode | null;
   /** Persistent ref lookup for dress-up builders (FR-16). */
   refs: SelectionRefs;
   features: EditorFeature[];
@@ -66,7 +66,7 @@ export interface ContextTarget {
 /** The store fields contextSelection needs (a snapshot, kept pure/testable). */
 export interface CadSnapshot {
   picks: Pick[];
-  selMode: SelectionMode;
+  selMode: SelectionMode | null;
   selectionRefs: SelectionRefs;
   features: EditorFeature[];
   selectedFeatureId: FeatureId | null;

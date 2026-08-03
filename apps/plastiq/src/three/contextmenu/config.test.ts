@@ -82,11 +82,24 @@ describe("config — run() invokes the real store/dressup action", () => {
     byId("revolve").run(makeTarget({ hasProfile: true }));
     const types = useCadStore.getState().features.map((f) => f.type);
     expect(types).toEqual(["extrude", "cut", "revolve"]);
+    expect(useCadStore.getState().features[2]!.params).toEqual({
+      angle: Math.PI * 2,
+      ox: 0,
+      oy: 0,
+      oz: 0,
+      ax: 0,
+      ay: 1,
+      az: 0,
+    });
   });
 
   it("fillet builds from the picked edge + ref (FR-30)", () => {
     byId("fillet").run(
-      makeTarget({ kind: "edge", picks: [{ kind: "edge", id: 5 }], refs: { faces: {}, edges: { 5: edgeRef } } }),
+      makeTarget({
+        kind: "edge",
+        picks: [{ kind: "edge", id: 5 }],
+        refs: { faces: {}, edges: { 5: edgeRef } },
+      }),
     );
     const f = useCadStore.getState().features.at(-1);
     expect(f?.type).toBe("fillet");
@@ -95,7 +108,11 @@ describe("config — run() invokes the real store/dressup action", () => {
 
   it("shell builds from the picked face + ref", () => {
     byId("shell").run(
-      makeTarget({ kind: "face", picks: [{ kind: "face", id: 1 }], refs: { faces: { 1: faceRef }, edges: {} } }),
+      makeTarget({
+        kind: "face",
+        picks: [{ kind: "face", id: 1 }],
+        refs: { faces: { 1: faceRef }, edges: {} },
+      }),
     );
     expect(useCadStore.getState().features.at(-1)?.type).toBe("shell");
   });
@@ -114,9 +131,7 @@ describe("config — run() invokes the real store/dressup action", () => {
       t: 0.5,
       flip: false,
     });
-    byId("section").run(
-      makeTarget({ section: { kind: "axis", axis: "x", t: 0.5, flip: false } }),
-    );
+    byId("section").run(makeTarget({ section: { kind: "axis", axis: "x", t: 0.5, flip: false } }));
     expect(useCadStore.getState().section).toBeNull();
   });
 
@@ -149,7 +164,11 @@ describe("config — run() invokes the real store/dressup action", () => {
     byId("suppress").run(makeTarget({ kind: "feature", selectedFeatureId: id, features }));
     expect(useCadStore.getState().features.find((f) => f.id === id)?.suppressed).toBe(true);
     byId("delete-feature").run(
-      makeTarget({ kind: "feature", selectedFeatureId: id, features: useCadStore.getState().features }),
+      makeTarget({
+        kind: "feature",
+        selectedFeatureId: id,
+        features: useCadStore.getState().features,
+      }),
     );
     expect(useCadStore.getState().features.find((f) => f.id === id)).toBeUndefined();
   });

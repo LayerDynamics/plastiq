@@ -10,8 +10,9 @@ The full prebuilt `opencascade.js` wasm is ~48 MB raw / **~13.7 MB gzip** — it
 exposes thousands of OCCT classes, almost none of which the kernel calls. This
 trimmed build binds **only the OCCT symbols `@plastiq/cad` actually uses** (see
 `occt.build.yml`); LTO + `--gc-sections` dead-strips everything unreachable from
-those bindings at link time. Result: **~18 MB raw / ~5.6 MB gzip** — the shipped
-browser bundle's OCCT payload drops by ~60%.
+those bindings at link time. The 2026-08-03 artifact is **19,447,072 bytes raw /
+5,949,734 bytes gzip** — the shipped browser payload remains about 58% smaller
+than the full prebuilt gzip.
 
 Nothing is removed from the project: the full `opencascade.js` npm package stays
 a dependency (it supplies the TypeScript API types and is the **source** for this
@@ -31,20 +32,21 @@ The recipe is fully automated: it copies `occt.build.yml` into the gitignored
 staging dir `packages/cad/build/occt/`, runs the builder there (the image writes
 to its own working directory, so mounting `packages/cad` directly would litter
 the package root), and copies `plastiq-occt.{js,wasm,d.ts}` into THIS directory,
-overwriting these files. Commit the result, then run
-`npx vitest run packages/cad/src/oc/bindings.test.ts` to confirm the new trim
-still binds every required symbol.
+overwriting these files. Review the generated artifact diff, then run
+`./node_modules/.bin/vitest run packages/cad/src/oc/bindings.test.ts` to confirm
+the new trim still binds every required symbol. Ask before committing it.
 
 ## The symbol list (occt.build.yml) — three layers
 
-`occt.build.yml` lists every symbol that must be bound. It was derived and then
-**verified by running the full test suite against the trimmed wasm** (2080
-unit/integration as of 2026-07-18, plus the browser E2E), which surfaces any
-missing symbol as an embind `UnboundTypeError`. Three layers are required:
+`occt.build.yml` lists every symbol that must be bound. It is verified against
+the trimmed wasm by the binding pin, focused real-kernel tests, the full test
+suite, and browser E2E; a missing symbol normally surfaces as an embind
+`UnboundTypeError`. Three layers are required:
 
 1. **Leaf API classes/enums** the kernel calls via `oc.X` or holds as a return
-   value (`BRepPrimAPI_MakeBox`, `gp_Pnt`, `Poly_Triangulation`, the STEP/IGES
-   writers, the `GeomAbs_*`/`TopAbs_*` enums, …).
+   value (`BRepPrimAPI_MakeBox`, `BRepFeat_MakePrism`, `LocOpe_LinearForm`,
+   `BRepExtrema_DistShapeShape`, `gp_Pnt`, `Poly_Triangulation`, the STEP/IGES
+   readers and writers, the `GeomAbs_*`/`TopAbs_*` enums, …).
 2. **Base classes** — embind needs the full inheritance chain bound, or
    constructing a derived class throws `unbound types: <Base>`
    (`Standard_Transient`, `BRepBuilderAPI_MakeShape`, `BRepPrimAPI_MakeSweep`,
@@ -54,7 +56,8 @@ missing symbol as an embind `UnboundTypeError`. Three layers are required:
    `BRep_Tool.Triangulation`, the `Handle_Geom_*` curve handles, …).
 
 If a kernel change touches a new OCCT symbol, add it (plus any new base/handle it
-pulls in), rebuild, and re-run `pnpm exec vitest run` — a missing entry fails loud.
+pulls in), rebuild, and re-run `./node_modules/.bin/vitest run` — a missing entry
+fails loud.
 
 ## License
 

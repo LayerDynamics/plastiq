@@ -1,22 +1,14 @@
-# Building the trimmed `opencascade.js` for @plastiq/cad
+# Building the vendored `opencascade.js` kernel for `@plastiq/cad`
 
-The kernel runs on `opencascade.js` (full OCCT → WebAssembly via Emscripten).
-Two builds are in play:
+The CAD kernel runs the repository's custom, trimmed OCCT WebAssembly build in
+both the browser and Node/CI. `src/oc/init.ts` loads
+`vendor/occt/plastiq-occt.{js,wasm}`; the full `opencascade.js` npm package stays
+pinned at `2.0.0-beta.b5ff984` as the source distribution and TypeScript API
+superset used to compile this build.
 
-| Build                | Source                                                     | Size                         | Used for                                                      |
-| -------------------- | ---------------------------------------------------------- | ---------------------------- | ------------------------------------------------------------- |
-| **Full (prebuilt)**  | `opencascade.js` npm package (pinned `2.0.0-beta.b5ff984`) | ~48 MB raw / **~14 MB gzip** | **Development + tests (now).** The proven, complete OCCT.     |
-| **Trimmed (custom)** | `occt.build.yml` → Docker build → `vendor/plastiq-occt.*`  | target **≤ 3 MB gzip**       | **Production browser bundle (later).** Only the symbols used. |
-
-## Why the trim is deferred (not stubbed)
-
-A custom build includes only the OCCT **symbols you list** in `occt.build.yml`.
-That list must match the kernel's actual OCCT surface — which is enumerable from
-`packages/cad/src/` and is captured in `occt.build.yml`. The trim is **optional
-and deferred**: shipping the full prebuilt build is correct and complete; the
-trim is purely a bundle-size optimisation (NFR-4). So today the engine
-initialiser (`src/oc/init.ts`) loads the full `opencascade.js`; running the trim
-is a follow-up once the bundle budget needs it.
+The 2026-08-03 artifact is **19,447,072 bytes raw** and **5,949,734 bytes gzip**.
+For comparison, the upstream full prebuilt wasm is about 48 MB raw / 13.7 MB
+gzip. The trim is therefore the shipped kernel, not a future switch or a stub.
 
 ## Running the trimmed build
 
@@ -25,26 +17,38 @@ expect **30–90 min** and several GB.
 
 ```sh
 just cad-occt
-# = docker run --rm -v "$PWD/packages/cad:/src" -u "$(id -u):$(id -g)" \
+# stages occt.build.yml in packages/cad/build/occt, then runs:
+# docker run --rm -v "$PWD/packages/cad/build/occt:/src" -u "$(id -u):$(id -g)" \
 #       donalffons/opencascade.js:2.0.0-beta.b5ff984 occt.build.yml
 ```
 
-The image tag MUST match the pinned npm version so the generated bindings/typings
-line up. Output (`plastiq-occt.js` + `.wasm` + `.d.ts`) is written under
-`packages/cad/`.
+The image tag must match the pinned npm version so generated bindings and the
+OCCT ABI agree. The `just` recipe copies `occt.build.yml` into the gitignored
+`packages/cad/build/occt/` staging directory, runs the builder there, and then
+copies `plastiq-occt.{js,wasm,d.ts}` into `packages/cad/vendor/occt/`. The copy
+updates the live kernel immediately; review the artifact diff and run the gates
+below before committing it.
 
-## Switching the kernel to the trimmed build
+## Validation after a rebuild
 
-1. Move the build output to `packages/cad/vendor/`.
-2. Point `src/oc/init.ts`'s `initBrowser` at the vendored wasm/js instead of
-   `opencascade.js/dist/opencascade.full.js` (pass the vendored URL through
-   `locateFile`).
-3. Re-run the full `vitest` + Playwright E2E suites against the trimmed build to
-   confirm every feature's OCCT symbol survived the trim.
-4. Re-measure the gzip size against the budget.
+Run the binding pin first, then the complete CAD tests and browser acceptance:
+
+```sh
+./node_modules/.bin/vitest run packages/cad/src/oc/bindings.test.ts
+./node_modules/.bin/vitest run packages/cad/src
+./node_modules/.bin/playwright test --project=plastiq
+wc -c packages/cad/vendor/occt/plastiq-occt.wasm
+gzip -c packages/cad/vendor/occt/plastiq-occt.wasm | wc -c
+```
+
+A new OCCT leaf may also require its complete embind base-class chain and any
+returned `Handle_*` wrapper. A build that links successfully can still be
+uncallable at runtime, so every added family needs a constructibility or behavior
+assertion in `src/oc/bindings.test.ts` (or a focused real-kernel test).
 
 ## Reproducibility
 
-`occt.build.yml` sets `-sUSE_PTHREADS=0` (single-threaded) so boolean/mesh
-algorithms are deterministic. The trimmed build is pinned to the same OCCT
-version as the npm full build.
+`occt.build.yml` sets `-sUSE_PTHREADS=0` (single-threaded) and the Docker image is
+pinned to the same `opencascade.js` revision as the npm dependency. The committed
+YAML plus the pinned image and `just cad-occt` recipe are the reproducible source
+of the three vendored artifacts.

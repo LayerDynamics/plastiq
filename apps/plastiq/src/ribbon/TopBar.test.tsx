@@ -19,6 +19,7 @@ describe("TopBar — smoke", () => {
   it("renders the toolbar with the workspace switcher and selection-mode group", () => {
     render(<TopBar />);
     expect(screen.getByTestId("topbar")).toBeTruthy();
+    expect(screen.getByLabelText("Plastiq CAD Studio")).toBeTruthy();
     expect(screen.getByTestId("workspace-switcher")).toBeTruthy();
     expect(screen.getByTestId("selmode")).toBeTruthy();
   });

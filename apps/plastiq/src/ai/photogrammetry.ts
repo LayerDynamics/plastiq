@@ -4,8 +4,8 @@
 // package; this thin app module threads the persisted service settings into it and maps its result
 // into the app's two existing legs. Unposed photos are solved server-side (SfM + MLX plane-sweep MVS,
 // Apple Silicon) into camera poses (a transforms.json) + a dense oriented point cloud, which feed:
-//   (a) the NeRF leg — transforms.json + undistorted images prefill the NerfCaptureSection (→ /train
-//       → MeshDoc → Convert-to-CAD), and
+//   (a) the NeRF leg — transforms.json + the uploads (paired to its frames by filename) prefill the
+//       NerfCaptureSection (→ /train → MeshDoc → Convert-to-CAD), and
 //   (b) the capture leg — the dense cloud is parsed to {points, normals} and reconstructed to a
 //       watertight MeshDoc via the SAME capture path meshFromPointCloud uses (→ Convert-to-CAD).
 // The dependency direction is app → @plastiq/photogrammetry (never the reverse).
@@ -50,8 +50,9 @@ function withServiceSettings<T extends { apiKey?: string; baseURL?: string }>(op
 }
 
 /** Solve unposed photos → poses + clouds, threading the persisted service settings. The result's
- * `transformsJson`/`imagesUndistorted` feed the NeRF leg and `densePly` feeds the capture leg (see
- * {@link denseCloudToMeshDoc}). `opts.onJob` yields the job id so the panel can cancel it mid-poll.
+ * `transformsJson` feeds the NeRF leg (with the uploads paired to its frames by filename) and
+ * `densePly` feeds the capture leg (see {@link denseCloudToMeshDoc}). `opts.onJob` yields the job id
+ * so the panel can cancel it mid-poll.
  * Defaults {@link PhotogrammetrySolveInput.sparseMaxDim} to {@link DEFAULT_SPARSE_MAX_DIM} when the
  * caller omits it (panel, canvas drop, and any other app path). */
 export async function solvePhotogrammetry(

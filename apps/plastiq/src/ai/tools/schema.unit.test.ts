@@ -27,7 +27,18 @@ function sampleAuthoring(): AuthoringDocument {
           plane: { base: "XY", offset: 2 },
         },
       },
-      { id: "f3", type: "extrude", params: { height: 8, back: 1 }, data: { direction: [0, 0, 1] } },
+      {
+        id: "f3",
+        type: "extrude",
+        params: { height: 8, back: 1, draftAngle: 5 },
+        data: { direction: [0, 0, 1] },
+      },
+      {
+        id: "f3r",
+        type: "rib",
+        params: { length: 12 },
+        data: { sketchId: "f2", op: "join", direction: [0, 0, 1] },
+      },
       {
         id: "f4",
         type: "sketch",
@@ -38,7 +49,14 @@ function sampleAuthoring(): AuthoringDocument {
             segments: [
               { kind: "line", to: [10, 0] },
               { kind: "arc", through: [12, 5], to: [10, 10] },
-              { kind: "spline", through: [[6, 12], [3, 11]], to: [0, 10] },
+              {
+                kind: "spline",
+                through: [
+                  [6, 12],
+                  [3, 11],
+                ],
+                to: [0, 10],
+              },
               { kind: "line", to: [0, 0] },
             ],
           },
@@ -51,13 +69,32 @@ function sampleAuthoring(): AuthoringDocument {
         id: "f7",
         type: "fillet",
         params: { radius: 1.5 },
-        data: { edges: [{ faceNormals: [[0, 0, 1], [1, 0, 0]], midpoint: [5, 0, 10] }] },
+        data: {
+          edges: [
+            {
+              faceNormals: [
+                [0, 0, 1],
+                [1, 0, 0],
+              ],
+              midpoint: [5, 0, 10],
+            },
+          ],
+        },
       },
       {
         id: "f8",
         type: "chamfer",
         params: { distance: 0.8 },
-        data: { edges: [{ faceNormals: [[0, 0, 1], [0, 1, 0]] }] },
+        data: {
+          edges: [
+            {
+              faceNormals: [
+                [0, 0, 1],
+                [0, 1, 0],
+              ],
+            },
+          ],
+        },
       },
       {
         id: "f9",
@@ -76,14 +113,48 @@ function sampleAuthoring(): AuthoringDocument {
           neutralNormal: [0, 0, 1],
         },
       },
-      { id: "f11", type: "transform", params: { tx: 5, ty: 0, tz: 0, angle: 45, ax: 0, ay: 0, az: 1 } },
+      {
+        id: "f11",
+        type: "transform",
+        params: { tx: 5, ty: 0, tz: 0, angle: 45, ax: 0, ay: 0, az: 1 },
+      },
       { id: "f12", type: "mirror", params: { ox: 0, oy: 0, oz: 0, nx: 1, ny: 0, nz: 0, merge: 1 } },
       { id: "f13", type: "linearPattern", params: { spacing: 15, count: 3, dx: 1, dy: 0, dz: 0 } },
-      { id: "f14", type: "circularPattern", params: { count: 6, angle: 360, ox: 0, oy: 0, oz: 0, ax: 0, ay: 0, az: 1 } },
+      {
+        id: "f14",
+        type: "circularPattern",
+        params: { count: 6, angle: 360, ox: 0, oy: 0, oz: 0, ax: 0, ay: 0, az: 1 },
+      },
+      {
+        id: "f14b",
+        type: "pathPattern",
+        params: { count: 4 },
+        data: {
+          path: {
+            kind: "polyline",
+            points: [
+              [0, 0, 0],
+              [100, 0, 0],
+            ],
+          },
+          align: true,
+        },
+      },
+      {
+        id: "f14c",
+        type: "split",
+        data: { plane: { origin: [20, 0, 0], normal: [1, 0, 0] } },
+      },
+      {
+        id: "f14d",
+        type: "section",
+        data: { plane: { origin: [0, 0, 15], normal: [0, 0, 1] } },
+      },
       {
         id: "f15",
         type: "loft",
         data: {
+          op: "intersect",
           ruled: true,
           sections: [
             { z: 0, profile: { kind: "circle", center: [0, 0], radius: 10 } },
@@ -95,8 +166,16 @@ function sampleAuthoring(): AuthoringDocument {
         id: "f16",
         type: "sweep",
         data: {
+          op: "cut",
           profile: { kind: "circle", center: [0, 0], radius: 2 },
-          path: { kind: "polyline", points: [[0, 0, 0], [0, 0, 20], [10, 0, 30]] },
+          path: {
+            kind: "polyline",
+            points: [
+              [0, 0, 0],
+              [0, 0, 20],
+              [10, 0, 30],
+            ],
+          },
         },
       },
       {
@@ -109,6 +188,87 @@ function sampleAuthoring(): AuthoringDocument {
       },
       { id: "f18", type: "importStep", data: { step: "ISO-10303-21;\nHEADER;\nENDSEC;\n" } },
       { id: "f19", type: "placement", params: { tx: 1, ty: 2, tz: 3, rx: 0, ry: 0, rz: 90 } },
+      {
+        // §15 freeform plane: 40×30 mm patch with control points in mm authoring.
+        id: "f20",
+        type: "freeform",
+        params: { uSize: 40, vSize: 30, ox: 0, oy: 0, oz: 0, resU: 4, resV: 4 },
+        data: {
+          kind: "plane",
+          surface: {
+            degU: 1,
+            degV: 1,
+            knotsU: [0, 0, 1, 1],
+            knotsV: [0, 0, 1, 1],
+            controlNet: [
+              [
+                [0, 0, 0],
+                [0, 30, 0],
+              ],
+              [
+                [40, 0, 0],
+                [40, 30, 0],
+              ],
+            ],
+          },
+        },
+      },
+      // §14 surface pillar
+      {
+        id: "f21",
+        type: "surfaceLoft",
+        data: {
+          ruled: true,
+          sections: [
+            { z: 0, profile: { kind: "circle", center: [0, 0], radius: 12 } },
+            { z: 40, profile: { kind: "circle", center: [0, 0], radius: 6 } },
+          ],
+        },
+      },
+      {
+        id: "f22",
+        type: "surfaceSweep",
+        data: {
+          profile: { kind: "circle", center: [0, 0], radius: 3 },
+          path: {
+            kind: "polyline",
+            points: [
+              [0, 0, 0],
+              [0, 0, 25],
+            ],
+          },
+        },
+      },
+      {
+        id: "f23",
+        type: "surfaceRevolve",
+        params: { angle: 180, ay: 1, ox: 0, oy: 0, oz: 0 },
+        data: {
+          profile: { kind: "circle", center: [15, 0], radius: 2 },
+          plane: { base: "XY", offset: 0 },
+        },
+      },
+      {
+        id: "f24",
+        type: "surfaceFromPoints",
+        params: { degU: 1, degV: 1, tolerance: 0.001 },
+        data: {
+          grid: [
+            [
+              [0, 0, 0],
+              [10, 0, 0],
+            ],
+            [
+              [0, 10, 0],
+              [10, 10, 1],
+            ],
+          ],
+        },
+      },
+      { id: "f25", type: "offsetSurface", params: { distance: 2 } },
+      { id: "f26", type: "sew", params: { tolerance: 0.001 } },
+      { id: "f27", type: "solidify" },
+      { id: "f28", type: "thicken", params: { thickness: 1.5 }, data: { bothSides: false } },
     ],
     params: { wall: 2 },
   };
@@ -128,7 +288,14 @@ describe("R0 authoring schema — validation", () => {
     ["extrude missing height", { id: "x", type: "extrude", params: { back: 0 } }],
     ["fillet missing radius", { id: "x", type: "fillet", params: {}, data: { edges: [] } }],
     ["unknown feature type", { id: "x", type: "frobnicate", params: {} }],
-    ["loft with one section", { id: "x", type: "loft", data: { sections: [{ z: 0, profile: { kind: "circle", center: [0, 0], radius: 1 } }] } }],
+    [
+      "loft with one section",
+      {
+        id: "x",
+        type: "loft",
+        data: { sections: [{ z: 0, profile: { kind: "circle", center: [0, 0], radius: 1 } }] },
+      },
+    ],
   ])("rejects %s", (_label, feature) => {
     const res = authoringDocumentSchema.safeParse({ features: [feature], params: {} });
     expect(res.success).toBe(false);
@@ -150,6 +317,11 @@ describe("R0 unit conversion — mm/deg → SI", () => {
 
   it("scales angles deg→rad and leaves axis vectors untouched", () => {
     const si = toCadDocument(sampleAuthoring());
+    const ext = si.features.find((f) => f.id === "f3")!;
+    expect(ext.params!.draftAngle).toBeCloseTo(deg(5), 12);
+    const rib = si.features.find((f) => f.id === "f3r")!;
+    expect(rib.params!.length).toBeCloseTo(mm(12), 12);
+    expect(rib.data!["direction"]).toEqual([0, 0, 1]);
     const rev = si.features.find((f) => f.id === "f5")!;
     expect(rev.params!.angle).toBeCloseTo(deg(90), 12);
     expect(rev.params!.ay).toBe(1); // axis component is unitless
@@ -173,6 +345,17 @@ describe("R0 unit conversion — mm/deg → SI", () => {
     const sweep = si.features.find((f) => f.id === "f16")!;
     const pts = (sweep.data!.path as { points: [number, number, number][] }).points;
     expect(pts[1]![2]).toBeCloseTo(mm(20), 12);
+  });
+
+  it("converts freeform surface controlNet lengths mm→m (§15)", () => {
+    const si = toCadDocument(sampleAuthoring());
+    const ff = si.features.find((f) => f.id === "f20")!;
+    expect(ff.params!.uSize).toBeCloseTo(0.04, 12);
+    expect(ff.params!.vSize).toBeCloseTo(0.03, 12);
+    expect(ff.params!.resU).toBe(4); // scalar
+    const net = (ff.data!.surface as { controlNet: number[][][] }).controlNet;
+    expect(net[1]![0]![0]).toBeCloseTo(0.04, 12); // 40 mm → 0.04 m
+    expect(net[0]![1]![1]).toBeCloseTo(0.03, 12); // 30 mm → 0.03 m
   });
 
   it("converts revolve origin lengths (ox/oy/oz) and leaves axis unitless (G2)", () => {
@@ -222,7 +405,17 @@ describe("R0 unit conversion — mm/deg → SI", () => {
           id: "fil1",
           type: "fillet",
           params: { radius: 1, radius2: 2 },
-          data: { edges: [{ midpoint: [0, 0, 0], faceNormals: [[0, 0, 1], [1, 0, 0]] }] },
+          data: {
+            edges: [
+              {
+                midpoint: [0, 0, 0],
+                faceNormals: [
+                  [0, 0, 1],
+                  [1, 0, 0],
+                ],
+              },
+            ],
+          },
         },
       ],
       params: {},
@@ -239,7 +432,15 @@ describe("R0 unit conversion — mm/deg → SI", () => {
           type: "chamfer",
           params: { distance: 1, distance2: 3 },
           data: {
-            edges: [{ midpoint: [0, 0, 0], faceNormals: [[0, 0, 1], [1, 0, 0]] }],
+            edges: [
+              {
+                midpoint: [0, 0, 0],
+                faceNormals: [
+                  [0, 0, 1],
+                  [1, 0, 0],
+                ],
+              },
+            ],
             face: { normal: [0, 0, 1], centroid: [0, 0, 0.01] },
           },
         },
@@ -319,7 +520,10 @@ describe("R0 unit conversion — mm/deg → SI", () => {
     };
     expect(authoringDocumentSchema.safeParse(doc).success).toBe(true);
     const si = toCadDocument(doc);
-    const secs = si.features[0]!.data!.sections as { plane: { offset: number }; profile: { radius: number } }[];
+    const secs = si.features[0]!.data!.sections as {
+      plane: { offset: number };
+      profile: { radius: number };
+    }[];
     expect(secs[1]!.plane.offset).toBeCloseTo(mm(50), 12);
     expect(secs[0]!.profile.radius).toBeCloseTo(mm(10), 12);
   });
@@ -347,6 +551,49 @@ describe("R0 unit conversion — mm/deg → SI", () => {
     expect(si.features[0]!.data!.op).toBe("join");
     expect(si.features[1]!.data!.direction).toBe("outward");
     expect(si.features[1]!.params!.thickness).toBeCloseTo(mm(2), 12);
+  });
+
+  it("accepts and preserves the full operation contract for every profile feature (R9)", () => {
+    const operations = ["new", "join", "cut", "intersect"] as const;
+    for (const op of operations) {
+      const doc: AuthoringDocument = {
+        features: [
+          { id: `e-${op}`, type: "extrude", params: { height: 10 }, data: { op } },
+          { id: `r-${op}`, type: "revolve", params: { angle: 360 }, data: { op } },
+          {
+            id: `l-${op}`,
+            type: "loft",
+            data: {
+              op,
+              sections: [
+                { z: 0, profile: { kind: "circle", center: [0, 0], radius: 5 } },
+                { z: 10, profile: { kind: "circle", center: [0, 0], radius: 3 } },
+              ],
+            },
+          },
+          {
+            id: `s-${op}`,
+            type: "sweep",
+            data: {
+              op,
+              profile: { kind: "circle", center: [0, 0], radius: 2 },
+              path: {
+                kind: "polyline",
+                points: [
+                  [0, 0, 0],
+                  [0, 0, 10],
+                ],
+              },
+            },
+          },
+        ],
+        params: {},
+      };
+
+      expect(authoringDocumentSchema.safeParse(doc).success).toBe(true);
+      const si = toCadDocument(doc);
+      expect(si.features.map((feature) => feature.data?.["op"])).toEqual([op, op, op, op]);
+    }
   });
 
   it("accepts extrude toFace without height (T06)", () => {
@@ -386,7 +633,9 @@ describe("R0 unit conversion — mm/deg → SI", () => {
     const fillet = si.features.find((f) => f.id === "f7")!;
     // FaceNormals are unitless; the ref is written by the selection layer in SI,
     // so the converter must NOT scale it.
-    expect((fillet.data!.edges as { faceNormals: number[][] }[])[0]!.faceNormals[0]).toEqual([0, 0, 1]);
+    expect((fillet.data!.edges as { faceNormals: number[][] }[])[0]!.faceNormals[0]).toEqual([
+      0, 0, 1,
+    ]);
     expect(si.features.find((f) => f.id === "f18")!.data!.step).toContain("ISO-10303-21");
     expect(si.params.wall).toBe(2); // document params: unknown units → passthrough
   });

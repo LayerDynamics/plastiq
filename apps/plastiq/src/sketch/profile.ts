@@ -10,7 +10,14 @@
 //   • a single non-construction circle (centre + radius), which the kernel
 //     builds as a true arc edge (extrudes to a real cylinder, not a facet poly).
 
-import type { ArcEntity, LineEntity, SketchModel, SplineEntity } from "./model.js";
+import {
+  ellipseGeometry,
+  resolveOffsetCurve,
+  type ArcEntity,
+  type LineEntity,
+  type SketchModel,
+  type SplineEntity,
+} from "./model.js";
 
 /** One piece of a loop profile, starting at the previous segment's end. */
 export type ProfileSegment =
@@ -27,6 +34,12 @@ export type ProfileHole =
 /** The derived, kernel-ready profile shape. */
 export type Profile =
   | { kind: "circle"; center: [number, number]; radius: number }
+  | {
+      kind: "ellipse";
+      center: [number, number];
+      focus1: [number, number];
+      minorRadius: number;
+    }
   | {
       kind: "loop";
       start: [number, number];
@@ -63,6 +76,14 @@ interface Cycle {
  * islands (a solid inside a hole) — never a silently-dropped region.
  */
 function edgeLoop(model: SketchModel): Profile | null {
+  // Ellipse/offset entities are closed profiles in their own right. Never let a
+  // line loop silently win while dropping one of them; the dedicated extractor
+  // below accepts the supported single-curve cases.
+  if (
+    model.entities.some((e) => !e.construction && (e.kind === "ellipse" || e.kind === "offset"))
+  ) {
+    return null;
+  }
   const edges: Edge[] = [];
   for (const e of model.entities) {
     if (e.construction) continue;
@@ -200,8 +221,7 @@ function pointInRing(p: [number, number], ring: [number, number][]): boolean {
   for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
     const [ui, vi] = ring[i]!;
     const [uj, vj] = ring[j]!;
-    const intersect =
-      vi > v !== vj > v && u < ((uj - ui) * (v - vi)) / (vj - vi + 1e-30) + ui;
+    const intersect = vi > v !== vj > v && u < ((uj - ui) * (v - vi)) / (vj - vi + 1e-30) + ui;
     if (intersect) inside = !inside;
   }
   return inside;
@@ -228,15 +248,38 @@ function interiorCircles(
 /** The single non-construction circle, as a circle profile (or null). */
 function soleCircle(model: SketchModel): Profile | null {
   const circles = model.entities.filter((e) => e.kind === "circle" && !e.construction);
-  const others = model.entities.filter(
-    (e) => (e.kind === "line" || e.kind === "arc" || e.kind === "spline") && !e.construction,
-  );
+  const others = model.entities.filter((e) => e.kind !== "circle" && !e.construction);
   if (circles.length !== 1 || others.length > 0) return null;
   const c = circles[0]!;
   if (c.kind !== "circle") return null;
   const centre = model.points.find((p) => p.id === c.center);
   if (!centre || !(c.radius > 0)) return null;
   return { kind: "circle", center: [centre.u, centre.v], radius: c.radius };
+}
+
+/** A single exact ellipse, or a derived circular offset, as a closed profile. */
+function soleDerivedCurve(model: SketchModel): Profile | null {
+  const curves = model.entities.filter((e) => !e.construction);
+  if (curves.length !== 1) return null;
+  const e = curves[0]!;
+  if (e.kind === "ellipse") {
+    const g = ellipseGeometry(model, e);
+    return g
+      ? {
+          kind: "ellipse",
+          center: g.center,
+          focus1: g.focus1,
+          minorRadius: g.minorRadius,
+        }
+      : null;
+  }
+  if (e.kind === "offset") {
+    const resolved = resolveOffsetCurve(model, e);
+    return resolved?.kind === "circle"
+      ? { kind: "circle", center: resolved.center, radius: resolved.radius }
+      : null;
+  }
+  return null;
 }
 
 /** Is `v` a buildable profile? Validates a deserialized (persisted) payload. */
@@ -247,6 +290,19 @@ export function isProfile(v: unknown): v is Profile {
     const c = (v as { center?: unknown }).center;
     const r = (v as { radius?: unknown }).radius;
     return Array.isArray(c) && c.length === 2 && typeof r === "number" && r > 0;
+  }
+  if (p.kind === "ellipse") {
+    const center = (v as { center?: unknown }).center;
+    const focus1 = (v as { focus1?: unknown }).focus1;
+    const minor = (v as { minorRadius?: unknown }).minorRadius;
+    return (
+      Array.isArray(center) &&
+      center.length === 2 &&
+      Array.isArray(focus1) &&
+      focus1.length === 2 &&
+      typeof minor === "number" &&
+      minor > 0
+    );
   }
   if (p.kind === "loop") {
     const s = (v as { start?: unknown }).start;
@@ -291,7 +347,8 @@ function isSegment(g: unknown): boolean {
   if (k === "line") return Array.isArray((g as { to?: unknown }).to);
   if (k === "arc")
     return (
-      Array.isArray((g as { to?: unknown }).to) && Array.isArray((g as { through?: unknown }).through)
+      Array.isArray((g as { to?: unknown }).to) &&
+      Array.isArray((g as { through?: unknown }).through)
     );
   if (k === "spline") {
     const to = (g as { to?: unknown }).to;
@@ -306,5 +363,5 @@ function isSegment(g: unknown): boolean {
  * doesn't form a buildable closed profile (one line/arc loop, or one circle).
  */
 export function extractProfile(model: SketchModel): Profile | null {
-  return edgeLoop(model) ?? soleCircle(model);
+  return edgeLoop(model) ?? soleCircle(model) ?? soleDerivedCurve(model);
 }

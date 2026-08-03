@@ -25,6 +25,84 @@ describe("CAD Studio store — document (FR-2)", () => {
     expect(s().features[0]!.params).toEqual({ height: 0.05 });
   });
 
+  it("binds a feature expression and makes a literal edit an atomic unbind", () => {
+    s().setParam("wall", 0.002);
+    const id = s().addFeature({ type: "extrude", params: { height: 0.02 } });
+
+    s().setFeatureExpr(id, "height", "wall * 5");
+    expect(s().features[0]!.exprs).toEqual({ height: "wall * 5" });
+
+    s().updateParams(id, { height: 0.03 });
+    expect(s().features[0]!.params).toEqual({ height: 0.03 });
+    expect(s().features[0]!.exprs).toBeUndefined();
+
+    s().undo();
+    expect(s().features[0]!.params).toEqual({ height: 0.02 });
+    expect(s().features[0]!.exprs).toEqual({ height: "wall * 5" });
+  });
+
+  it("renames a global parameter and every exact dependent expression in one undo step", () => {
+    s().setParam("wall", 0.002);
+    s().setParam("firewall", 7);
+    const box = s().addFeature({
+      type: "box",
+      params: { dx: 0.01, dy: 0.01, dz: 0.01 },
+      exprs: { dx: "wall * 5", dy: "firewall + wall" },
+    });
+    const cylinder = s().addFeature({
+      type: "cylinder",
+      params: { radius: 0.005, height: 0.02 },
+      exprs: { radius: "sqrt(wall)" },
+    });
+
+    s().renameParam("wall", "thickness");
+    expect(s().params).toEqual({ thickness: 0.002, firewall: 7 });
+    expect(s().features.find((feature) => feature.id === box)!.exprs).toEqual({
+      dx: "thickness * 5",
+      dy: "firewall + thickness",
+    });
+    expect(s().features.find((feature) => feature.id === cylinder)!.exprs).toEqual({
+      radius: "sqrt(thickness)",
+    });
+
+    s().undo();
+    expect(s().params).toEqual({ wall: 0.002, firewall: 7 });
+    expect(s().features.find((feature) => feature.id === box)!.exprs?.dx).toBe("wall * 5");
+    expect(s().features.find((feature) => feature.id === cylinder)!.exprs?.radius).toBe(
+      "sqrt(wall)",
+    );
+  });
+
+  it("refuses to delete a used parameter and makes an unused deletion undoable", () => {
+    s().setParam("wall", 0.002);
+    s().setParam("gap", 0.001);
+    s().addFeature({
+      type: "box",
+      params: { dx: 0.01, dy: 0.01, dz: 0.01 },
+      exprs: { dx: "wall * 5" },
+    });
+    const pastBeforeRejectedDelete = s().past.length;
+
+    expect(() => s().removeParam("wall")).toThrow(/used by/i);
+    expect(s().params).toEqual({ wall: 0.002, gap: 0.001 });
+    expect(s().past).toHaveLength(pastBeforeRejectedDelete);
+
+    s().removeParam("gap");
+    expect(s().params).toEqual({ wall: 0.002 });
+    s().undo();
+    expect(s().params).toEqual({ wall: 0.002, gap: 0.001 });
+  });
+
+  it("rejects invalid feature expressions without mutating the document or history", () => {
+    const id = s().addFeature({ type: "extrude", params: { height: 0.02 } });
+    const before = s().toDocument();
+    const pastBefore = s().past.length;
+
+    expect(() => s().setFeatureExpr(id, "height", "missing * 2")).toThrow(/Unknown parameter/);
+    expect(s().toDocument()).toEqual(before);
+    expect(s().past).toHaveLength(pastBefore);
+  });
+
   it("setFeatureData stores non-numeric payloads (sketch points / refs)", () => {
     const id = s().addFeature({ type: "sketch" });
     s().setFeatureData(id, {
@@ -150,11 +228,16 @@ describe("CAD Studio store — placement (FR-11 gizmo write-back)", () => {
 
   it("toggleMeasure flips the tool and clears the readout when turned off", () => {
     s().setMeasureResult("50.00 mm");
+    s().setMeasureEndpoints({
+      a: { kind: "vertex", ref: { position: [0, 0, 0] } },
+      b: { kind: "vertex", ref: { position: [0.06, 0.04, 0.03] } },
+    });
     s().toggleMeasure(); // on — keeps any existing result
     expect(s().measuring).toBe(true);
-    s().toggleMeasure(); // off — clears the readout
+    s().toggleMeasure(); // off — clears the readout + banked VertexRefs
     expect(s().measuring).toBe(false);
     expect(s().measureResult).toBeNull();
+    expect(s().measureEndpoints).toBeNull();
   });
 });
 
@@ -373,6 +456,97 @@ describe("CAD Studio store — assembly (FR-33/FR-34 / M4)", () => {
     const pastLen = s().past.length;
     s().setJointDrive(jid, 1.0);
     expect(s().past.length).toBe(pastLen);
+  });
+
+  it("S6: addMatePick surfaces a status when the face has no ref (no silent drop)", () => {
+    s().setSelectionRefs({ faces: {}, edges: {} }); // faceId 1 has NO ref
+    const i0 = s().addInstance();
+    s().setMateMode(true);
+    s().addMatePick({ instanceId: i0, faceId: 1, worldPoint: [0, 0, 0] });
+    expect(s().matePicks).toHaveLength(0); // still didn't advance...
+    expect(s().status).toMatch(/face 1 has no reference geometry/i); // ...but says why
+  });
+
+  it("S6: addMatePick surfaces a status when the instance is gone", () => {
+    s().setSelectionRefs({ faces: { 1: { normal: [1, 0, 0] } }, edges: {} });
+    s().setMateMode(true);
+    s().addMatePick({ instanceId: "i-ghost", faceId: 1, worldPoint: [0, 0, 0] });
+    expect(s().matePicks).toHaveLength(0);
+    expect(s().status).toMatch(/no longer exists/i);
+  });
+
+  it("S4: mate mode cannot coexist with an exploded assembly", () => {
+    s().setSelectionRefs({ faces: { 1: { normal: [1, 0, 0] } }, edges: {} });
+    const i0 = s().addInstance();
+    s().setMateMode(true);
+    expect(s().mateMode).toBe(true);
+    s().setExplodeFactor(0.5); // exploding exits the mode before picks can be mislocalized
+    expect(s().mateMode).toBe(false);
+    s().addMatePick({ instanceId: i0, faceId: 1, worldPoint: [0.03, 0, 0] });
+    expect(s().matePicks).toHaveLength(0); // pick refused
+    expect(s().status).toMatch(/collapse the explode/i);
+
+    // Direct attempts to re-enter are refused until the explode is collapsed.
+    s().setMateMode(true);
+    expect(s().mateMode).toBe(false);
+    expect(s().status).toMatch(/before entering mate mode/i);
+
+    // Collapsing the explode lets mate mode and picking work again.
+    s().setExplodeFactor(0);
+    s().setMateMode(true);
+    s().addMatePick({ instanceId: i0, faceId: 1, worldPoint: [0.03, 0, 0] });
+    expect(s().mateMode).toBe(true);
+    expect(s().matePicks).toHaveLength(1);
+  });
+
+  it("S5: removeInstance purges pending matePicks referencing the removed instance", () => {
+    s().setSelectionRefs({ faces: { 1: { normal: [1, 0, 0] } }, edges: {} });
+    const i0 = s().addInstance();
+    const i1 = s().addInstance();
+    s().setMateMode(true);
+    s().addMatePick({ instanceId: i0, faceId: 1, worldPoint: [0, 0, 0] });
+    s().addMatePick({ instanceId: i1, faceId: 1, worldPoint: [0.08, 0, 0] });
+    expect(s().matePicks).toHaveLength(2);
+    s().removeInstance(i1);
+    // The pick that pointed at i1 is gone; only i0's pick remains.
+    expect(s().matePicks).toHaveLength(1);
+    expect(s().matePicks[0]!.instanceId).toBe(i0);
+  });
+
+  it("S5: applyMate skips (with a status) when a picked instance was removed", () => {
+    s().setSelectionRefs({ faces: { 1: { normal: [1, 0, 0] } }, edges: {} });
+    const i0 = s().addInstance();
+    const i1 = s().addInstance();
+    s().setMateMode(true);
+    s().addMatePick({ instanceId: i0, faceId: 1, worldPoint: [0, 0, 0] });
+    s().addMatePick({ instanceId: i1, faceId: 1, worldPoint: [0.08, 0, 0] });
+    // Simulate a stale second pick: replace matePicks so i1's stays but points at a
+    // now-removed instance (removeInstance would normally purge it — this exercises
+    // the applyMate guard directly against a dangling id).
+    useCadStore.setState((st) => ({
+      matePicks: [st.matePicks[0]!, { ...st.matePicks[1]!, instanceId: "i-ghost" }],
+    }));
+    s().applyMate("coincident");
+    expect(s().assembly.mates).toHaveLength(0); // no mate built
+    expect(s().matePicks).toHaveLength(0); // stale picks cleared
+    expect(s().status).toMatch(/a picked instance was removed/i);
+  });
+
+  it("S5: applyJoint requires BOTH instances, not just the parent", () => {
+    s().setSelectionRefs({ faces: { 1: { normal: [0, 0, 1] } }, edges: {} });
+    const i0 = s().addInstance();
+    const i1 = s().addInstance();
+    s().setMateMode(true);
+    s().addMatePick({ instanceId: i0, faceId: 1, worldPoint: [0, 0, 0] });
+    s().addMatePick({ instanceId: i1, faceId: 1, worldPoint: [0.08, 0, 0] });
+    // Make the CHILD (second pick) dangle — the old code only checked the parent.
+    useCadStore.setState((st) => ({
+      matePicks: [st.matePicks[0]!, { ...st.matePicks[1]!, instanceId: "i-ghost" }],
+    }));
+    s().applyJoint("revolute");
+    expect(s().assembly.joints).toHaveLength(0); // no joint on a dead child
+    expect(s().matePicks).toHaveLength(0);
+    expect(s().status).toMatch(/a picked instance was removed/i);
   });
 
   it("assembly edits are undoable", () => {

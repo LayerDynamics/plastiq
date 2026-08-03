@@ -1,0 +1,13 @@
+{
+  "name": "@plastiq/ml",
+  "version": "0.1.0",
+  "private": true,
+  "license": "SEE LICENSE IN LICENSE",
+  "type": "module",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "description": "Shared submit→poll + cancel primitives for Plastiq ML service clients (capture, nerf, nurbs, photogrammetry, recon).",
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  }
+}

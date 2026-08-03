@@ -51,13 +51,18 @@ describe("action registry — composition", () => {
     // ribbon-only ops added
     for (const id of [
       "loft",
+      "rib",
       "sweep",
+      "helixSweep",
       "mirror",
       "linearPattern",
       "circularPattern",
+      "pathPattern",
+      "split",
       "booleanBody",
       "transform",
       "import-step",
+      "import-iges",
       "export-gltf",
       "export-step",
       "export-iges",
@@ -101,27 +106,52 @@ describe("action registry — composition", () => {
 describe("action registry — run() invokes the real store action", () => {
   beforeEach(() => useCadStore.getState().reset());
 
+  it("disables mate mode while the assembly is exploded (R7/S4)", () => {
+    expect(ACTIONS["mate-mode"]!.enabled(makeTarget({ explodeFactor: 0 }))).toBe(true);
+    expect(ACTIONS["mate-mode"]!.enabled(makeTarget({ explodeFactor: 0.5 }))).toBe(false);
+  });
+
   it("mirror / pattern append features with defaults when nothing is selected (C6)", () => {
     runAction("mirror", makeTarget());
     runAction("linearPattern", makeTarget());
     runAction("circularPattern", makeTarget());
-    // Without sketches, loft/sweep/booleanBody are disabled or no-op (no demo injectors).
+    runAction("pathPattern", makeTarget());
+    runAction("split", makeTarget());
+    // Without sketches, loft/sweep/helixSweep/booleanBody are disabled or no-op (no demo injectors).
     expect(ACTIONS["loft"]!.enabled(makeTarget())).toBe(false);
     expect(ACTIONS["sweep"]!.enabled(makeTarget())).toBe(false);
+    expect(ACTIONS["helixSweep"]!.enabled(makeTarget())).toBe(false);
     expect(ACTIONS["booleanBody"]!.enabled(makeTarget())).toBe(false);
     expect(ACTIONS["demo-transform"]).toBeUndefined();
     expect(ACTIONS["boolean"]).toBeUndefined();
     const feats = useCadStore.getState().features;
-    expect(feats.map((f) => f.type)).toEqual(["mirror", "linearPattern", "circularPattern"]);
-    expect(feats[0]!.params).toMatchObject({ nx: 1, ox: 0, merge: 1 });
+    expect(feats.map((f) => f.type)).toEqual([
+      "mirror",
+      "linearPattern",
+      "circularPattern",
+      "pathPattern",
+      "split",
+    ]);
+    expect(feats[0]!.params).toEqual({ nx: 1, ny: 0, nz: 0, ox: 0, oy: 0, oz: 0, merge: 1 });
     expect(feats[1]!.params).toMatchObject({ dx: 1, spacing: 0.08, count: 3 });
     expect(feats[2]!.params).toMatchObject({ az: 1, count: 4 });
+    expect(feats[3]!.params).toMatchObject({ count: 3 });
+    expect(feats[3]!.data).toMatchObject({
+      path: { kind: "polyline" },
+      align: false,
+    });
+    expect(feats[4]!.data).toMatchObject({
+      plane: { origin: [0, 0, 0], normal: [1, 0, 0] },
+    });
     // Status explains how to drive selection (last action's message).
-    expect(useCadStore.getState().status).toMatch(/select an edge|face/i);
+    expect(useCadStore.getState().status).toMatch(/select an edge|face|plane/i);
   });
 
   it("mirror uses selected face plane origin + normal (C6)", () => {
-    const face = { normal: [0, 1, 0] as [number, number, number], centroid: [0.01, 0.02, 0.03] as [number, number, number] };
+    const face = {
+      normal: [0, 1, 0] as [number, number, number],
+      centroid: [0.01, 0.02, 0.03] as [number, number, number],
+    };
     runAction(
       "mirror",
       makeTarget({
@@ -228,7 +258,57 @@ describe("action registry — run() invokes the real store action", () => {
     expect(useCadStore.getState().features).toHaveLength(0);
   });
 
-  it("loft / sweep from finished sketches append real features (C4)", () => {
+  it("hole from face+vertex stores origin vector from VertexRef and originVertex (R12)", () => {
+    const face = {
+      normal: [0, 0, 1] as [number, number, number],
+      centroid: [0.03, 0.02, 0.03] as [number, number, number],
+    };
+    const vertex = { position: [0.06, 0.04, 0.03] as [number, number, number] };
+    runAction(
+      "hole",
+      makeTarget({
+        kind: "face",
+        picks: [
+          { kind: "face", id: 1 },
+          { kind: "vertex", id: 7 },
+        ],
+        refs: {
+          faces: { 1: face },
+          edges: {},
+          vertices: { 7: vertex },
+        },
+      }),
+    );
+    const f = useCadStore.getState().features[0]!;
+    expect(f.type).toBe("hole");
+    // Origin is still the hole contract's 3-vector — taken from VertexRef.position.
+    expect(f.data!["origin"]).toEqual([0.06, 0.04, 0.03]);
+    // Persistent signature for rebuild re-resolve (not a bare pick index).
+    expect(f.data!["originVertex"]).toEqual(vertex);
+    // Axis still drills along the face's inward normal (−normal).
+    const axis = f.data!["axis"] as number[];
+    expect(axis[0]).toBeCloseTo(0, 12);
+    expect(axis[1]).toBeCloseTo(0, 12);
+    expect(axis[2]).toBeCloseTo(-1, 12);
+    expect(useCadStore.getState().status).toMatch(/vertex/i);
+  });
+
+  it("cylinder placement origin comes from a picked VertexRef (R12)", () => {
+    const vertex = { position: [0.01, 0.02, 0.03] as [number, number, number] };
+    runAction(
+      "cylinder",
+      makeTarget({
+        kind: "vertex",
+        picks: [{ kind: "vertex", id: 3 }],
+        refs: { faces: {}, edges: {}, vertices: { 3: vertex } },
+      }),
+    );
+    const f = useCadStore.getState().features[0]!;
+    expect(f.type).toBe("cylinder");
+    expect(f.params).toMatchObject({ ox: 0.01, oy: 0.02, oz: 0.03 });
+  });
+
+  it("loft / sweep / rib from finished sketches append real features", () => {
     // Two sketches → loft enabled and runs.
     useCadStore.getState().addFeature({
       type: "sketch",
@@ -262,12 +342,130 @@ describe("action registry — run() invokes the real store action", () => {
     expect(ACTIONS["loft"]!.enabled(makeTarget())).toBe(true);
     runAction("loft", makeTarget());
     expect(useCadStore.getState().features.some((f) => f.type === "loft")).toBe(true);
-    expect(useCadStore.getState().status).toMatch(/Loft: from sketches/i);
+    expect(useCadStore.getState().status).toMatch(/Loft:.*sketches/i);
 
     expect(ACTIONS["sweep"]!.enabled(makeTarget())).toBe(true);
     runAction("sweep", makeTarget());
     expect(useCadStore.getState().features.some((f) => f.type === "sweep")).toBe(true);
     expect(useCadStore.getState().status).toMatch(/Sweep: profile from sketch/i);
+
+    expect(ACTIONS["rib"]!.enabled(makeTarget())).toBe(true);
+    runAction("rib", makeTarget());
+    const rib = useCadStore.getState().features.find((f) => f.type === "rib")!;
+    expect(rib.params).toEqual({ length: 0.01 });
+    expect(rib.data).toMatchObject({ op: "join", sketchId: expect.any(String) });
+    expect(rib.deps).toEqual([rib.data!["sketchId"]]);
+  });
+
+  it("loft uses ALL finished sketches as multi-sections, not only last two (C4)", () => {
+    const prof = (s: number) => ({
+      kind: "loop" as const,
+      start: [0, 0] as [number, number],
+      segments: [
+        { kind: "line" as const, to: [s, 0] as [number, number] },
+        { kind: "line" as const, to: [s, s] as [number, number] },
+        { kind: "line" as const, to: [0, s] as [number, number] },
+      ],
+    });
+    const a = useCadStore.getState().addFeature({
+      type: "sketch",
+      data: { profile: prof(0.04) },
+    });
+    const b = useCadStore.getState().addFeature({
+      type: "sketch",
+      data: { profile: prof(0.03), plane: { base: "XY", offset: 0.03 } },
+    });
+    const c = useCadStore.getState().addFeature({
+      type: "sketch",
+      data: { profile: prof(0.02), plane: { base: "XY", offset: 0.06 } },
+    });
+    runAction("loft", makeTarget());
+    const loft = useCadStore.getState().features.find((f) => f.type === "loft")!;
+    const sections = loft.data!["sections"] as unknown[];
+    expect(sections).toHaveLength(3);
+    expect(useCadStore.getState().status).toMatch(/3 sections/);
+    expect(useCadStore.getState().status).toContain(a);
+    expect(useCadStore.getState().status).toContain(b);
+    expect(useCadStore.getState().status).toContain(c);
+  });
+
+  it("booleanBody uses selected sketch as tool, never DEFAULT_RECT (C5)", () => {
+    useCadStore.getState().addFeature({ type: "box", params: { dx: 0.04, dy: 0.04, dz: 0.03 } });
+    const sk1 = useCadStore.getState().addFeature({
+      type: "sketch",
+      data: {
+        profile: {
+          kind: "loop",
+          start: [0, 0],
+          segments: [
+            { kind: "line", to: [0.01, 0] },
+            { kind: "line", to: [0.01, 0.01] },
+            { kind: "line", to: [0, 0.01] },
+          ],
+        },
+      },
+    });
+    const sk2 = useCadStore.getState().addFeature({
+      type: "sketch",
+      data: {
+        profile: {
+          kind: "circle",
+          center: [0.02, 0.02],
+          radius: 0.005,
+        },
+      },
+    });
+    // Select the first sketch — not the last — as the tool profile.
+    useCadStore.getState().selectFeature(sk1);
+    expect(ACTIONS["booleanBody"]!.enabled(makeTarget())).toBe(true);
+    runAction("booleanBody", makeTarget());
+    const bo = useCadStore.getState().features.find((f) => f.type === "boolean")!;
+    expect(bo.data!["op"]).toBe("subtract");
+    const tools = bo.data!["toolFeatures"] as {
+      type: string;
+      data?: { profile?: { kind?: string } };
+    }[];
+    expect(tools[0]!.type).toBe("sketch");
+    expect(tools[0]!.data?.profile?.kind).toBe("loop"); // sk1, not sk2's circle
+    expect(tools[1]!.type).toBe("extrude");
+    expect(useCadStore.getState().status).toContain(sk1);
+    expect(useCadStore.getState().status).not.toContain(sk2);
+  });
+
+  it("booleanBody uses selected solid primitive as tool body (C5)", () => {
+    useCadStore.getState().addFeature({ type: "box", params: { dx: 0.04, dy: 0.04, dz: 0.03 } });
+    const cyl = useCadStore.getState().addFeature({
+      type: "cylinder",
+      params: { radius: 0.005, height: 0.05 },
+    });
+    useCadStore.getState().selectFeature(cyl);
+    runAction("booleanBody", makeTarget());
+    const bo = useCadStore.getState().features.find((f) => f.type === "boolean")!;
+    const tools = bo.data!["toolFeatures"] as { type: string }[];
+    expect(tools).toHaveLength(1);
+    expect(tools[0]!.type).toBe("cylinder");
+    expect(useCadStore.getState().status).toMatch(/cylinder/);
+  });
+
+  it("sweep prefers selected sketch as profile (C4)", () => {
+    const s1 = useCadStore.getState().addFeature({
+      type: "sketch",
+      data: {
+        profile: { kind: "circle", center: [0, 0], radius: 0.005 },
+      },
+    });
+    useCadStore.getState().addFeature({
+      type: "sketch",
+      data: {
+        profile: { kind: "circle", center: [0, 0], radius: 0.01 },
+        plane: { base: "XY", offset: 0.02 },
+      },
+    });
+    useCadStore.getState().selectFeature(s1);
+    runAction("sweep", makeTarget());
+    const sw = useCadStore.getState().features.find((f) => f.type === "sweep")!;
+    expect(sw.data!["profile"]).toMatchObject({ kind: "circle", radius: 0.005 });
+    expect(useCadStore.getState().status).toContain(s1);
   });
 
   it("selmode-* switches the selection mode and reports active", () => {
@@ -316,9 +514,12 @@ describe("action registry — mesh mode disables B-rep ops (FR-18)", () => {
     for (const id of [
       "loft",
       "sweep",
+      "helixSweep",
       "mirror",
       "linearPattern",
       "circularPattern",
+      "pathPattern",
+      "split",
       "transform",
       "import-step",
       "export-gltf",
@@ -367,7 +568,9 @@ describe("action registry — mesh→CAD conversions are the inverse gate of B-r
   });
 
   it("running a disabled conversion with no mesh open is a no-op", () => {
-    expect(() => runAction("ml-reconstruct-brep", makeTarget({ activeMeshDoc: null }))).not.toThrow();
+    expect(() =>
+      runAction("ml-reconstruct-brep", makeTarget({ activeMeshDoc: null })),
+    ).not.toThrow();
     expect(useCadStore.getState().features).toHaveLength(0);
   });
 
@@ -398,7 +601,14 @@ describe("action registry — point-cloud mode disables B-rep ops (SPEC-13, FR-1
 
   it("B-rep feature ops + the mesh→CAD conversions are disabled on a cloud document", () => {
     const t = makeTarget();
-    for (const id of ["loft", "sweep", "mirror", "booleanBody", "ml-reconstruct-brep", "ml-fit-nurbs"]) {
+    for (const id of [
+      "loft",
+      "sweep",
+      "mirror",
+      "booleanBody",
+      "ml-reconstruct-brep",
+      "ml-fit-nurbs",
+    ]) {
       expect(ACTIONS[id]!.enabled(t), id).toBe(false);
     }
   });

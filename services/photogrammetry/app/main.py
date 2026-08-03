@@ -1,9 +1,9 @@
 """Plastiq photogrammetry service (FastAPI) — unposed photos → poses + point clouds, via submit→poll.
 
-POST /solve { images, names?, matching?, dense?, undistort?, max_features?, seed?,
+POST /solve { images, names?, matching?, dense?, max_features?, seed?,
               sparse_max_dim? } → { id, state }
 GET  /jobs/{id}/status → { id, state, error? }
-GET  /jobs/{id}/result → { transforms_json, images_undistorted, sparse_ply_base64,
+GET  /jobs/{id}/result → { transforms_json, sparse_ply_base64,
                            dense_ply_base64, report }  (200 completed; 409 not yet; 500 failed; 404)
 DELETE /jobs/{id}      → 204 (dropped) | 404
 GET  /health           → { status, service }
@@ -15,8 +15,8 @@ event loop via ``asyncio.to_thread``.
 
 Dependency-injected pipeline (the §6.1 seam). The heavy solve is a ``solve_fn`` handed to
 :func:`create_app` — the HTTP shell is built and tested **independently** of the SfM/MVS stack.
-``solve_fn(payload: dict) -> {"transforms_json", "images_undistorted", "sparse_ply_base64",
-"dense_ply_base64", "report"}`` is called for each accepted /solve job; ``payload`` is the validated
+``solve_fn(payload: dict) -> {"transforms_json", "sparse_ply_base64", "dense_ply_base64",
+"report"}`` is called for each accepted /solve job; ``payload`` is the validated
 request body (``model_dump``). :func:`create_app` therefore has **no import-time dependency** on
 ``app.pipeline`` (which pulls MLX/opencv-free-but-heavy numpy/scipy) — tests inject their own
 ``solve_fn`` for the shell/auth/validation paths, and the module graph stays light enough that the CI
@@ -89,7 +89,6 @@ class SolveBody(BaseModel):
     names: list[str] | None = None  # parallel filenames; server names frame_%05d.jpg when absent
     matching: Literal["exhaustive", "sequential"] = "exhaustive"
     dense: bool = True
-    undistort: bool = True
     max_features: int = Field(4096, ge=512, le=16384)
     seed: int = Field(0, ge=0)
     # T39: downscale for sparse SfM while dense MVS keeps full-res (ComparativeDeepDive: sparse
@@ -179,7 +178,6 @@ def _load_pipeline_solve(payload: dict) -> dict:
         max_features=payload.get("max_features", 4096),
         seed=payload.get("seed", 0),
         image_names=payload.get("names"),
-        undistort=payload.get("undistort", True),
         dense_images=dense_images,
     )
 
@@ -188,7 +186,6 @@ def _load_pipeline_solve(payload: dict) -> dict:
 
     return {
         "transforms_json": result.transforms_json,
-        "images_undistorted": result.images_undistorted,
         "sparse_ply_base64": _b64(result.sparse_ply),
         "dense_ply_base64": _b64(result.dense_ply) if result.dense_ply is not None else None,
         "report": result.report,

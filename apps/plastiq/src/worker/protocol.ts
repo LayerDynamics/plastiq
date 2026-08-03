@@ -2,12 +2,12 @@
 // request with the document; the worker rebuilds it through @plastiq/cad and posts
 // back a tagged mesh in transferable typed-array form (or a typed error).
 
-import type { FaceGroup, FaceRef, SimManifest } from "@plastiq/cad";
+import type { BodyKind, FaceGroup, FaceRef, SimManifest, SurfaceSignature } from "@plastiq/cad";
 import type { CadDocument } from "../store/types.js";
 // Type-only: rebuild.ts does not import this module, so there is no cycle.
 import type { FeatureBuildStatus } from "./rebuild.js";
 
-export type { FeatureBuildStatus };
+export type { FeatureBuildStatus, BodyKind };
 
 type Vec3 = [number, number, number];
 /** The two adjacent-face normals that form an edge's persistent EdgeRef. */
@@ -21,14 +21,25 @@ export interface TransferMesh {
    * disambiguator (SPEC-4 FR-16). */
   faceGroups: FaceGroup[];
   /** Edges carry the EdgeRef `faceNormals` signature + `midpoint` positional
-   * disambiguator for persistent selection. */
+   * disambiguator for persistent selection, plus the PRIMARY `faceSurfaces`
+   * analytic signature (R1/§4.2 — the pair the main thread previously never
+   * received, forcing every interactive pick onto the legacy normal path that
+   * the kernel documents as guaranteed to break on curved walls). */
   edges: {
     edgeId: number;
     positions: Float32Array;
     faceNormals: EdgePolylineNormals;
+    /** The two adjacent faces' analytic surfaces, in the SAME order as
+     * `faceNormals` — the primary EdgeRef signature (§2.1/R1). */
+    faceSurfaces: readonly [SurfaceSignature, SurfaceSignature];
     /** Adjacent face ids in the current mesh, when topology data is available. */
     faceIds?: readonly [number, number];
     midpoint: Vec3;
+    /**
+     * Free (naked) edge on an open shell/face (§14 / §17). Optional for
+     * back-compat — absent or false on closed solids.
+     */
+    isFree?: boolean;
   }[];
   /** B-rep corner ids, parallel to `vertexPositions` (groups of 3). */
   vertexIds: number[];
@@ -43,6 +54,17 @@ export interface TransferMesh {
   bodyVolumes?: number[];
   /** Geometric centre of mass (centroid) in SI metres (same caveat as `volume`). */
   com?: Vec3;
+  /**
+   * Body-kind discriminator (§11 / §17): `"solid" | "shell" | "face" | …`.
+   * Optional so partial fixtures and older workers stay compatible; a real
+   * rebuild always sets it from TopAbs shape type after rebuild.
+   */
+  bodyKind?: BodyKind;
+  /**
+   * Free (naked) edge count from ShapeAnalysis_FreeBounds (§14 / §17). Zero on
+   * a watertight solid. Optional for back-compat.
+   */
+  freeEdgeCount?: number;
 }
 
 export interface BuildRequest {
@@ -80,6 +102,14 @@ export interface FacePlaneRequest {
   face: FaceRef;
 }
 
+/** Exact B-rep narrow-phase for assembly pairs selected by the UI's AABB broad-phase. */
+export interface InterferenceRequest {
+  id: number;
+  op: "interference";
+  doc: CadDocument;
+  candidates: { a: string; b: string }[];
+}
+
 /** A sketch datum frame (origin + orthonormal normal/xAxis), in SI metres. */
 export interface PlaneFrame {
   origin: Vec3;
@@ -87,7 +117,12 @@ export interface PlaneFrame {
   xAxis: Vec3;
 }
 
-export type WorkerRequest = BuildRequest | LowerRequest | ExportRequest | FacePlaneRequest;
+export type WorkerRequest =
+  | BuildRequest
+  | LowerRequest
+  | ExportRequest
+  | FacePlaneRequest
+  | InterferenceRequest;
 
 export type WorkerResponse =
   | {
@@ -123,4 +158,5 @@ export type WorkerResponse =
       bodyCount: number;
     }
   | { id: number; ok: true; op: "facePlane"; plane: PlaneFrame | null }
+  | { id: number; ok: true; op: "interference"; clashes: { a: string; b: string }[] }
   | { id: number; ok: false; error: string };

@@ -182,6 +182,29 @@ describe("nurbsFitStatusMessage — honest FR-9/NFR-5 labeling", () => {
     expect(msg).toContain("fidelity coarse");
     expect(msg).toContain("Δ0.5000");
   });
+
+  it("reports the deviation without a verdict when fidelityTol is null (the service default path, M2)", () => {
+    // fitMeshToCad never sends fidelityTol, so the service reports fidelity_tol: null. The old
+    // `maxDeviation <= null` was always false, mislabeling every default fit "coarse".
+    const msg = nurbsFitStatusMessage(report({ maxDeviation: 0.0008, fidelityTol: null }));
+    expect(msg).toContain("fidelity Δ0.0008 (no tolerance set)");
+    expect(msg).not.toContain("coarse");
+    expect(msg).not.toContain("fidelity good");
+  });
+
+  it("surfaces closed-mode watertightness (free_edges = 0) and volume when present (M4)", () => {
+    const msg = nurbsFitStatusMessage(
+      report({ patches: 6, isSolid: true, mode: "closed", freeEdges: 0, volume: 1.25e-6 }),
+    );
+    expect(msg).toContain("watertight (0 free edges)");
+    expect(msg).toContain("volume 1250 mm³"); // 1.25e-6 m³ → 1250 mm³
+  });
+
+  it("reports open free edges honestly when the closed solid did not seal (free_edges > 0)", () => {
+    const msg = nurbsFitStatusMessage(report({ isSolid: false, mode: "closed", freeEdges: 3 }));
+    expect(msg).toContain("3 free edges");
+    expect(msg).toContain("shell (not a solid)");
+  });
 });
 
 describe("service constants — the panel's health pre-check surface", () => {

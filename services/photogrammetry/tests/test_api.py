@@ -12,7 +12,7 @@ Two layers of coverage:
   job in flight for the 409 / 429 paths).
 * **P10.2b — the real photos→result E2E** (``test_real_solve_end_to_end``), driving the PRODUCTION
   dispatcher ``app.main._load_pipeline_solve`` (NOT an injected double): a small synthetic photo set is
-  submitted, polled to completion, and its ``{ transforms_json, images_undistorted, sparse_ply_base64,
+  submitted, polled to completion, and its ``{ transforms_json, sparse_ply_base64,
   dense_ply_base64, report }`` fetched — real feature/matching/BA sparse SfM + real MLX plane-sweep
   MVS + fusion through the live ASGI service. Gated on ``mlx.core`` + ``PIL``.
 """
@@ -55,7 +55,6 @@ def _contract_result(payload: dict) -> dict:
     assert the body flowed through ``solve_fn`` (``matching``/``seed``) without the solve stack."""
     return {
         "transforms_json": '{"frames": []}',
-        "images_undistorted": None,
         "sparse_ply_base64": base64.b64encode(b"ply\nformat ascii 1.0\n").decode("ascii"),
         "dense_ply_base64": None,
         "report": {

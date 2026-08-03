@@ -27,9 +27,7 @@ const snap = (over: Partial<RecoverySnapshot> = {}): RecoverySnapshot => ({
 
 /** Install a plain-object localStorage so tests can read the RAW stored JSON
  * (the Node env has no localStorage; recovery falls back to a private Map). */
-function stubLocalStorage(
-  overrides: Partial<Storage> = {},
-): Record<string, string> {
+function stubLocalStorage(overrides: Partial<Storage> = {}): Record<string, string> {
   const bag: Record<string, string> = {};
   (globalThis as { localStorage?: unknown }).localStorage = {
     getItem: (k: string) => bag[k] ?? null,
@@ -155,6 +153,22 @@ describe("snapshot compaction — large import payloads stored once, not re-seri
     expect(hydrated.doc).toEqual(importDoc); // byte-identical STEP text, ref removed
   });
 
+  it("externalizes and hydrates an IGES import with the matching igesRef key", async () => {
+    const bag = stubLocalStorage();
+    const igesText = `IGES;\n${"entity-record; ".repeat(2000)}END;`;
+    const igesDoc: CadDocument = {
+      features: [{ id: "f1", type: "importIges", name: "part.igs", data: { iges: igesText } }],
+      params: {},
+    };
+    await writeRecovery(snap({ doc: igesDoc }), OPTS);
+    const stored = JSON.parse(bag[KEY]!) as RecoverySnapshot;
+    const data = stored.doc.features[0]!.data!;
+    expect(data["iges"]).toBeUndefined();
+    expect(data["igesRef"]).toMatchObject({ bytes: igesText.length });
+    expect(data["stepRef"]).toBeUndefined();
+    expect((await hydrateRecovery(stored)).doc).toEqual(igesDoc);
+  });
+
   it("compacts import payloads nested in a boolean tool subtree too", async () => {
     const bag = stubLocalStorage();
     const nested: CadDocument = {
@@ -165,7 +179,9 @@ describe("snapshot compaction — large import payloads stored once, not re-seri
           type: "boolean",
           data: {
             op: "subtract",
-            toolFeatures: [{ id: "t1", type: "importStep", name: "tool.step", data: { step: stepText } }],
+            toolFeatures: [
+              { id: "t1", type: "importStep", name: "tool.step", data: { step: stepText } },
+            ],
           },
         },
       ],

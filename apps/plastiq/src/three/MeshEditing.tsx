@@ -220,8 +220,13 @@ export function MeshEditing({
       const body = builtRef.current.findIndex((b) => b.mesh === hit.object);
       return body >= 0 ? { kind: "face", id: encodeMeshPick(body, hit.faceIndex) } : null;
     };
-    const entityHit = (mode: SelectionMode, ndc: THREE.Vector2): Pick | null => {
+    // R5 — same contract as Picking.entityHit: null = permissive cascade;
+    // face/edge/vertex/body = strict filter.
+    const entityHit = (mode: SelectionMode | null, ndc: THREE.Vector2): Pick | null => {
       if (mode === "body") return rayBody(ndc);
+      if (mode === "vertex") return nearest("vertex", ndc);
+      if (mode === "edge") return nearest("edge", ndc);
+      if (mode === "face") return rayFace(ndc) ?? nearest("face", ndc);
       return nearest("vertex", ndc) ?? nearest("edge", ndc) ?? rayFace(ndc) ?? nearest("face", ndc);
     };
     let downAt: { x: number; y: number } | null = null;

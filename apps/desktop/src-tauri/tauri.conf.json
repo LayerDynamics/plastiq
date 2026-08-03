@@ -26,6 +26,23 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "resources": {
+      "../../../scripts/dev-services.sh": "orchestrator/scripts/dev-services.sh",
+      "../../../services/reconstruct/app": "orchestrator/services/reconstruct/app",
+      "../../../services/reconstruct/environment.yml": "orchestrator/services/reconstruct/environment.yml",
+      "../../../services/reconstruct/pyproject.toml": "orchestrator/services/reconstruct/pyproject.toml",
+      "../../../services/capture/app": "orchestrator/services/capture/app",
+      "../../../services/capture/environment.yml": "orchestrator/services/capture/environment.yml",
+      "../../../services/nerf/app": "orchestrator/services/nerf/app",
+      "../../../services/nerf/environment.yml": "orchestrator/services/nerf/environment.yml",
+      "../../../services/nerf/pyproject.toml": "orchestrator/services/nerf/pyproject.toml",
+      "../../../services/nurbs/app": "orchestrator/services/nurbs/app",
+      "../../../services/nurbs/environment.yml": "orchestrator/services/nurbs/environment.yml",
+      "../../../services/nurbs/pyproject.toml": "orchestrator/services/nurbs/pyproject.toml",
+      "../../../services/photogrammetry/app": "orchestrator/services/photogrammetry/app",
+      "../../../services/photogrammetry/environment.yml": "orchestrator/services/photogrammetry/environment.yml",
+      "../../../services/photogrammetry/pyproject.toml": "orchestrator/services/photogrammetry/pyproject.toml"
+    },
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

@@ -177,19 +177,20 @@ def test_frame_file_paths_and_camera_model():
     assert len(doc["frames"]) == s.poses_w2c.shape[0]
 
 
-def test_undistort_true_zeroes_distortion():
+def test_no_dist_zeroes_distortion():
+    """No calibrated ``dist`` (the default, and the sparse pipeline's only path) ⇒ k1..p2 emit as 0."""
     s = _scene()
     names = _image_names(s.poses_w2c.shape[0])
-    dist = np.array([-0.12, 0.03, 0.001, -0.002])
-    doc = json.loads(emit_transforms_json(s.poses_w2c, s.K, 64, 64, names, dist=dist, undistort=True))
+    doc = json.loads(emit_transforms_json(s.poses_w2c, s.K, 64, 64, names))
     assert doc["k1"] == 0.0 and doc["k2"] == 0.0 and doc["p1"] == 0.0 and doc["p2"] == 0.0
 
 
-def test_undistort_false_keeps_calibrated_coeffs():
+def test_calibrated_dist_coeffs_emitted():
+    """A supplied ``dist`` rides on the wire verbatim (first four Brown-Conrady coefficients)."""
     s = _scene()
     names = _image_names(s.poses_w2c.shape[0])
     dist = np.array([-0.12, 0.03, 0.001, -0.002])
-    doc = json.loads(emit_transforms_json(s.poses_w2c, s.K, 64, 64, names, dist=dist, undistort=False))
+    doc = json.loads(emit_transforms_json(s.poses_w2c, s.K, 64, 64, names, dist=dist))
     assert abs(doc["k1"] - (-0.12)) < 1e-12
     assert abs(doc["k2"] - 0.03) < 1e-12
     assert abs(doc["p1"] - 0.001) < 1e-12

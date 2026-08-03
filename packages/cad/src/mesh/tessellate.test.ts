@@ -26,6 +26,15 @@ describe("tessellateTagged", () => {
     box.delete();
   });
 
+  it("tags a closed box as bodyKind=solid with freeEdgeCount=0 (§17)", () => {
+    const box = makeBox(oc, mm(60), mm(40), mm(30));
+    const mesh = tessellateTagged(oc, box);
+    expect(mesh.bodyKind).toBe("solid");
+    expect(mesh.freeEdgeCount).toBe(0);
+    expect(mesh.edges.every((e) => !e.isFree)).toBe(true);
+    box.delete();
+  });
+
   it("reports droppedFaces = 0 for a complete (valid) solid", () => {
     const box = makeBox(oc, mm(60), mm(40), mm(30));
     const mesh = tessellateTagged(oc, box);

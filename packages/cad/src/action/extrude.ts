@@ -1,6 +1,12 @@
 // Extrude (linear prism) of a sketch profile.
 
-import type { TopoDS_Face, TopoDS_Shape } from "opencascade.js";
+import type {
+  BRepFeat_MakeDPrism,
+  BRepFeat_MakePrism,
+  gp_Dir,
+  TopoDS_Face,
+  TopoDS_Shape,
+} from "opencascade.js";
 
 import type { Occt } from "../oc/init.js";
 import type { Vec3 } from "../math/index.js";
@@ -10,6 +16,7 @@ import type { Sketch } from "../sketch/sketch.js";
 import { resolveFaceRef } from "../mesh/resolve.js";
 import { faceNormal, MESH_PURPOSE, nodeWorld, shapeEnums } from "../mesh/normals.js";
 import type { FaceRef } from "../mesh/tagged.js";
+import { ownedMakerHistory, type OwnedShapeHistory } from "../mesh/remap.js";
 import { intersect, subtract } from "./boolean.js";
 
 export interface ExtrudeOptions {
@@ -17,6 +24,127 @@ export interface ExtrudeOptions {
   readonly back?: number;
   /** Override the extrude direction (default: the sketch plane normal). */
   readonly direction?: Vec3;
+}
+
+export interface NativePrismOptions {
+  /** Existing planar face the profile lies on. */
+  readonly support: FaceRef;
+  /** Positive length when `until` is absent. */
+  readonly length?: number;
+  /** Optional face on the base that terminates the local feature natively. */
+  readonly until?: FaceRef;
+  /** Draft angle in radians; zero/absent selects the straight prism builder. */
+  readonly draftAngle?: number;
+  /** Add material (`join`, default) or remove it (`cut`). */
+  readonly op?: "join" | "cut";
+  /** Override the straight-prism direction (default sketch normal). */
+  readonly direction?: Vec3;
+}
+
+export interface NativePrismResult {
+  readonly solid: Solid;
+  /** Maker-backed Modified/Generated/IsDeleted history; caller must delete it. */
+  readonly history: OwnedShapeHistory;
+}
+
+/**
+ * Native OCCT local boss/pocket: straight `BRepFeat_MakePrism`, or
+ * `BRepFeat_MakeDPrism` when a draft angle is requested. Unlike the fallback
+ * `extrudeToFace` overshoot/trim route, `until` is handed directly to OCCT.
+ */
+export function nativePrism(
+  oc: Occt,
+  base: Solid,
+  sketch: Sketch,
+  opts: NativePrismOptions,
+): NativePrismResult {
+  const length = opts.length;
+  if (!opts.until && (!Number.isFinite(length) || length! <= 0)) {
+    throw new Error(
+      `nativePrism: length must be finite and positive when until is absent (got ${length})`,
+    );
+  }
+  const angle = opts.draftAngle ?? 0;
+  if (!Number.isFinite(angle)) {
+    throw new Error(`nativePrism: draftAngle must be finite (got ${angle})`);
+  }
+  const support = resolveFaceRef(oc, base, opts.support);
+  if (!support) throw new Error("nativePrism: support face did not resolve on the base");
+  const until = opts.until ? resolveFaceRef(oc, base, opts.until) : null;
+  if (opts.until && !until) {
+    support.delete();
+    throw new Error("nativePrism: until face did not resolve on the base");
+  }
+  const profile = sketch.toFace(oc);
+  const fuse = opts.op === "cut" ? 0 : 1;
+  let maker: BRepFeat_MakePrism | BRepFeat_MakeDPrism | null = null;
+  let direction: gp_Dir | null = null;
+  try {
+    if (angle !== 0) {
+      maker = new oc.BRepFeat_MakeDPrism_1(base.shape, profile, support, angle, fuse, true);
+    } else {
+      const d = normalize(opts.direction ?? sketch.plane.normal);
+      direction = new oc.gp_Dir_4(d[0], d[1], d[2]);
+      maker = new oc.BRepFeat_MakePrism_2(base.shape, profile, support, direction, fuse, true);
+    }
+    if (until) maker.Perform_2(until);
+    else maker.Perform_1(length!);
+    if (!maker.IsDone()) throw new Error("nativePrism: OCCT local feature did not complete");
+    const shape = maker.Shape();
+    if (shape.IsNull()) {
+      shape.delete();
+      throw new Error("nativePrism: produced an empty shape");
+    }
+    const history = ownedMakerHistory(maker);
+    maker = null; // history now owns the maker
+    return { solid: new Solid(oc, shape), history };
+  } finally {
+    maker?.delete();
+    direction?.delete();
+    profile.delete();
+    until?.delete();
+    support.delete();
+  }
+}
+
+/**
+ * Build a native OCCT linear form (the pinned kernel's `LocOpe_LinearForm`,
+ * which is the available rib-form class) from a closed sketch profile.
+ */
+export function linearForm(
+  oc: Occt,
+  sketch: Sketch,
+  length: number,
+  direction: Vec3 = sketch.plane.normal,
+): Solid {
+  if (!Number.isFinite(length) || length <= 0) {
+    throw new Error(`linearForm: length must be finite and positive (got ${length})`);
+  }
+  const d = normalize(direction);
+  const face = sketch.toFace(oc);
+  // LocOpe_LinearForm uses the vector's MAGNITUDE as the extrusion length.
+  const vector = new oc.gp_Vec_4(d[0] * length, d[1] * length, d[2] * length);
+  const start = new oc.gp_Pnt_3(...sketch.plane.origin);
+  const end = new oc.gp_Pnt_3(
+    sketch.plane.origin[0] + d[0] * length,
+    sketch.plane.origin[1] + d[1] * length,
+    sketch.plane.origin[2] + d[2] * length,
+  );
+  const maker = new oc.LocOpe_LinearForm_2(face, vector, start, end);
+  try {
+    const shape = maker.Shape();
+    if (shape.IsNull()) {
+      shape.delete();
+      throw new Error("linearForm: produced an empty shape");
+    }
+    return new Solid(oc, shape);
+  } finally {
+    maker.delete();
+    end.delete();
+    start.delete();
+    vector.delete();
+    face.delete();
+  }
 }
 
 /** Shift a shape by `delta`, returning an independent copy.
@@ -43,12 +171,7 @@ function shifted(oc: Occt, shape: TopoDS_Shape, delta: Vec3): TopoDS_Shape {
  * `opts.direction`). With `opts.back`, also extrude that far the other way for a
  * symmetric two-sided pad.
  */
-export function extrude(
-  oc: Occt,
-  sketch: Sketch,
-  height: number,
-  opts?: ExtrudeOptions,
-): Solid {
+export function extrude(oc: Occt, sketch: Sketch, height: number, opts?: ExtrudeOptions): Solid {
   const dir = normalize(opts?.direction ?? sketch.plane.normal);
   const back = opts?.back ?? 0;
   // A zero total sweep distance makes a degenerate (zero-thickness) prism that

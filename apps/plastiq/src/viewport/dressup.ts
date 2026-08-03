@@ -5,7 +5,7 @@
 //
 // Pure functions over picks + SelectionRefs, so they unit-test in Node.
 
-import type { EdgeRef, FaceRef, SpinePath } from "@plastiq/cad";
+import type { EdgeRef, FaceRef, HelixSpec, SpinePath, VertexRef } from "@plastiq/cad";
 import type { NewFeature } from "../store/store.js";
 import type { SelectionRefs } from "../store/store.js";
 import type { EditorFeature, Pick } from "../store/types.js";
@@ -27,6 +27,15 @@ export function faceRefsFromPicks(picks: readonly Pick[], refs: SelectionRefs): 
     .filter((p) => p.kind === "face")
     .map((p) => refs.faces[p.id])
     .filter(Boolean) as FaceRef[];
+}
+
+/** Persistent VertexRefs for the currently picked corners (R12; skips unresolved ids). */
+export function vertexRefsFromPicks(picks: readonly Pick[], refs: SelectionRefs): VertexRef[] {
+  const verts = refs.vertices ?? {};
+  return picks
+    .filter((p) => p.kind === "vertex")
+    .map((p) => verts[p.id])
+    .filter(Boolean) as VertexRef[];
 }
 
 /** A fillet feature on the picked edges (constant or variable radius via endRadius), or null. */
@@ -186,6 +195,34 @@ export function loftFromSketchFeatures(
   return loftFeature(sections, ruled);
 }
 
+/** §14 open-shell loft through ≥2 section profiles (surfaceLoft kernel op). */
+export function surfaceLoftFeature(sections: LoftSectionInput[], ruled = false): NewFeature | null {
+  if (sections.length < 2) return null;
+  return { type: "surfaceLoft", data: { sections, ruled } };
+}
+
+/**
+ * §14 surface loft from finished sketch features (same section extraction as
+ * {@link loftFromSketchFeatures}, different feature type).
+ */
+export function surfaceLoftFromSketchFeatures(
+  features: readonly EditorFeature[],
+  sketchIds: readonly string[],
+  ruled = false,
+): NewFeature | null {
+  if (sketchIds.length < 2) return null;
+  const sections: LoftSectionInput[] = [];
+  for (const id of sketchIds) {
+    const sk = features.find((f) => f.id === id && f.type === "sketch" && !f.suppressed);
+    if (!sk) return null;
+    const prof = sk.data?.["profile"] as Profile | undefined;
+    if (!isProfile(prof)) return null;
+    const plane = sk.data?.["plane"] as SketchPlaneSpec | undefined;
+    sections.push(plane ? { profile: prof, plane } : { profile: prof, z: 0 });
+  }
+  return surfaceLoftFeature(sections, ruled);
+}
+
 /** A sweep of `profile` along a polyline path (FR-32). Optional `plane` places
  * the profile (defaults to world-XY at rebuild when omitted). */
 export function sweepFeature(
@@ -221,6 +258,132 @@ export function sweepFromSketchFeature(
   if (!isProfile(prof)) return null;
   const plane = sk.data?.["plane"] as SketchPlaneSpec | undefined;
   return sweepFeature(prof, path, plane, opts);
+}
+
+/**
+ * §13.2 helical sweep: profile + `data.helix` (kernel helix() → wire → sweepAlongWire).
+ * Not a separate feature type — same "sweep" rebuild case as polyline / pathEdges.
+ */
+export function helixSweepFeature(
+  profile: Profile,
+  helix: HelixSpec,
+  plane?: SketchPlaneSpec,
+  opts?: { mode?: string; transition?: string },
+): NewFeature {
+  return {
+    type: "sweep",
+    data: {
+      profile,
+      helix: {
+        radius: helix.radius,
+        pitch: helix.pitch,
+        turns: helix.turns,
+        handedness: helix.handedness,
+        ...(helix.taperAngle !== undefined ? { taperAngle: helix.taperAngle } : {}),
+      },
+      ...(plane ? { plane } : {}),
+      ...(opts?.mode ? { mode: opts.mode } : {}),
+      ...(opts?.transition ? { transition: opts.transition } : {}),
+    },
+  };
+}
+
+/**
+ * Helical sweep from a sketch feature's profile (§13.2).
+ *
+ * The helix is about +Z and starts at (radius, 0, 0) with tangent ≈ +Y, so the
+ * profile is placed on XZ (normal +Y) — perpendicular to that start tangent —
+ * regardless of the sketch's original plane. A circle profile is recentered on
+ * the helix start so MakePipeShell locates the section on the spine.
+ */
+export function helixSweepFromSketchFeature(
+  features: readonly EditorFeature[],
+  sketchId: string,
+  helix: HelixSpec,
+  opts?: { mode?: string; transition?: string },
+): NewFeature | null {
+  const sk = features.find((f) => f.id === sketchId && f.type === "sketch" && !f.suppressed);
+  if (!sk) return null;
+  const prof = sk.data?.["profile"] as Profile | undefined;
+  if (!isProfile(prof)) return null;
+  // XZ plane: U→X, V→Z. Circle at (helix.radius, 0) → world (r, 0, 0).
+  const plane: SketchPlaneSpec = { base: "XZ", offset: 0 };
+  const profile: Profile =
+    prof.kind === "circle"
+      ? { kind: "circle", center: [helix.radius, prof.center[1]], radius: prof.radius }
+      : prof;
+  return helixSweepFeature(profile, helix, plane, opts);
+}
+
+/** §14 open pipe shell of `profile` along a path (surfaceSweep kernel op). */
+export function surfaceSweepFeature(
+  profile: Profile,
+  path: SpinePath,
+  plane?: SketchPlaneSpec,
+  opts?: { mode?: string; transition?: string },
+): NewFeature {
+  return {
+    type: "surfaceSweep",
+    data: {
+      profile,
+      path,
+      ...(plane ? { plane } : {}),
+      ...(opts?.mode ? { mode: opts.mode } : {}),
+      ...(opts?.transition ? { transition: opts.transition } : {}),
+    },
+  };
+}
+
+/** §14 surface sweep from a sketch feature along a world polyline. */
+export function surfaceSweepFromSketchFeature(
+  features: readonly EditorFeature[],
+  sketchId: string,
+  path: SpinePath,
+  opts?: { mode?: string; transition?: string },
+): NewFeature | null {
+  const sk = features.find((f) => f.id === sketchId && f.type === "sketch" && !f.suppressed);
+  if (!sk) return null;
+  const prof = sk.data?.["profile"] as Profile | undefined;
+  if (!isProfile(prof)) return null;
+  const plane = sk.data?.["plane"] as SketchPlaneSpec | undefined;
+  return surfaceSweepFeature(prof, path, plane, opts);
+}
+
+/** §14 surface sweep along picked model edges (persistent EdgeRefs). */
+export function surfaceSweepAlongEdgesFeature(
+  profile: Profile,
+  pathEdges: readonly EdgeRef[],
+  plane?: SketchPlaneSpec,
+  opts?: { mode?: string; transition?: string },
+): NewFeature {
+  return {
+    type: "surfaceSweep",
+    data: {
+      profile,
+      pathEdges,
+      ...(plane ? { plane } : {}),
+      ...(opts?.mode ? { mode: opts.mode } : {}),
+      ...(opts?.transition ? { transition: opts.transition } : {}),
+    },
+  };
+}
+
+/** §14 surface sweep from sketch along currently picked edges, or null. */
+export function surfaceSweepFromSketchAlongPickedEdges(
+  features: readonly EditorFeature[],
+  sketchId: string,
+  picks: readonly Pick[],
+  refs: SelectionRefs,
+  opts?: { mode?: string; transition?: string },
+): NewFeature | null {
+  const edges = edgeRefsFromPicks(picks, refs);
+  if (edges.length === 0) return null;
+  const sk = features.find((f) => f.id === sketchId && f.type === "sketch" && !f.suppressed);
+  if (!sk) return null;
+  const prof = sk.data?.["profile"] as Profile | undefined;
+  if (!isProfile(prof)) return null;
+  const plane = sk.data?.["plane"] as SketchPlaneSpec | undefined;
+  return surfaceSweepAlongEdgesFeature(prof, edges, plane, opts);
 }
 
 /**

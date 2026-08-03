@@ -23,12 +23,10 @@ const REPORT_WIRE = {
   matching: "exhaustive",
   seed: 0,
   dense: true,
-  undistorted: true,
 };
 
 const RESULT_WIRE = {
   transforms_json: '{"w":1920,"h":1080,"frames":[]}',
-  images_undistorted: ["dW5kaXN0", "b3J0ZWQ="],
   sparse_ply_base64: "c3BhcnNl",
   dense_ply_base64: "ZGVuc2U=",
   report: REPORT_WIRE,
@@ -78,36 +76,38 @@ function authOf(init: RequestInit | undefined): string | undefined {
 describe("solvePhotos (SPEC-13 §6.1)", () => {
   it("submits to /solve, polls until completed, and maps the wire result snake→camel", async () => {
     const { fetchImpl, calls } = scriptedFetch({ runningPolls: 2 });
+    const states: string[] = [];
     const res = await solvePhotos(
       { images: ["aW1n"] },
-      { baseURL: "http://localhost:8004/", fetchImpl, delay: async () => {} },
+      { baseURL: "http://localhost:8004/", fetchImpl, delay: async () => {}, onState: (s) => states.push(s) },
     );
     expect(res.transformsJson).toBe('{"w":1920,"h":1080,"frames":[]}');
-    expect(res.imagesUndistorted).toEqual(["dW5kaXN0", "b3J0ZWQ="]);
     expect(res.sparsePly).toBe("c3BhcnNl");
     expect(res.densePly).toBe("ZGVuc2U=");
     expect(res.report.images_registered).toBe(8);
     expect(res.report.camera.fl_x).toBeCloseTo(1657.2);
     expect(res.report.normalization.scale).toBeCloseTo(0.5);
+    // onState fires with the real job state on every poll (M4 — the panel shows real progress)
+    expect(states).toContain("running");
+    expect(states).toContain("completed");
     // trailing slash on the base URL is normalized (no //solve)
     expect(calls[0]).toBe("http://localhost:8004/solve");
     expect(calls[1]).toBe("http://localhost:8004/jobs/job-9/status");
   });
 
-  it("carries a null dense_ply / images_undistorted through as null (dense:false or fusion empty)", async () => {
+  it("carries a null dense_ply through as null (dense:false or fusion empty)", async () => {
     const { fetchImpl } = scriptedFetch({
-      result: { ...RESULT_WIRE, images_undistorted: null, dense_ply_base64: null },
+      result: { ...RESULT_WIRE, dense_ply_base64: null },
     });
     const res = await solvePhotos({ images: ["aW1n"] }, { fetchImpl, delay: async () => {} });
-    expect(res.imagesUndistorted).toBeNull();
     expect(res.densePly).toBeNull();
     expect(res.sparsePly).toBe("c3BhcnNl"); // sparse always present
   });
 
-  it("forwards names/matching/dense/undistort/maxFeatures/seed as snake_case, omitting unset knobs", async () => {
+  it("forwards names/matching/dense/maxFeatures/seed as snake_case, omitting unset knobs", async () => {
     const withKnobs = scriptedFetch();
     await solvePhotos(
-      { images: ["a", "b"], names: ["a.jpg", "b.jpg"], matching: "sequential", dense: false, undistort: false, maxFeatures: 8192, seed: 7 },
+      { images: ["a", "b"], names: ["a.jpg", "b.jpg"], matching: "sequential", dense: false, maxFeatures: 8192, seed: 7 },
       { fetchImpl: withKnobs.fetchImpl, delay: async () => {} },
     );
     const body = withKnobs.submitBody();
@@ -116,7 +116,6 @@ describe("solvePhotos (SPEC-13 §6.1)", () => {
     expect(body!.names).toEqual(["a.jpg", "b.jpg"]);
     expect(body!.matching).toBe("sequential");
     expect(body!.dense).toBe(false);
-    expect(body!.undistort).toBe(false);
     expect(body!.max_features).toBe(8192);
     expect(body!.seed).toBe(7);
 
@@ -132,7 +131,7 @@ describe("solvePhotos (SPEC-13 §6.1)", () => {
     const bare = scriptedFetch();
     await solvePhotos({ images: ["x"] }, { fetchImpl: bare.fetchImpl, delay: async () => {} });
     const bareBody = bare.submitBody()!;
-    for (const k of ["names", "matching", "dense", "undistort", "max_features", "seed", "sparse_max_dim"]) {
+    for (const k of ["names", "matching", "dense", "max_features", "seed", "sparse_max_dim"]) {
       expect(k in bareBody).toBe(false);
     }
     expect(bareBody.images).toEqual(["x"]);

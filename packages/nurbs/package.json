@@ -9,5 +9,8 @@
   "description": "Browser client for Plastiq's MLX NURBS surface-fitting service (services/nurbs): submit a GLB mesh, poll, and receive STEP + NURBS-surface JSON that feeds the existing stepToImportDocument → importStep path.",
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@plastiq/ml": "workspace:*"
   }
 }

@@ -53,7 +53,10 @@ export type AssemblyVerdict =
   | "under-constrained"
   | "well-constrained"
   | "over-constrained"
-  | "did-not-converge";
+  | "did-not-converge"
+  // K9 — invalid input (a mate references a component index outside
+  // [0, components.length)). Not a geometric outcome; the solve was refused.
+  | "invalid";
 
 export interface MateSolveResult {
   poses: ComponentPose[];
@@ -71,6 +74,12 @@ export interface MateSolveResult {
    * "over-constrained", conflating a hard solve with a contradictory one.
    */
   converged: boolean;
+  /**
+   * Populated ONLY when `verdict === "invalid"` (K9): a human-readable reason the
+   * solve was refused (e.g. an out-of-range component index). Undefined on every
+   * normal solve. `converged === false` is the machine-readable "not ok" flag.
+   */
+  reason?: string;
 }
 
 /** Residual L2 norm at/below which the mates are considered satisfied. */
@@ -111,6 +120,12 @@ function residuals(poses: ComponentPose[], mates: Mate[]): number[] {
         break;
       }
       case "parallel": {
+        // SEMANTIC SOFT SPOT (K9, documented not fixed): the cross product is
+        // zero for BOTH parallel (da∥db) and anti-parallel (da∥−db) directions,
+        // so this residual accepts a 180°-flipped axis as "parallel". A
+        // sign-aware form (e.g. residual on da−db after co-orienting, or on
+        // 1−|da·db| only when da·db>0) would distinguish them; left unchanged to
+        // keep the solved poses stable for existing callers.
         const c = vCross(vNorm(da), vNorm(db));
         r.push(c[0], c[1], c[2]);
         break;
@@ -119,9 +134,18 @@ function residuals(poses: ComponentPose[], mates: Mate[]): number[] {
         r.push(vDot(vNorm(da), vNorm(db)));
         break;
       case "distance":
+        // SEMANTIC SOFT SPOT (K9, documented not fixed): vLen is non-smooth at 0
+        // (the gradient of ‖pa−pb‖ is undefined when the points coincide), so a
+        // distance mate driving toward 0 has an ill-conditioned Jacobian right at
+        // the target. A squared form (‖pa−pb‖²−value²) is smooth everywhere but
+        // changes the residual scale; left unchanged.
         r.push(vLen(vSub(pa, pb)) - m.value);
         break;
       case "angle":
+        // SEMANTIC SOFT SPOT (K9, documented not fixed): using cos(θ) makes +θ and
+        // −θ indistinguishable (cos is even), so this residual cannot express a
+        // signed/handed angle — ±θ solve to the same pose. Acceptable for the
+        // unsigned angle mate today; a signed variant would need an axis reference.
         r.push(vDot(vNorm(da), vNorm(db)) - Math.cos(m.value));
         break;
     }
@@ -242,6 +266,34 @@ function sumSq(v: number[]): number {
  */
 export function solveMates(components: ComponentPose[], mates: Mate[]): MateSolveResult {
   let poses = clone(components);
+
+  // K9 — validate the id→index bridge BEFORE any residual runs. `residuals`
+  // indexes `poses[m.a.component]` unchecked; a stale mate whose instance was
+  // removed upstream carries an out-of-range index (notably -1, the sentinel a
+  // failed `findIndex` produces in the app's `toMateRef`). That would read
+  // `undefined` and throw a raw TypeError deep in the solver. Refuse the solve
+  // with a verdict + reason instead so the caller can surface it, not crash.
+  const nComp = components.length;
+  const invalidMate = mates.find(
+    (m) =>
+      !Number.isInteger(m.a.component) ||
+      m.a.component < 0 ||
+      m.a.component >= nComp ||
+      !Number.isInteger(m.b.component) ||
+      m.b.component < 0 ||
+      m.b.component >= nComp,
+  );
+  if (invalidMate) {
+    return {
+      poses,
+      verdict: "invalid",
+      freedom: 0,
+      residualNorm: Number.POSITIVE_INFINITY,
+      converged: false,
+      reason: `mate references a component index outside [0, ${nComp}) — assembly not solved`,
+    };
+  }
+
   const free = components.map((c, i) => (c.fixed ? -1 : i)).filter((i) => i >= 0);
   const n = free.length * 6;
 

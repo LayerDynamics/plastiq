@@ -139,7 +139,9 @@ const editing = (ctx: ContextTarget): boolean => !ctx.inSketch && !ctx.simulatin
 
 /** Fire the viewport's published fit-to-view seam (set by Scene.tsx). */
 function fitToView(): void {
-  (globalThis as { __plastiqViewport?: { fitToView?: () => void } }).__plastiqViewport?.fitToView?.();
+  (
+    globalThis as { __plastiqViewport?: { fitToView?: () => void } }
+  ).__plastiqViewport?.fitToView?.();
 }
 
 const always = (): boolean => true;
@@ -154,7 +156,12 @@ const CREATE: ContextAction[] = [
       visible: (ctx) => editing(ctx) && ctx.kind === "empty",
       enabled: (ctx) => ctx.solverReady,
       run: () =>
-        sketch().enterSketch(plane, 0, undefined, startingSketchModel(plane, cad().selectionRefs.faces)),
+        sketch().enterSketch(
+          plane,
+          0,
+          undefined,
+          startingSketchModel(plane, cad().selectionRefs.faces),
+        ),
     }),
   ),
   {
@@ -219,9 +226,9 @@ const CREATE: ContextAction[] = [
       useSketchStore
         .getState()
         .enterSketch("XY", 0, undefined, startingSketchModel("XY", cad().selectionRefs.faces), {
-        type: "cut",
-        params: { depth: CUT_D },
-      });
+          type: "cut",
+          params: { depth: CUT_D },
+        });
     },
   },
   {
@@ -235,7 +242,7 @@ const CREATE: ContextAction[] = [
       if (ctx.hasProfile) {
         const id = cad().addFeature({
           type: "revolve",
-          params: { angle: Math.PI * 2, ay: 1 },
+          params: { angle: Math.PI * 2, ox: 0, oy: 0, oz: 0, ax: 0, ay: 1, az: 0 },
           data: { op: "join" },
           deps: lastSketchDeps(),
         });
@@ -245,10 +252,10 @@ const CREATE: ContextAction[] = [
       useSketchStore
         .getState()
         .enterSketch("XY", 0, undefined, startingSketchModel("XY", cad().selectionRefs.faces), {
-        type: "revolve",
-        params: { angle: Math.PI * 2, ay: 1 },
-        data: { op: "join" },
-      });
+          type: "revolve",
+          params: { angle: Math.PI * 2, ox: 0, oy: 0, oz: 0, ax: 0, ay: 1, az: 0 },
+          data: { op: "join" },
+        });
     },
   },
 ];
@@ -301,10 +308,7 @@ const MODIFY: ContextAction[] = [
     visible: (ctx) => editing(ctx) && ctx.kind === "edge",
     enabled: (ctx) => edgeCount(ctx) > 0 && ctx.hasProfile,
     run: (ctx) =>
-      addOrStatus(
-        revolveAboutEdgeFeature(ctx.picks, ctx.refs, Math.PI * 2),
-        "Revolve about edge",
-      ),
+      addOrStatus(revolveAboutEdgeFeature(ctx.picks, ctx.refs, Math.PI * 2), "Revolve about edge"),
   },
   {
     id: "cut-along-edge",
@@ -319,7 +323,8 @@ const MODIFY: ContextAction[] = [
     id: "cut-two-sided",
     group: "modify",
     label: () => "Cut (two-sided)",
-    visible: (ctx) => editing(ctx) && ctx.hasProfile && (ctx.kind === "empty" || ctx.kind === "body"),
+    visible: (ctx) =>
+      editing(ctx) && ctx.hasProfile && (ctx.kind === "empty" || ctx.kind === "body"),
     enabled: (ctx) => ctx.hasProfile,
     run: () => addOrStatus(cutTwoSidedFeature(CUT_D / 2, CUT_D / 2), "Cut two-sided", CUT_D / 2),
   },
@@ -360,7 +365,8 @@ const MODIFY: ContextAction[] = [
     id: "pad",
     group: "modify",
     label: () => "Pad (two-sided)",
-    visible: (ctx) => editing(ctx) && ctx.hasProfile && (ctx.kind === "empty" || ctx.kind === "body"),
+    visible: (ctx) =>
+      editing(ctx) && ctx.hasProfile && (ctx.kind === "empty" || ctx.kind === "body"),
     enabled: (ctx) => ctx.hasProfile,
     run: () => addOrStatus(extrudeTwoSidedFeature(PAD_H, PAD_H), "Pad"),
   },
@@ -476,13 +482,15 @@ const ASSEMBLY: ContextAction[] = [
 ];
 
 // --- MATE: apply a mate from the two accumulated endpoint picks (FR mate authoring) ---
-const SIMPLE_MATES: { kind: "coincident" | "concentric" | "parallel" | "perpendicular"; label: string }[] =
-  [
-    { kind: "coincident", label: "Coincident mate" },
-    { kind: "concentric", label: "Concentric mate" },
-    { kind: "parallel", label: "Parallel mate" },
-    { kind: "perpendicular", label: "Perpendicular mate" },
-  ];
+const SIMPLE_MATES: {
+  kind: "coincident" | "concentric" | "parallel" | "perpendicular";
+  label: string;
+}[] = [
+  { kind: "coincident", label: "Coincident mate" },
+  { kind: "concentric", label: "Concentric mate" },
+  { kind: "parallel", label: "Parallel mate" },
+  { kind: "perpendicular", label: "Perpendicular mate" },
+];
 
 const MATE: ContextAction[] = [
   ...SIMPLE_MATES.map(
@@ -645,6 +653,7 @@ const SKETCH_CONSTRAINTS: { kind: ConstraintKind; label: string }[] = [
   { kind: "parallel", label: "Parallel" },
   { kind: "perpendicular", label: "Perpendicular" },
   { kind: "equalLength", label: "Equal length" },
+  { kind: "equalRadius", label: "Equal radius" },
   { kind: "concentric", label: "Concentric" },
   { kind: "tangent", label: "Tangent" },
   { kind: "midpoint", label: "Midpoint" },

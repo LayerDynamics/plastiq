@@ -6,6 +6,7 @@
 // /jobs/{id}/result — so the browser reuses the same polling machinery. The GLB is then imported as
 // a MeshDoc (app-side) and reconstructed into an editable B-rep. Self-hosted, reached by base URL.
 
+import { cancelServiceJob, serviceHttpError } from "@plastiq/ml";
 import type { NerfCancelOptions, NerfOptions, NerfReport, NerfResult, NerfTrainInput } from "./types.js";
 
 /** The documented dev port for services/nerf (reconstruct=8000, capture=8001, nerf=8002). */
@@ -25,11 +26,7 @@ interface NerfResultWire {
 }
 
 async function httpError(res: Response, what: string): Promise<string> {
-  const detail = await res
-    .json()
-    .then((b: { detail?: string }) => b.detail ?? "")
-    .catch(() => "");
-  return `nerf ${what}: HTTP ${res.status}${detail ? ` — ${detail}` : ""}`;
+  return serviceHttpError(res, "nerf", what);
 }
 
 /** Train a NeRF/surface field from posed views and return the reconstructed surface (submit → poll).
@@ -116,14 +113,9 @@ export async function trainNerf(input: NerfTrainInput, opts: NerfOptions = {}): 
  * `Authorization: Bearer <key>`, matching {@link trainNerf} — the service enforces it on this
  * endpoint when deployed with `NERF_API_KEY`. Other HTTP errors throw with the server detail. */
 export async function cancelJob(id: string, opts: NerfCancelOptions = {}): Promise<void> {
-  const base = (opts.baseURL ?? DEFAULT_BASE_URL).replace(/\/+$/, "");
-  const f = opts.fetchImpl ?? globalThis.fetch;
-  if (!f) throw new Error("nerf: no fetch implementation available");
-  const auth: Record<string, string> = opts.apiKey ? { Authorization: `Bearer ${opts.apiKey}` } : {};
-  const res = await f(`${base}/jobs/${id}`, {
-    method: "DELETE",
-    ...(opts.apiKey ? { headers: auth } : {}),
+  await cancelServiceJob(id, {
+    ...opts,
+    defaultBaseURL: DEFAULT_BASE_URL,
+    label: "nerf",
   });
-  if (res.ok || res.status === 404) return;
-  throw new Error(await httpError(res, "cancel"));
 }

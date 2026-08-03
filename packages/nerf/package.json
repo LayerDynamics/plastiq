@@ -9,5 +9,8 @@
   "description": "Browser client for Plastiq's MLX NeRF/surface-capture service (services/nerf): submit posed images + transforms.json, poll, and receive a GLB that feeds the MeshDoc → reconstruct (mesh → B-rep) path.",
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@plastiq/ml": "workspace:*"
   }
 }

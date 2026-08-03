@@ -5,6 +5,8 @@
 // own import path (stepToImportDocument → importStep). The dependency direction is
 // app → @plastiq/nurbs, never the reverse, so the package stays embeddable anywhere.
 
+import type { JobCancelOptions, JobClientOptions } from "@plastiq/ml";
+
 /** How the service treats the mesh's topology (SPEC-12 §6.1): auto-detect from boundary loops,
  * or force the open (disk, one patch) / closed (genus-0, six cube-map patches) pipeline. */
 export type NurbsFitMode = "auto" | "open" | "closed";
@@ -70,11 +72,18 @@ export interface NurbsReport {
   /** RMS / max surface deviation from the mesh (metres). */
   rmsDeviation: number;
   maxDeviation: number;
-  /** The accuracy gate the deviations were judged against. */
-  fidelityTol: number;
+  /** The accuracy gate the deviations were judged against — `null` when no `fidelityTol` was sent
+   * (the service default; `nurbsFitStatusMessage` then reports the deviation without a good/coarse
+   * verdict rather than mislabeling the fit against a non-existent tolerance). */
+  fidelityTol: number | null;
   /** Whether the closed-mode sew → MakeSolid produced a solid, and whether it validates. */
   isSolid: boolean;
   isValid: boolean;
+  /** Closed-mode watertightness detail (open mode omits both): free boundary edges — 0 ⇔ watertight
+   * (`pipeline_closed.py`, verified via OCCT, never assumed). */
+  freeEdges?: number;
+  /** Closed-mode solid volume in metres³ (GProp, after outward orientation); omitted in open mode. */
+  volume?: number;
   /** The pipeline that ran (`"open"` or `"closed"` after auto-detection). */
   mode: string;
 }
@@ -88,30 +97,10 @@ export interface NurbsResult {
   report: NurbsReport;
 }
 
-/** Knobs for {@link fitNurbs}: where the service lives, how to talk to it, and how to poll. */
-export interface NurbsOptions {
-  /** Base URL of the NURBS service. Default `http://localhost:8003` (the documented dev port). */
-  baseURL?: string;
-  /** API key for a key-protected deployment (the service's `NURBS_API_KEY`) — sent as
-   * `Authorization: Bearer <key>` on every request. Absent ⇒ no auth header (open dev default). */
-  apiKey?: string;
-  /** Injectable fetch (tests pass a fake; defaults to the global `fetch`). */
-  fetchImpl?: typeof fetch;
-  signal?: AbortSignal;
-  /** Poll interval in ms (default 2000). */
-  pollIntervalMs?: number;
-  /** Max poll attempts before timing out (default 600 ≈ 20 min at 2s — fitting is slow). */
-  maxPolls?: number;
-  /** Per-poll delay (a constant `pollIntervalMs`, not a backoff; tests inject an instant resolver). */
-  delay?: (ms: number) => Promise<void>;
-  /** Job-state callback for UI progress (`"queued" | "running" | …`). */
-  onState?: (state: string) => void;
-  /** Job-id callback, fired once (right after the submit returns, before the first poll) — the
-   * handle a caller needs to cancel the in-flight job server-side via {@link cancelJob} while
-   * this same call keeps polling. */
-  onJob?: (id: string) => void;
-}
+/** Knobs for {@link fitNurbs}: where the service lives, how to talk to it, and how to poll.
+ * Defaults: baseURL `http://localhost:8003`, poll 2s / 600. */
+export type NurbsOptions = JobClientOptions;
 
 /** Knobs for {@link cancelJob}: the connection subset of {@link NurbsOptions}. Cancel is a single
  * `DELETE` — the polling knobs don't apply. */
-export type NurbsCancelOptions = Pick<NurbsOptions, "baseURL" | "apiKey" | "fetchImpl">;
+export type NurbsCancelOptions = JobCancelOptions;

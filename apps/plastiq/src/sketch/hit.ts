@@ -3,12 +3,18 @@
 // a constraint kind into the SketchConstraint to add (or null if the selection
 // doesn't fit that constraint). Solving is the kernel's job (useSketchStore.solve).
 
-import { circumcircle, type SketchConstraint, type SketchModel } from "./model.js";
+import {
+  circumcircle,
+  ellipsePoints,
+  resolveOffsetCurve,
+  type SketchConstraint,
+  type SketchModel,
+} from "./model.js";
 import { catmullRomPoints } from "./spline2d.js";
 import type { Px } from "./transform2d.js";
 
 export interface Hit {
-  kind: "point" | "line" | "circle" | "arc" | "spline";
+  kind: "point" | "line" | "circle" | "arc" | "spline" | "ellipse" | "offset";
   id: string;
 }
 
@@ -56,6 +62,14 @@ function distToSpline(p: Px, pts: Px[]): number {
   let best = Infinity;
   for (let i = 1; i < samples.length; i++) {
     best = Math.min(best, distToSegment(p, samples[i - 1]!, samples[i]!));
+  }
+  return best;
+}
+
+function distToPolyline(p: Px, pts: Px[]): number {
+  let best = Infinity;
+  for (let i = 1; i < pts.length; i++) {
+    best = Math.min(best, distToSegment(p, pts[i - 1]!, pts[i]!));
   }
   return best;
 }
@@ -118,11 +132,40 @@ export function hitTest(
       const b = screen(e.b);
       const t = screen(e.through);
       if (a && b && t) consider({ kind: "arc", id: e.id }, distToArc(px, a, t, b), 1);
-    } else {
+    } else if (e.kind === "spline") {
       // Spline: distance to the Catmull-Rom polyline through its screen points.
       const pts = e.points.map(screen);
       if (pts.every((p): p is Px => p !== null) && pts.length >= 2) {
         consider({ kind: "spline", id: e.id }, distToSpline(px, pts), 1);
+      }
+    } else if (e.kind === "ellipse") {
+      const pts = ellipsePoints(model, e)
+        .map(project)
+        .filter((p): p is Px => p !== null);
+      if (pts.length >= 2) consider({ kind: "ellipse", id: e.id }, distToPolyline(px, pts), 1);
+    } else {
+      const resolved = resolveOffsetCurve(model, e);
+      if (!resolved) continue;
+      if (resolved.kind === "line") {
+        const a = project(resolved.a);
+        const b = project(resolved.b);
+        if (a && b) consider({ kind: "offset", id: e.id }, distToSegment(px, a, b), 1);
+      } else if (resolved.kind === "circle") {
+        const c = project(resolved.center);
+        if (c)
+          consider(
+            { kind: "offset", id: e.id },
+            Math.abs(Math.hypot(px.x - c.x, px.y - c.y) - resolved.radius * scale),
+            1,
+          );
+      } else if (resolved.kind === "arc") {
+        const a = project(resolved.a);
+        const t = project(resolved.through);
+        const b = project(resolved.b);
+        if (a && t && b) consider({ kind: "offset", id: e.id }, distToArc(px, a, t, b), 1);
+      } else {
+        const pts = resolved.points.map(project).filter((p): p is Px => p !== null);
+        if (pts.length >= 2) consider({ kind: "offset", id: e.id }, distToPolyline(px, pts), 1);
       }
     }
   }
@@ -137,6 +180,7 @@ export type ConstraintKind =
   | "parallel"
   | "perpendicular"
   | "equalLength"
+  | "equalRadius"
   | "concentric"
   | "tangent"
   | "midpoint"
@@ -149,6 +193,10 @@ const circleIds = (model: SketchModel, sel: readonly string[]): string[] =>
   sel.filter((id) => model.entities.some((e) => e.id === id && e.kind === "circle"));
 const pointIds = (model: SketchModel, sel: readonly string[]): string[] =>
   sel.filter((id) => model.points.some((p) => p.id === id));
+const arcIds = (model: SketchModel, sel: readonly string[]): string[] =>
+  sel.filter((id) => model.entities.some((e) => e.id === id && e.kind === "arc"));
+const ellipseIds = (model: SketchModel, sel: readonly string[]): string[] =>
+  sel.filter((id) => model.entities.some((e) => e.id === id && e.kind === "ellipse"));
 
 /** Whether `kind` can apply to the current selection. */
 export function canApply(
@@ -158,6 +206,8 @@ export function canApply(
 ): boolean {
   const lines = lineIds(model, sel).length;
   const circles = circleIds(model, sel).length;
+  const arcs = arcIds(model, sel).length;
+  const ellipses = ellipseIds(model, sel).length;
   const points = pointIds(model, sel).length;
   switch (kind) {
     case "horizontal":
@@ -169,14 +219,16 @@ export function canApply(
     case "perpendicular":
     case "equalLength":
       return lines === 2;
+    case "equalRadius":
+      return circles + arcs === 2;
     case "concentric":
       return circles === 2;
     case "tangent":
-      return lines === 1 && circles === 1;
+      return (lines === 1 && circles === 1 && arcs === 0) || (lines === 0 && circles + arcs === 2);
     case "midpoint":
       return points === 1 && lines === 1;
     case "pointOnObject":
-      return points === 1 && lines + circles === 1;
+      return points === 1 && lines + circles + ellipses === 1;
     case "symmetric":
       return points === 2 && lines === 1;
   }
@@ -195,6 +247,8 @@ export function buildConstraints(
 ): SketchConstraint[] {
   const lines = lineIds(model, sel);
   const circles = circleIds(model, sel);
+  const arcs = arcIds(model, sel);
+  const ellipses = ellipseIds(model, sel);
   const points = pointIds(model, sel);
   switch (kind) {
     case "horizontal":
@@ -206,20 +260,36 @@ export function buildConstraints(
     case "perpendicular":
     case "equalLength":
       return lines.length === 2 ? [{ id: nextId(), kind, line1: lines[0]!, line2: lines[1]! }] : [];
+    case "equalRadius": {
+      const curves = [...circles, ...arcs];
+      return curves.length === 2
+        ? [{ id: nextId(), kind, curve1: curves[0]!, curve2: curves[1]! }]
+        : [];
+    }
     case "concentric":
       return circles.length === 2
         ? [{ id: nextId(), kind, circle1: circles[0]!, circle2: circles[1]! }]
         : [];
     case "tangent":
-      return lines.length === 1 && circles.length === 1
-        ? [{ id: nextId(), kind, line: lines[0]!, circle: circles[0]! }]
+      if (lines.length === 1 && circles.length === 1 && arcs.length === 0) {
+        return [{ id: nextId(), kind, curve1: lines[0]!, curve2: circles[0]! }];
+      }
+      return lines.length === 0 && circles.length + arcs.length === 2
+        ? [
+            {
+              id: nextId(),
+              kind,
+              curve1: [...circles, ...arcs][0]!,
+              curve2: [...circles, ...arcs][1]!,
+            },
+          ]
         : [];
     case "midpoint":
       return points.length === 1 && lines.length === 1
         ? [{ id: nextId(), kind, point: points[0]!, line: lines[0]! }]
         : [];
     case "pointOnObject": {
-      const objs = [...lines, ...circles];
+      const objs = [...lines, ...circles, ...ellipses];
       return points.length === 1 && objs.length === 1
         ? [{ id: nextId(), kind, point: points[0]!, object: objs[0]! }]
         : [];

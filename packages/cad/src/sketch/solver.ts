@@ -18,7 +18,37 @@ export interface SolverCircle {
   radius: number;
 }
 
-/** The constraint vocabulary, referencing points/circles by input index. */
+/**
+ * An ellipse in the solver input. planegcs parameterises an ellipse by its centre
+ * point, ONE focus point, and the minor (semi-minor) radius — the major axis
+ * direction is centre→focus1 and the major radius is derived
+ * (radmaj = √(radmin² + f²), f = |centre − focus1|). Both `center` and `focus1`
+ * are indices into the shared `points` array, exactly like {@link SolverCircle}'s
+ * `center`, so they can be constrained by any point constraint (fixed/coincident/…).
+ */
+export interface SolverEllipse {
+  center: number;
+  focus1: number;
+  /** Minor (semi-minor) radius. */
+  radmin: number;
+}
+
+/**
+ * An arc of a circle in the solver input: a centre point plus start/end endpoint
+ * points (indices into the shared `points` array) and the radius. planegcs also
+ * needs start/end angles; the solver derives them from the endpoints and adds a
+ * per-arc `arc_rules` constraint so radius and the two endpoints stay mutually
+ * consistent (endpoints held at `radius` from the centre). This makes the arc's
+ * `radius` a real geometric quantity that `equalRadius`/`tangent` can drive.
+ */
+export interface SolverArc {
+  center: number;
+  start: number;
+  end: number;
+  radius: number;
+}
+
+/** The constraint vocabulary, referencing points/circles/ellipses/arcs by input index. */
 export type Constraint =
   | { kind: "horizontal"; a: number; b: number }
   | { kind: "vertical"; a: number; b: number }
@@ -37,7 +67,20 @@ export type Constraint =
   | { kind: "midpoint"; m: number; a: number; b: number }
   | { kind: "pointOnLine"; p: number; a: number; b: number }
   | { kind: "pointOnCircle"; p: number; circle: number }
-  | { kind: "symmetric"; a: number; b: number; c: number; d: number };
+  | { kind: "symmetric"; a: number; b: number; c: number; d: number }
+  // Radius equality — the curved-geometry analogue of `equalLength`. Circle↔circle
+  // and arc↔arc; `a`/`b` index the `circles` or `arcs` array respectively.
+  | { kind: "equalRadius"; a: number; b: number }
+  | { kind: "equalRadiusArc"; a: number; b: number }
+  | { kind: "equalRadiusCircleArc"; circle: number; arc: number }
+  // Curve-to-curve tangency, extending the line↔circle `tangentLineCircle`.
+  // `tangentCircles`: circle `a` ↔ circle `b`. `tangentArcCircle`: circle ↔ arc
+  // (arc-endpoint / arc-to-curve tangency). Indices point into `circles`/`arcs`.
+  | { kind: "tangentCircles"; a: number; b: number }
+  | { kind: "tangentArcs"; a: number; b: number }
+  | { kind: "tangentArcCircle"; circle: number; arc: number }
+  // A point constrained to lie on an ellipse; `ellipse` indexes the `ellipses` array.
+  | { kind: "pointOnEllipse"; p: number; ellipse: number };
 
 export type SketchVerdict = "under-constrained" | "well-constrained" | "over-constrained";
 
@@ -46,6 +89,10 @@ export interface SolveResult {
   points: SolverPoint[];
   /** Solved circle radii, parallel to the input `circles`. */
   radii: number[];
+  /** Solved ellipse minor radii, parallel to the input `ellipses` (empty if none). */
+  ellipseRadmin: number[];
+  /** Solved arc radii, parallel to the input `arcs` (empty if none). */
+  arcRadii: number[];
   verdict: SketchVerdict;
   /** Remaining degrees of freedom (0 = fully constrained). */
   freedom: number;
@@ -90,18 +137,31 @@ export function sketchSolverReady(): boolean {
 
 const px = (i: number): string => `p${i}`;
 const cx = (i: number): string => `c${i}`;
+const ex = (i: number): string => `e${i}`;
+const ax = (i: number): string => `a${i}`;
 
 /**
- * Solve the sketch. Returns the satisfied point positions and circle radii plus a
- * three-state verdict and the remaining DOF. Requires `initSketchSolver()` first.
+ * Solve the sketch. Returns the satisfied point positions and circle/arc/ellipse
+ * radii plus a three-state verdict and the remaining DOF. Requires
+ * `initSketchSolver()` first. `ellipses` and `arcs` default to empty, so existing
+ * three-argument callers keep working unchanged.
  */
 export function solveSketch(
   points: SolverPoint[],
   circles: SolverCircle[],
   constraints: Constraint[],
+  ellipses: SolverEllipse[] = [],
+  arcs: SolverArc[] = [],
 ): SolveResult {
   if (points.length === 0) {
-    return { points: [], radii: [], verdict: "well-constrained", freedom: 0 };
+    return {
+      points: [],
+      radii: [],
+      ellipseRadmin: [],
+      arcRadii: [],
+      verdict: "well-constrained",
+      freedom: 0,
+    };
   }
   if (!wrapper) {
     throw new Error("solveSketch: call (and await) initSketchSolver() before solving");
@@ -121,6 +181,35 @@ export function solveSketch(
   });
   circles.forEach((c, j) => {
     prims.push({ id: cx(j), type: "circle", c_id: px(c.center), radius: c.radius } as Primitive);
+  });
+  ellipses.forEach((e, k) => {
+    // planegcs ellipse := centre point + one focus point + minor radius.
+    prims.push({
+      id: ex(k),
+      type: "ellipse",
+      c_id: px(e.center),
+      focus1_id: px(e.focus1),
+      radmin: e.radmin,
+    } as Primitive);
+  });
+  arcs.forEach((arc, k) => {
+    // Derive the start/end angles from the endpoint positions relative to the
+    // centre so the initial guess is geometrically consistent; `arc_rules` (added
+    // just below) then holds radius and the two endpoints mutually consistent
+    // through the solve.
+    const c = points[arc.center]!;
+    const s = points[arc.start]!;
+    const e = points[arc.end]!;
+    prims.push({
+      id: ax(k),
+      type: "arc",
+      c_id: px(arc.center),
+      start_id: px(arc.start),
+      end_id: px(arc.end),
+      start_angle: Math.atan2(s.y - c.y, s.x - c.x),
+      end_angle: Math.atan2(e.y - c.y, e.x - c.x),
+      radius: arc.radius,
+    } as Primitive);
   });
 
   // Lines are created on demand for the constraints that planegcs expresses by
@@ -142,6 +231,14 @@ export function solveSketch(
   const add = (c: object): void => {
     prims.push({ id: cid(), ...c } as Primitive);
   };
+
+  // Every arc gets planegcs' `arc_rules`, which ties its radius/start/end params to
+  // its centre and endpoint points (endpoints held at `radius`, angles matching the
+  // endpoints). Without it the arc's `radius` would be a free scalar unrelated to
+  // the geometry, so `equalRadiusArc`/`tangentArcCircle` could not drive real radii.
+  arcs.forEach((_, k) => {
+    add({ type: "arc_rules", a_id: ax(k) });
+  });
 
   for (const c of constraints) {
     switch (c.kind) {
@@ -225,6 +322,27 @@ export function solveSketch(
       case "symmetric":
         add({ type: "p2p_symmetric_ppl", p1_id: px(c.a), p2_id: px(c.b), l_id: lineFor(c.c, c.d) });
         break;
+      case "equalRadius":
+        add({ type: "equal_radius_cc", c1_id: cx(c.a), c2_id: cx(c.b) });
+        break;
+      case "equalRadiusArc":
+        add({ type: "equal_radius_aa", a1_id: ax(c.a), a2_id: ax(c.b) });
+        break;
+      case "equalRadiusCircleArc":
+        add({ type: "equal_radius_ca", c1_id: cx(c.circle), a2_id: ax(c.arc) });
+        break;
+      case "tangentCircles":
+        add({ type: "tangent_cc", c1_id: cx(c.a), c2_id: cx(c.b) });
+        break;
+      case "tangentArcs":
+        add({ type: "tangent_aa", a1_id: ax(c.a), a2_id: ax(c.b) });
+        break;
+      case "tangentArcCircle":
+        add({ type: "tangent_ca", c_id: cx(c.circle), a_id: ax(c.arc) });
+        break;
+      case "pointOnEllipse":
+        add({ type: "point_on_ellipse", p_id: px(c.p), e_id: ex(c.ellipse) });
+        break;
     }
   }
 
@@ -237,6 +355,13 @@ export function solveSketch(
     return { x: sp.x, y: sp.y };
   });
   const radii = circles.map((_, j) => gcs.sketch_index.get_sketch_circle(cx(j)).radius);
+  // SketchIndex exposes typed getters for point/line/circle/arc but not ellipse,
+  // so read the solved ellipse back through the generic primitive accessor.
+  const ellipseRadmin = ellipses.map((_, k) => {
+    const prim = gcs.sketch_index.get_primitive(ex(k)) as { radmin: number } | undefined;
+    return prim?.radmin ?? NaN;
+  });
+  const arcRadii = arcs.map((_, k) => gcs.sketch_index.get_sketch_arc(ax(k)).radius);
 
   const freedom = gcs.gcs.dof();
   const conflicting = gcs.has_gcs_conflicting_constraints();
@@ -252,5 +377,5 @@ export function solveSketch(
         ? "under-constrained"
         : "well-constrained";
 
-  return { points: solvedPoints, radii, verdict, freedom };
+  return { points: solvedPoints, radii, ellipseRadmin, arcRadii, verdict, freedom };
 }

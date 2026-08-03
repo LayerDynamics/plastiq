@@ -5,7 +5,10 @@
 
 import { FEATURE_TYPES } from "../store/featureUnits.js";
 
-/** Feature types the model may author (placement is a scene pose, not authored). */
+/** Feature types the model authors to build geometry. `placement` is excluded from
+ * this CREATE list because it is the body's scene pose (written by the move gizmo, not
+ * authored to make geometry) — but it IS a valid feature the schema accepts, so when it
+ * already appears in the current document the prompt tells the model to PRESERVE it. */
 const AUTHORABLE = FEATURE_TYPES.filter((t) => t !== "placement");
 
 export function parametricSystemPrompt(): string {
@@ -24,9 +27,13 @@ TOOL: build_part — create or edit the part. Its input is a feature document:
   { "features": [ { "id": "f1", "type": "<type>", "params": { ... }, "data": { ... } } ], "params": {} }
 Features are evaluated in order; later features build on earlier ones. Supported
 feature types: ${AUTHORABLE.join(", ")}.
-- The document has ONLY "features" and "params". Put EVERY feature in the "features"
-  array, in build order. Do NOT invent other keys such as "assembly" — features placed
-  anywhere else are SILENTLY IGNORED and will be missing from the part.
+- Put EVERY feature in the "features" array, in build order — a feature OBJECT placed
+  under any other key is SILENTLY IGNORED and will be missing from the part. The document's
+  keys are "features", "params" (named dimensions), and an optional "assembly" (component
+  instances + mates, which the schema accepts and the app applies). For a single part you
+  author only "features" + "params"; but if the current document already carries an
+  "assembly" key or a "placement" feature (the body's pose, written by the move gizmo),
+  PRESERVE it unchanged when you re-emit the WHOLE document — do not drop it.
 - SHAPES: a rectangular block is a "box". Anything ROUND (cylinder, rod, disc, pin,
   peg, shaft) is a "sketch" with a circle profile THEN an "extrude" — never a "box".
   A NON-rectangular cross-section (L, T, U, a slot outline) is a "sketch" with ONE
@@ -83,6 +90,12 @@ whole-part selector. Other selectors:
 { "kind": "tangentFaces", "seed": { "normal": [..], "centroid": [..] } } (all faces
 tangent-connected to a seed face). If a selector does not fit, call inspect_geometry to
 list the part's faces and edges, then reference the ones you want by index.
+- If the edit context shows a CURRENT SELECTION (the faces/edges the user picked, with
+  their surface kind, normal/axis and position in mm), that is how "fillet the face I
+  picked", "chamfer this edge", or "shell that face" is honored: seed a selector from the
+  picked entity (e.g. a { "kind": "tangentFaces", "seed": { "normal": [..], "centroid":
+  [..] } } matching a picked face), or find the matching face/edge by index via
+  inspect_geometry — do NOT ignore the selection and dress the whole part instead.
 
 TOOL: inspect_geometry — returns the current part's faces and edges (with normals and
 positions) as text, for choosing dress-up targets.

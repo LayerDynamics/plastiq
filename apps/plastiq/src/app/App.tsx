@@ -11,6 +11,7 @@ import { FeatureTree } from "./FeatureTree.js";
 import { AssemblyTree } from "./AssemblyTree.js";
 import { BomSection } from "./BomSection.js";
 import { PropertiesPanel } from "./PropertiesPanel.js";
+import { ParametersPanel } from "./ParametersPanel.js";
 import { GenerationPanel } from "../ai/GenerationPanel.js";
 import { CommandPalette } from "../ai/CommandPalette.js";
 import { Viewport, CanvasDropZone } from "../three/index.js";
@@ -266,6 +267,15 @@ export function App(): React.JSX.Element {
               </div>
               <div id="properties-root">
                 <PropertiesPanel />
+              </div>
+              <div className="my-3 border-t border-[#222a36]" />
+              {/* R6: global parameters — add/rename/delete params that drive
+                  feature dimensions through expressions (`doc.params`, now live). */}
+              <div className="mb-2 flex items-center justify-between">
+                <h2 className="text-xs font-bold tracking-wide text-[#8aa]">PARAMETERS</h2>
+              </div>
+              <div id="parameters-root">
+                <ParametersPanel />
               </div>
               <div className="my-3 border-t border-[#222a36]" />
               <SimExperimentPanel />

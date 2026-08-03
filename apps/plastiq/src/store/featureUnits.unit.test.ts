@@ -27,7 +27,48 @@ describe("featureUnits classification", () => {
   it("covers the full rebuild feature set", () => {
     expect(FEATURE_TYPES).toContain("box");
     expect(FEATURE_TYPES).toContain("circularPattern");
+    expect(FEATURE_TYPES).toContain("pathPattern");
+    expect(FEATURE_TYPES).toContain("split");
+    expect(FEATURE_TYPES).toContain("section");
     expect(FEATURE_TYPES).toContain("importStep");
+    expect(FEATURE_TYPES).toContain("freeform");
+    expect(FEATURE_TYPES).toContain("thicken");
+    expect(FEATURE_TYPES).toContain("hole");
+    expect(FEATURE_TYPES).toContain("scale");
+    expect(FEATURE_TYPES).toContain("sweep");
+    // §14 surface pillar
+    expect(FEATURE_TYPES).toContain("surfaceLoft");
+    expect(FEATURE_TYPES).toContain("surfaceSweep");
+    expect(FEATURE_TYPES).toContain("surfaceRevolve");
+    expect(FEATURE_TYPES).toContain("offsetSurface");
+    expect(FEATURE_TYPES).toContain("sew");
+    expect(FEATURE_TYPES).toContain("solidify");
+    expect(FEATURE_TYPES).toContain("surfaceFromPoints");
+    // Helix is not a FEATURE_TYPES entry — it is data.helix on type "sweep".
+    expect(FEATURE_TYPES).not.toContain("helix");
+  });
+
+  it("pathPattern count is a unitless scalar (spine lives in data)", () => {
+    expect(classifyParam("pathPattern", "count")).toBe("scalar");
+  });
+
+  it("classifies freeform size params as lengths (§15)", () => {
+    expect(classifyParam("freeform", "uSize")).toBe("length");
+    expect(classifyParam("freeform", "vSize")).toBe("length");
+    expect(classifyParam("freeform", "radius")).toBe("length");
+    expect(classifyParam("freeform", "height")).toBe("length");
+    expect(classifyParam("freeform", "ox")).toBe("length");
+    expect(classifyParam("freeform", "resU")).toBe("scalar");
+    expect(classifyParam("freeform", "ax")).toBe("scalar");
+  });
+
+  it("classifies §14 surface length/angle params", () => {
+    expect(classifyParam("offsetSurface", "distance")).toBe("length");
+    expect(classifyParam("sew", "tolerance")).toBe("length");
+    expect(classifyParam("surfaceRevolve", "angle")).toBe("angle");
+    expect(classifyParam("surfaceRevolve", "ox")).toBe("length");
+    expect(classifyParam("surfaceRevolve", "ay")).toBe("scalar");
+    expect(unitSuffix("offsetSurface", "distance")).toBe("mm");
   });
 });
 
@@ -53,6 +94,12 @@ describe("featureUnits display conversion", () => {
     expect(fromDisplayValue("chamfer", "distance2", 3)).toBeCloseTo(mm(3), 12);
     expect(unitSuffix("fillet", "radius2")).toBe("mm");
     expect(unitSuffix("chamfer", "distance2")).toBe("mm");
+  });
+
+  it("classifies native extrude draftAngle as an angle", () => {
+    expect(classifyParam("extrude", "draftAngle")).toBe("angle");
+    expect(unitSuffix("extrude", "draftAngle")).toBe("°");
+    expect(fromDisplayValue("extrude", "draftAngle", 5)).toBeCloseTo((5 * Math.PI) / 180, 12);
   });
 
   it("reports the right unit suffix", () => {

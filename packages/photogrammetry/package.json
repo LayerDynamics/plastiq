@@ -10,6 +10,9 @@
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
+  "dependencies": {
+    "@plastiq/ml": "workspace:*"
+  },
   "devDependencies": {
     "@plastiq/capture": "workspace:*",
     "@types/node": "^25.9.1"

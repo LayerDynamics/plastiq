@@ -35,6 +35,15 @@ describe("Sketch (unit)", () => {
     face.delete();
   });
 
+  it("an ellipse profile builds an exact face of area πab", () => {
+    const a = 0.05;
+    const b = 0.02;
+    const focus = Math.sqrt(a * a - b * b);
+    const face = Sketch.ellipse(planeXY(), [0, 0], [focus, 0], b).toFace(oc);
+    expect(faceArea(face)).toBeCloseTo(Math.PI * a * b, 8);
+    face.delete();
+  });
+
   it("lineTo chains (returns this) and toWire yields a non-null wire", () => {
     const sk = new Sketch(planeXY());
     expect(sk.lineTo(0, 0)).toBe(sk);

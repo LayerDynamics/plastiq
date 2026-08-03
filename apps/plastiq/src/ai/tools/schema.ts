@@ -93,7 +93,12 @@ const primitiveData = z
 // union references itself via z.lazy (the standard zod recursion pattern).
 const featureSchema: z.ZodTypeAny = z.lazy(() =>
   z.discriminatedUnion("type", [
-    z.object({ ...base, type: z.literal("box"), params: z.object({ dx: z.number(), dy: z.number(), dz: z.number() }), data: z.unknown().optional() }),
+    z.object({
+      ...base,
+      type: z.literal("box"),
+      params: z.object({ dx: z.number(), dy: z.number(), dz: z.number() }),
+      data: z.unknown().optional(),
+    }),
     // Round primitives (§4.11) — analytic solids needing no sketch. Placement
     // (ox,oy,oz / ax,ay,az) and the partial-sweep `angle` are optional and
     // default to the origin, +Z, and a full revolution. `data.op` combines with
@@ -137,30 +142,48 @@ const featureSchema: z.ZodTypeAny = z.lazy(() =>
       params: numParams.optional(),
       data: z.object({ profile, plane: sketchPlaneSpec.optional(), model: z.unknown().optional() }),
     }),
+    z
+      .object({
+        ...base,
+        type: z.literal("extrude"),
+        // height optional when toFace is set (true up-to-face needs no blind distance).
+        params: z.object({
+          height: z.number().optional(),
+          back: z.number().optional(),
+          draftAngle: z.number().optional(),
+        }),
+        data: z
+          .object({
+            direction: vec3.optional(),
+            directionEdge: edgeRef.optional(),
+            toFace: faceRef.optional(),
+            // "join" fuses the pad with the existing body; "new" replaces it.
+            // Unset: rebuild joins when a solid already exists, else creates a new body (C1).
+            op: z.enum(["new", "join", "cut", "intersect"]).optional(),
+          })
+          .optional(),
+      })
+      .superRefine((val, ctx) => {
+        const hasToFace = val.data?.toFace != null;
+        if (!hasToFace && (val.params.height == null || !Number.isFinite(val.params.height))) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: "extrude: height is required unless data.toFace is set",
+            path: ["params", "height"],
+          });
+        }
+      }),
     z.object({
       ...base,
-      type: z.literal("extrude"),
-      // height optional when toFace is set (true up-to-face needs no blind distance).
-      params: z.object({ height: z.number().optional(), back: z.number().optional() }),
+      type: z.literal("rib"),
+      params: z.object({ length: z.number() }),
       data: z
         .object({
           direction: vec3.optional(),
-          directionEdge: edgeRef.optional(),
-          toFace: faceRef.optional(),
-          // "join" fuses the pad with the existing body; "new" replaces it.
-          // Unset: rebuild joins when a solid already exists, else creates a new body (C1).
-          op: z.enum(["join", "new"]).optional(),
+          sketchId: z.string().optional(),
+          op: z.enum(["new", "join", "cut", "intersect"]).optional(),
         })
         .optional(),
-    }).superRefine((val, ctx) => {
-      const hasToFace = val.data?.toFace != null;
-      if (!hasToFace && (val.params.height == null || !Number.isFinite(val.params.height))) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          message: "extrude: height is required unless data.toFace is set",
-          path: ["params", "height"],
-        });
-      }
     }),
     z.object({
       ...base,
@@ -180,7 +203,7 @@ const featureSchema: z.ZodTypeAny = z.lazy(() =>
           // Edge-driven axis (C2); rebuild re-resolves origin+direction each time.
           axisEdge: edgeRef.optional(),
           // Join/new parity with extrude (C2); unset joins when a solid exists.
-          op: z.enum(["join", "new"]).optional(),
+          op: z.enum(["new", "join", "cut", "intersect"]).optional(),
         })
         .optional(),
     }),
@@ -188,17 +211,21 @@ const featureSchema: z.ZodTypeAny = z.lazy(() =>
       ...base,
       type: z.literal("cut"),
       // `back` = two-sided pocket (G5); direction / directionEdge mirror extrude.
-      params: z.object({ depth: z.number(), back: z.number().optional() }),
-      data: z
-        .object({ direction: vec3.optional(), directionEdge: edgeRef.optional() })
-        .optional(),
+      params: z.object({
+        depth: z.number(),
+        back: z.number().optional(),
+        draftAngle: z.number().optional(),
+      }),
+      data: z.object({ direction: vec3.optional(), directionEdge: edgeRef.optional() }).optional(),
     }),
     z.object({
       ...base,
       type: z.literal("fillet"),
       // radius2 = variable end radius along the edge (C8 / rebuild radius2 → endRadius).
       params: z.object({ radius: z.number(), radius2: z.number().optional() }),
-      data: z.object({ edges: z.array(edgeRef).optional(), selector: z.unknown().optional() }).optional(),
+      data: z
+        .object({ edges: z.array(edgeRef).optional(), selector: z.unknown().optional() })
+        .optional(),
     }),
     z.object({
       ...base,
@@ -239,10 +266,257 @@ const featureSchema: z.ZodTypeAny = z.lazy(() =>
         neutralNormal: vec3.optional(),
       }),
     }),
-    z.object({ ...base, type: z.literal("transform"), params: numParams.optional(), data: z.unknown().optional() }),
-    z.object({ ...base, type: z.literal("mirror"), params: numParams.optional(), data: z.unknown().optional() }),
-    z.object({ ...base, type: z.literal("linearPattern"), params: z.object({ spacing: z.number(), count: z.number(), dx: z.number().optional(), dy: z.number().optional(), dz: z.number().optional() }), data: z.unknown().optional() }),
-    z.object({ ...base, type: z.literal("circularPattern"), params: z.object({ count: z.number(), angle: z.number().optional(), ox: z.number().optional(), oy: z.number().optional(), oz: z.number().optional(), ax: z.number().optional(), ay: z.number().optional(), az: z.number().optional() }), data: z.unknown().optional() }),
+    z.object({
+      ...base,
+      type: z.literal("hole"),
+      // §13.2 hole: diameter + depth (or throughAll) + optional counterbore /
+      // countersink / drill-tip dimensions.
+      params: z.object({
+        diameter: z.number(),
+        depth: z.number().optional(),
+        counterboreDiameter: z.number().optional(),
+        counterboreDepth: z.number().optional(),
+        countersinkDiameter: z.number().optional(),
+        countersinkAngle: z.number().optional(),
+        tipAngle: z.number().optional(),
+      }),
+      data: z.object({
+        origin: vec3,
+        axis: vec3,
+        kind: z.enum(["simple", "counterbore", "countersink", "spotface"]).optional(),
+        throughAll: z.boolean().optional(),
+      }),
+    }),
+    z.object({
+      ...base,
+      type: z.literal("transform"),
+      params: numParams.optional(),
+      data: z.unknown().optional(),
+    }),
+    // Uniform resize about a pivot (§2.5). `factor` is required (a scale with no
+    // factor is meaningless); px/py/pz default to the origin.
+    z.object({
+      ...base,
+      type: z.literal("thicken"),
+      // §13.2/§14: open face/shell → solid plate of wall `thickness`.
+      params: z.object({ thickness: z.number() }),
+      data: z
+        .object({
+          bothSides: z.boolean().optional(),
+        })
+        .optional(),
+    }),
+    // §14 surface loft — same sections as solid loft; open shell result.
+    z.object({
+      ...base,
+      type: z.literal("surfaceLoft"),
+      params: numParams.optional(),
+      data: z.object({
+        sections: z
+          .array(
+            z.object({
+              profile,
+              z: z.number().optional(),
+              plane: sketchPlaneSpec.optional(),
+            }),
+          )
+          .min(2),
+        ruled: z.boolean().optional(),
+        op: z.enum(["new"]).optional(),
+      }),
+    }),
+    // §14 open pipe shell (sweep without MakeSolid).
+    z.object({
+      ...base,
+      type: z.literal("surfaceSweep"),
+      params: numParams.optional(),
+      data: z.object({
+        profile,
+        path: spinePath.optional(),
+        pathEdges: z.array(edgeRef).optional(),
+        plane: sketchPlaneSpec.optional(),
+        mode: z.enum(["correctedFrenet", "frenet", "fixed"]).optional(),
+        transition: z.enum(["right", "round", "transformed"]).optional(),
+        op: z.enum(["new"]).optional(),
+      }),
+    }),
+    // §14 surface of revolution from a profile wire.
+    z.object({
+      ...base,
+      type: z.literal("surfaceRevolve"),
+      params: z.object({
+        angle: z.number(),
+        ox: z.number().optional(),
+        oy: z.number().optional(),
+        oz: z.number().optional(),
+        ax: z.number().optional(),
+        ay: z.number().optional(),
+        az: z.number().optional(),
+      }),
+      data: z
+        .object({
+          profile: profile.optional(),
+          plane: sketchPlaneSpec.optional(),
+          axisEdge: edgeRef.optional(),
+          sketchId: z.string().optional(),
+          op: z.enum(["new"]).optional(),
+        })
+        .optional(),
+    }),
+    // §14 B-spline face through a rectangular point grid (mm authoring → SI).
+    z.object({
+      ...base,
+      type: z.literal("surfaceFromPoints"),
+      params: z
+        .object({
+          degU: z.number().optional(),
+          degV: z.number().optional(),
+          tolerance: z.number().optional(),
+        })
+        .optional(),
+      data: z.object({
+        grid: z.array(z.array(vec3).min(2)).min(2),
+        op: z.enum(["new"]).optional(),
+      }),
+    }),
+    // §14 offset the current face/shell by `distance` (still a sheet).
+    z.object({
+      ...base,
+      type: z.literal("offsetSurface"),
+      params: z.object({ distance: z.number() }),
+      data: z.unknown().optional(),
+    }),
+    // §14 sew current body's faces into a shell within `tolerance`.
+    z.object({
+      ...base,
+      type: z.literal("sew"),
+      params: z.object({ tolerance: z.number().optional() }).optional(),
+      data: z.unknown().optional(),
+    }),
+    // §14 promote a closed shell to a solid.
+    z.object({
+      ...base,
+      type: z.literal("solidify"),
+      params: numParams.optional(),
+      data: z.unknown().optional(),
+    }),
+    // §14 free-edge fill (MakeFilling) over ≥3 boundary edges.
+    z.object({
+      ...base,
+      type: z.literal("patch"),
+      params: numParams.optional(),
+      data: z
+        .object({
+          edges: z.array(edgeRef).min(3),
+          continuity: z.enum(["c0", "c1", "g1", "c2", "g2"]).optional(),
+        })
+        .optional(),
+    }),
+    // §14 keep-one-side plane trim.
+    z.object({
+      ...base,
+      type: z.literal("trim"),
+      params: numParams.optional(),
+      data: z
+        .object({
+          plane: z.object({
+            origin: vec3,
+            normal: vec3,
+            xAxis: vec3.optional(),
+          }),
+          keep: z.enum(["positive", "negative"]).optional(),
+        })
+        .optional(),
+    }),
+    z.object({
+      ...base,
+      type: z.literal("scale"),
+      params: z.object({
+        factor: z.number(),
+        px: z.number().optional(),
+        py: z.number().optional(),
+        pz: z.number().optional(),
+      }),
+      data: z.unknown().optional(),
+    }),
+    z.object({
+      ...base,
+      type: z.literal("mirror"),
+      params: numParams.optional(),
+      data: z.unknown().optional(),
+    }),
+    z.object({
+      ...base,
+      type: z.literal("linearPattern"),
+      params: z.object({
+        spacing: z.number(),
+        count: z.number(),
+        dx: z.number().optional(),
+        dy: z.number().optional(),
+        dz: z.number().optional(),
+      }),
+      data: z.unknown().optional(),
+    }),
+    z.object({
+      ...base,
+      type: z.literal("circularPattern"),
+      params: z.object({
+        count: z.number(),
+        angle: z.number().optional(),
+        ox: z.number().optional(),
+        oy: z.number().optional(),
+        oz: z.number().optional(),
+        ax: z.number().optional(),
+        ay: z.number().optional(),
+        az: z.number().optional(),
+      }),
+      data: z.unknown().optional(),
+    }),
+    // §13.2 patternAlongPath — count along a spine (polyline/path or pathEdges).
+    z.object({
+      ...base,
+      type: z.literal("pathPattern"),
+      params: z.object({ count: z.number() }),
+      data: z
+        .object({
+          path: spinePath.optional(),
+          pathEdges: z.array(edgeRef).optional(),
+          align: z.boolean().optional(),
+          toolFeatures: z.array(featureSchema).optional(),
+        })
+        .optional(),
+    }),
+    // §13.2 split — keep both sides of a plane/tool cut as multi-body.
+    z.object({
+      ...base,
+      type: z.literal("split"),
+      params: numParams.optional(),
+      data: z
+        .object({
+          plane: z
+            .object({
+              origin: vec3,
+              normal: vec3,
+              xAxis: vec3.optional(),
+            })
+            .optional(),
+          toolFeatures: z.array(featureSchema).optional(),
+        })
+        .optional(),
+    }),
+    // §13.2 sectionCurves — body ∩ plane as edge compound.
+    z.object({
+      ...base,
+      type: z.literal("section"),
+      params: numParams.optional(),
+      data: z.object({
+        plane: z.object({
+          origin: vec3,
+          normal: vec3,
+          xAxis: vec3.optional(),
+        }),
+      }),
+    }),
     z.object({
       ...base,
       type: z.literal("loft"),
@@ -259,6 +533,7 @@ const featureSchema: z.ZodTypeAny = z.lazy(() =>
           )
           .min(2),
         ruled: z.boolean().optional(),
+        op: z.enum(["new", "join", "cut", "intersect"]).optional(),
       }),
     }),
     z.object({
@@ -266,36 +541,153 @@ const featureSchema: z.ZodTypeAny = z.lazy(() =>
       type: z.literal("sweep"),
       params: numParams.optional(),
       // Optional plane (G3) + MakePipeShell mode/transition (G8).
+      // Spine: path (polyline/path), pathEdges, or helix (§13.2 — not a SpinePath kind).
       data: z.object({
         profile,
-        path: spinePath,
+        path: spinePath.optional(),
+        pathEdges: z.array(edgeRef).optional(),
+        helix: z
+          .object({
+            radius: z.number(),
+            pitch: z.number(),
+            turns: z.number(),
+            handedness: z.enum(["right", "left"]),
+            taperAngle: z.number().optional(),
+          })
+          .optional(),
         plane: sketchPlaneSpec.optional(),
         mode: z.enum(["correctedFrenet", "frenet", "fixed"]).optional(),
         transition: z.enum(["right", "round", "transformed"]).optional(),
+        op: z.enum(["new", "join", "cut", "intersect"]).optional(),
       }),
     }),
     z.object({
       ...base,
       type: z.literal("boolean"),
       params: numParams.optional(),
-      data: z.object({
-        op: z.enum(["union", "subtract", "intersect"]).optional(),
-        toolFeatures: z.array(featureSchema).optional(),
-        dx: z.number().optional(), dy: z.number().optional(), dz: z.number().optional(),
-        tx: z.number().optional(), ty: z.number().optional(), tz: z.number().optional(),
-      }).optional(),
+      data: z
+        .object({
+          op: z.enum(["union", "subtract", "intersect"]).optional(),
+          toolFeatures: z.array(featureSchema).optional(),
+          dx: z.number().optional(),
+          dy: z.number().optional(),
+          dz: z.number().optional(),
+          tx: z.number().optional(),
+          ty: z.number().optional(),
+          tz: z.number().optional(),
+        })
+        .optional(),
     }),
-    z.object({ ...base, type: z.literal("importStep"), params: numParams.optional(), data: z.object({ step: z.string().min(1) }) }),
-    z.object({ ...base, type: z.literal("placement"), params: numParams.optional(), data: z.unknown().optional() }),
+    z.object({
+      ...base,
+      type: z.literal("importStep"),
+      params: numParams.optional(),
+      data: z.object({ step: z.string().min(1) }),
+    }),
+    z.object({
+      ...base,
+      type: z.literal("placement"),
+      params: numParams.optional(),
+      data: z.unknown().optional(),
+    }),
+    // §15 freeform NURBS surface body. data.surface is NurbsSurface JSON (mm
+    // control points in authoring → SI via convData); data.kind names the
+    // generator used to create it (plane/cylinder/sphere) when surface is omitted.
+    z.object({
+      ...base,
+      type: z.literal("freeform"),
+      params: z
+        .object({
+          uSize: z.number().optional(),
+          vSize: z.number().optional(),
+          radius: z.number().optional(),
+          height: z.number().optional(),
+          ox: z.number().optional(),
+          oy: z.number().optional(),
+          oz: z.number().optional(),
+          ax: z.number().optional(),
+          ay: z.number().optional(),
+          az: z.number().optional(),
+          resU: z.number().optional(),
+          resV: z.number().optional(),
+        })
+        .optional(),
+      data: z
+        .object({
+          kind: z.enum(["plane", "cylinder", "sphere", "custom"]).optional(),
+          surface: z
+            .object({
+              degU: z.number(),
+              degV: z.number(),
+              knotsU: z.array(z.number()),
+              knotsV: z.array(z.number()),
+              controlNet: z.array(z.array(vec3)),
+              weights: z.array(z.array(z.number())).optional(),
+            })
+            .optional(),
+          uDir: vec3.optional(),
+          vDir: vec3.optional(),
+          op: z.enum(["new", "join", "cut", "intersect"]).optional(),
+        })
+        .optional(),
+    }),
   ]),
 );
+
+// R11: real assembly validation (was z.unknown()). The schema accepts an
+// `assembly` — component instances + mates + joints — and it flows straight into
+// replaceDocument, so it must be structurally validated, not passed through blind.
+// Mirrors apps/plastiq/src/assembly/model.ts (AssemblyModel).
+const asmQuat = z.tuple([z.number(), z.number(), z.number(), z.number()]);
+const asmMateRef = z.object({ instance: z.string(), point: vec3.optional(), dir: vec3.optional() });
+const asmMate = z.union([
+  z.object({ id: z.string(), kind: z.literal("coincident"), a: asmMateRef, b: asmMateRef }),
+  z.object({
+    id: z.string(),
+    kind: z.literal("distance"),
+    a: asmMateRef,
+    b: asmMateRef,
+    value: z.number(),
+  }),
+  z.object({ id: z.string(), kind: z.literal("parallel"), a: asmMateRef, b: asmMateRef }),
+  z.object({ id: z.string(), kind: z.literal("perpendicular"), a: asmMateRef, b: asmMateRef }),
+  z.object({
+    id: z.string(),
+    kind: z.literal("angle"),
+    a: asmMateRef,
+    b: asmMateRef,
+    value: z.number(),
+  }),
+  z.object({ id: z.string(), kind: z.literal("concentric"), a: asmMateRef, b: asmMateRef }),
+]);
+const asmJoint = z.object({
+  id: z.string(),
+  kind: z.enum(["revolute", "prismatic", "cylindrical", "fixed", "ball", "planar"]),
+  parent: z.string(),
+  child: z.string(),
+  origin: vec3,
+  axis: vec3,
+  limits: z.object({ lower: z.number().optional(), upper: z.number().optional() }).optional(),
+});
+const asmInstance = z.object({
+  id: z.string(),
+  name: z.string(),
+  part: z.string().optional(),
+  pose: z.object({ position: vec3, orientation: asmQuat }),
+  fixed: z.boolean().optional(),
+});
+const assemblySchema = z.object({
+  instances: z.array(asmInstance),
+  mates: z.array(asmMate),
+  joints: z.array(asmJoint),
+});
 
 /** The structural schema shared by the authoring (mm/deg) and SI documents — they
  * have the same shape (both are EditorFeature[]); units differ only semantically. */
 const documentSchema = z.object({
   features: z.array(featureSchema),
   params: z.record(z.string(), z.number()),
-  assembly: z.unknown().optional(),
+  assembly: assemblySchema.optional(),
 });
 
 /** Validates an AI-authored document (values in mm/deg) before conversion (FR-7). */
@@ -311,7 +703,11 @@ export const cadDocumentSchema = documentSchema;
 
 type Scale = { len: (n: number) => number; ang: (n: number) => number };
 
-function convParams(type: string, params: Record<string, number> | undefined, s: Scale): Record<string, number> | undefined {
+function convParams(
+  type: string,
+  params: Record<string, number> | undefined,
+  s: Scale,
+): Record<string, number> | undefined {
   if (!params) return params;
   const lens = new Set(LENGTH_PARAMS[type] ?? []);
   const angs = new Set(ANGLE_PARAMS[type] ?? []);
@@ -335,13 +731,22 @@ function convProfile(p: unknown, L: (n: number) => number): unknown {
   }
   const segs = (prof.segments as Record<string, unknown>[]).map((seg) => {
     if (seg.kind === "line") return { ...seg, to: cv2(seg.to as V2, L) };
-    if (seg.kind === "arc") return { ...seg, through: cv2(seg.through as V2, L), to: cv2(seg.to as V2, L) };
-    return { ...seg, through: (seg.through as V2[]).map((t) => cv2(t, L)), to: cv2(seg.to as V2, L) };
+    if (seg.kind === "arc")
+      return { ...seg, through: cv2(seg.through as V2, L), to: cv2(seg.to as V2, L) };
+    return {
+      ...seg,
+      through: (seg.through as V2[]).map((t) => cv2(t, L)),
+      to: cv2(seg.to as V2, L),
+    };
   });
   return { ...prof, start: cv2(prof.start as V2, L), segments: segs };
 }
 
-function convData(type: string, data: Record<string, unknown> | undefined, s: Scale): Record<string, unknown> | undefined {
+function convData(
+  type: string,
+  data: Record<string, unknown> | undefined,
+  s: Scale,
+): Record<string, unknown> | undefined {
   if (!data) return data;
   const L = s.len;
   const d: Record<string, unknown> = { ...data };
@@ -349,10 +754,12 @@ function convData(type: string, data: Record<string, unknown> | undefined, s: Sc
     case "sketch": {
       if (d.profile) d.profile = convProfile(d.profile, L);
       const plane = d.plane as Record<string, unknown> | undefined;
-      if (plane && typeof plane.offset === "number") d.plane = { ...plane, offset: L(plane.offset) };
+      if (plane && typeof plane.offset === "number")
+        d.plane = { ...plane, offset: L(plane.offset) };
       break;
     }
-    case "loft": {
+    case "loft":
+    case "surfaceLoft": {
       if (Array.isArray(d.sections)) {
         d.sections = (d.sections as Record<string, unknown>[]).map((sec) => {
           const out: Record<string, unknown> = {
@@ -369,7 +776,8 @@ function convData(type: string, data: Record<string, unknown> | undefined, s: Sc
       }
       break;
     }
-    case "sweep": {
+    case "sweep":
+    case "surfaceSweep": {
       if (d.profile) d.profile = convProfile(d.profile, L);
       const path = d.path as Record<string, unknown> | undefined;
       if (path) {
@@ -392,9 +800,37 @@ function convData(type: string, data: Record<string, unknown> | undefined, s: Sc
           };
         }
       }
+      // §13.2 helix spine lengths (mm → m); taperAngle is deg → rad; turns unitless.
+      const helix = d.helix as Record<string, unknown> | undefined;
+      if (helix && type === "sweep") {
+        const next: Record<string, unknown> = {
+          ...helix,
+          radius: L(Number(helix.radius)),
+          pitch: L(Number(helix.pitch)),
+        };
+        if (typeof helix.taperAngle === "number") {
+          next.taperAngle = s.ang(helix.taperAngle);
+        }
+        d.helix = next;
+      }
       // Profile plane offset is a length (same as sketch.plane).
       const plane = d.plane as Record<string, unknown> | undefined;
-      if (plane && typeof plane.offset === "number") d.plane = { ...plane, offset: L(plane.offset) };
+      if (plane && typeof plane.offset === "number")
+        d.plane = { ...plane, offset: L(plane.offset) };
+      break;
+    }
+    case "surfaceRevolve": {
+      if (d.profile) d.profile = convProfile(d.profile, L);
+      const plane = d.plane as Record<string, unknown> | undefined;
+      if (plane && typeof plane.offset === "number")
+        d.plane = { ...plane, offset: L(plane.offset) };
+      break;
+    }
+    case "surfaceFromPoints": {
+      // Rectangular grid poles are lengths (mm ↔ m).
+      if (Array.isArray(d.grid)) {
+        d.grid = (d.grid as V3[][]).map((row) => row.map((p) => cv3(p, L)));
+      }
       break;
     }
     case "draft": {
@@ -404,6 +840,70 @@ function convData(type: string, data: Record<string, unknown> | undefined, s: Sc
     case "boolean": {
       if (Array.isArray(d.toolFeatures)) {
         d.toolFeatures = (d.toolFeatures as AuthoringFeature[]).map((f) => convFeature(f, s));
+      }
+      break;
+    }
+    case "pathPattern": {
+      // Spine polyline/path points are lengths (same as sweep.path).
+      const path = d.path as Record<string, unknown> | undefined;
+      if (path) {
+        if (path.kind === "polyline" && Array.isArray(path.points)) {
+          d.path = { ...path, points: (path.points as V3[]).map((p) => cv3(p, L)) };
+        } else if (path.kind === "path" && Array.isArray(path.segments)) {
+          d.path = {
+            kind: "path",
+            start: cv3(path.start as V3, L),
+            segments: (path.segments as Record<string, unknown>[]).map((seg) => {
+              if (seg.kind === "arc") {
+                return {
+                  kind: "arc",
+                  through: cv3(seg.through as V3, L),
+                  to: cv3(seg.to as V3, L),
+                };
+              }
+              return { kind: "line", to: cv3(seg.to as V3, L) };
+            }),
+          };
+        }
+      }
+      if (Array.isArray(d.toolFeatures)) {
+        d.toolFeatures = (d.toolFeatures as AuthoringFeature[]).map((f) => convFeature(f, s));
+      }
+      break;
+    }
+    case "split": {
+      const plane = d.plane as Record<string, unknown> | undefined;
+      if (plane && Array.isArray(plane.origin)) {
+        d.plane = {
+          ...plane,
+          origin: cv3(plane.origin as V3, L),
+          // normal / xAxis are unitless directions.
+        };
+      }
+      if (Array.isArray(d.toolFeatures)) {
+        d.toolFeatures = (d.toolFeatures as AuthoringFeature[]).map((f) => convFeature(f, s));
+      }
+      break;
+    }
+    case "section": {
+      const plane = d.plane as Record<string, unknown> | undefined;
+      if (plane && Array.isArray(plane.origin)) {
+        d.plane = {
+          ...plane,
+          origin: cv3(plane.origin as V3, L),
+        };
+      }
+      break;
+    }
+    case "freeform": {
+      // NurbsSurface control points are lengths (mm authoring → SI metres).
+      // Knots/degrees/weights are unitless. uDir/vDir are directions (unitless).
+      const surface = d.surface as Record<string, unknown> | undefined;
+      if (surface && Array.isArray(surface.controlNet)) {
+        d.surface = {
+          ...surface,
+          controlNet: (surface.controlNet as V3[][]).map((row) => row.map((p) => cv3(p, L))),
+        };
       }
       break;
     }
@@ -417,8 +917,10 @@ function convFeature(f: AuthoringFeature, s: Scale): AuthoringFeature {
   const out: AuthoringFeature = { ...f };
   const params = convParams(f.type, f.params, s);
   const data = convData(f.type, f.data, s);
-  if (params !== undefined) out.params = params; else delete out.params;
-  if (data !== undefined) out.data = data; else delete out.data;
+  if (params !== undefined) out.params = params;
+  else delete out.params;
+  if (data !== undefined) out.data = data;
+  else delete out.data;
   return out;
 }
 

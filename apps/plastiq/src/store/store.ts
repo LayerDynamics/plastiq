@@ -5,7 +5,14 @@
 // and persistence (M5) layer on top of these reducers.
 
 import { create } from "zustand";
-import { solveMates, type EdgeRef, type FaceRef, type MateSolveResult } from "@plastiq/cad";
+import {
+  solveMates,
+  type EdgeRef,
+  type FaceRef,
+  type MateSolveResult,
+  type VertexRef,
+} from "@plastiq/cad";
+import type { MeasureEndpoint } from "../viewport/measure.js";
 import type { JointKind } from "@plastiq/cad";
 import {
   emptyAssembly,
@@ -38,12 +45,17 @@ import {
   type SimExperimentConfig,
   type SimTelemetry,
 } from "../sim/experiments.js";
+import { dependencies, evalExpr, parameterNameError, renameDependency } from "./paramExpr.js";
 
-/** Persistent refs (SPEC-4 FR-16) for the current build's pickable entities,
- * keyed by the transient pick id — the bridge a dress-up feature stores. */
+/** Persistent refs (SPEC-4 FR-16 / R12) for the current build's pickable entities,
+ * keyed by the transient pick id — the bridge a dress-up / measure / hole feature
+ * stores. Vertices carry VertexRef (position + optional adjacent-edge midpoints). */
 export interface SelectionRefs {
   faces: Record<number, FaceRef>;
   edges: Record<number, EdgeRef>;
+  /** B-rep corner VertexRefs (R12). Optional so older fixtures/tests that only
+   * populate faces/edges still type-check; treat missing as `{}`. */
+  vertices?: Record<number, VertexRef>;
 }
 
 /** A feature spec to add (id is assigned by the store). */
@@ -89,7 +101,8 @@ export interface CadStore {
 
   // --- selection / UI ---
   selectedFeatureId: FeatureId | null;
-  selMode: SelectionMode;
+  /** Entity filter for click/hover picks. `null` = permissive cascade (R5). */
+  selMode: SelectionMode | null;
   picks: Pick[];
   status: string;
   /** Active editor workspace (Fusion-style mode). Authority over `simulating`. */
@@ -103,6 +116,12 @@ export interface CadStore {
   /** Measure tool (FR-13): active flag + latest readout (null when none). */
   measuring: boolean;
   measureResult: string | null;
+  /**
+   * Last completed (or in-progress first-click) measure endpoints (R12).
+   * Vertex–vertex / edge–edge store VertexRef / EdgeRef signatures, not bare
+   * transient pick indices. Null when the tool is idle / cleared.
+   */
+  measureEndpoints: { a: MeasureEndpoint; b: MeasureEndpoint | null } | null;
   /**
    * Every feature that failed the last rebuild → its message (FR-24).
    *
@@ -156,6 +175,8 @@ export interface CadStore {
     params: Record<string, number>,
     opts?: { history?: boolean },
   ) => void;
+  /** Bind/unbind one numeric feature parameter to a global-parameter expression. */
+  setFeatureExpr: (id: FeatureId, key: string, expr: string | undefined) => void;
   setFeatureData: (id: FeatureId, data: Record<string, unknown>) => void;
   /** Rebind feature deps (e.g. sketch binding for extrude/cut/revolve) — C10 Properties. */
   setFeatureDeps: (id: FeatureId, deps: FeatureId[] | undefined) => void;
@@ -165,12 +186,20 @@ export interface CadStore {
   /** Move feature `id` to index `to` (clamped); used by drag-reorder (M2.6). */
   reorderFeature: (id: FeatureId, to: number) => void;
   setParam: (name: string, value: number) => void;
+  /** Rename a global parameter and rewrite every dependent feature expression atomically. */
+  renameParam: (from: string, to: string) => void;
+  /** Remove an unused global parameter. Used parameters must be unbound first. */
+  removeParam: (name: string) => void;
   /** Upsert the single body-placement feature (FR-11 gizmo write-back). */
   upsertPlacement: (params: Record<string, number>) => void;
   setGizmoMode: (mode: "translate" | "rotate") => void;
   /** Toggle the measure tool; turning it off clears the readout (FR-13). */
   toggleMeasure: () => void;
   setMeasureResult: (result: string | null) => void;
+  /** Publish the banked / completed measure endpoints (R12 VertexRef/EdgeRef). */
+  setMeasureEndpoints: (
+    endpoints: { a: MeasureEndpoint; b: MeasureEndpoint | null } | null,
+  ) => void;
   /** Replace the failed-feature map from a rebuild's statuses ({} clears it). */
   setFeatureErrors: (errors: Record<FeatureId, string>) => void;
   setFeatureWarnings: (warnings: Record<FeatureId, string>) => void;
@@ -193,14 +222,12 @@ export interface CadStore {
 
   // --- selection actions ---
   selectFeature: (id: FeatureId | null) => void;
-  setSelMode: (mode: SelectionMode) => void;
+  setSelMode: (mode: SelectionMode | null) => void;
   /** Switch the editor workspace (FR-4 Fusion-style). `simulate` drives the sim
    * flag; the authority over `simulating`. */
   setWorkspace: (w: Workspace) => void;
   /** Begin/end an in-viewport interactive value edit for a feature (drag gizmo). */
-  setActiveFeatureEdit: (
-    edit: { id: FeatureId; param: string; start: number } | null,
-  ) => void;
+  setActiveFeatureEdit: (edit: { id: FeatureId; param: string; start: number } | null) => void;
   /** Add or replace a 3D sub-entity pick (additive = multi-select). */
   pick: (p: Pick, additive?: boolean) => void;
   /** Replace (or, additive, merge) the pick set — the rubber-band box select. */
@@ -415,6 +442,7 @@ type CadStateKey =
   | "gizmoMode"
   | "measuring"
   | "measureResult"
+  | "measureEndpoints"
   | "featureErrors"
   | "featureWarnings"
   | "selectionRefs"
@@ -459,9 +487,10 @@ function initialCadState(): CadState {
     gizmoMode: "translate",
     measuring: false,
     measureResult: null,
+    measureEndpoints: null,
     featureErrors: {},
     featureWarnings: {},
-    selectionRefs: { faces: {}, edges: {} },
+    selectionRefs: { faces: {}, edges: {}, vertices: {} },
     massProps: null,
     section: null,
     explodeFactor: 0,
@@ -493,10 +522,47 @@ export const useCadStore = create<CadStore>((set, get) => ({
       // history:false (live drags) still MUTATES the document — it must stop a
       // running sim (§2.11.4) even though it skips the undo snapshot.
       ...(opts?.history === false ? stopStaleSim(s) : pushHistory(s)),
-      features: s.features.map((f) =>
-        f.id === id ? { ...f, params: { ...f.params, ...params } } : f,
-      ),
+      features: s.features.map((f) => {
+        if (f.id !== id) return f;
+        // Writing a literal is an explicit unbind for those keys. Do it in this
+        // same history entry so one Properties edit remains one undo step.
+        const exprs = { ...f.exprs };
+        for (const key of Object.keys(params)) delete exprs[key];
+        return {
+          ...f,
+          params: { ...f.params, ...params },
+          exprs: Object.keys(exprs).length > 0 ? exprs : undefined,
+        };
+      }),
     })),
+
+  setFeatureExpr: (id, key, expr) =>
+    set((s) => {
+      const feature = s.features.find((candidate) => candidate.id === id);
+      if (!feature) throw new Error(`feature "${id}" does not exist`);
+      if (!key) throw new Error("feature parameter key is required");
+      const trimmed = expr?.trim();
+      if (trimmed) {
+        const value = evalExpr(trimmed, s.params);
+        if (!Number.isFinite(value)) {
+          throw new Error(`expression for ${feature.name ?? id}.${key} is not finite`);
+        }
+      }
+      const nextExprs = { ...feature.exprs };
+      if (trimmed) nextExprs[key] = trimmed;
+      else delete nextExprs[key];
+      return {
+        ...pushHistory(s),
+        features: s.features.map((candidate) =>
+          candidate.id === id
+            ? {
+                ...candidate,
+                exprs: Object.keys(nextExprs).length > 0 ? nextExprs : undefined,
+              }
+            : candidate,
+        ),
+      };
+    }),
 
   setFeatureData: (id, data) =>
     set((s) => ({
@@ -554,6 +620,51 @@ export const useCadStore = create<CadStore>((set, get) => ({
   setParam: (name, value) =>
     set((s) => ({ ...pushHistory(s), params: { ...s.params, [name]: value } })),
 
+  renameParam: (from, to) =>
+    set((s) => {
+      if (!(from in s.params)) throw new Error(`parameter "${from}" does not exist`);
+      const nextName = to.trim();
+      const error = parameterNameError(nextName, Object.keys(s.params), from);
+      if (error) throw new Error(error);
+      if (nextName === from) return {};
+      const params = { ...s.params };
+      const value = params[from]!;
+      delete params[from];
+      params[nextName] = value;
+      return {
+        ...pushHistory(s),
+        params,
+        features: s.features.map((feature) => {
+          if (!feature.exprs) return feature;
+          const exprs = Object.fromEntries(
+            Object.entries(feature.exprs).map(([key, expression]) => [
+              key,
+              renameDependency(expression, from, nextName),
+            ]),
+          );
+          return { ...feature, exprs };
+        }),
+      };
+    }),
+
+  removeParam: (name) =>
+    set((s) => {
+      if (!(name in s.params)) return {};
+      const users = s.features.filter((feature) =>
+        Object.values(feature.exprs ?? {}).some((expression) =>
+          dependencies(expression).includes(name),
+        ),
+      );
+      if (users.length > 0) {
+        throw new Error(
+          `parameter "${name}" is used by ${users.map((feature) => feature.name ?? feature.id).join(", ")}`,
+        );
+      }
+      const params = { ...s.params };
+      delete params[name];
+      return { ...pushHistory(s), params };
+    }),
+
   upsertPlacement: (params) =>
     set((s) => {
       const existing = s.features.find((f) => f.type === PLACEMENT_TYPE);
@@ -585,8 +696,14 @@ export const useCadStore = create<CadStore>((set, get) => ({
   setGizmoMode: (mode) => set({ gizmoMode: mode }),
 
   toggleMeasure: () =>
-    set((s) => ({ measuring: !s.measuring, measureResult: s.measuring ? null : s.measureResult })),
+    set((s) => ({
+      measuring: !s.measuring,
+      // Turning off clears both the readout and the banked VertexRef/EdgeRef pair.
+      measureResult: s.measuring ? null : s.measureResult,
+      measureEndpoints: s.measuring ? null : s.measureEndpoints,
+    })),
   setMeasureResult: (result) => set({ measureResult: result }),
+  setMeasureEndpoints: (endpoints) => set({ measureEndpoints: endpoints }),
   setFeatureErrors: (errors) => set({ featureErrors: errors }),
   setFeatureWarnings: (warnings) => set({ featureWarnings: warnings }),
   setSelectionRefs: (refs) => set({ selectionRefs: refs }),
@@ -595,7 +712,20 @@ export const useCadStore = create<CadStore>((set, get) => ({
 
   setSection: (section) => set({ section }),
 
-  setExplodeFactor: (factor) => set({ explodeFactor: Math.max(0, factor) }),
+  setExplodeFactor: (factor) =>
+    set((s) => {
+      const explodeFactor = Math.max(0, factor);
+      if (explodeFactor > 0 && s.mateMode) {
+        return {
+          explodeFactor,
+          mateMode: false,
+          matePicks: [],
+          status:
+            "mate mode exited because the assembly is exploded — collapse the explode to author mates",
+        };
+      }
+      return { explodeFactor };
+    }),
 
   checkInterference: () => set((s) => ({ interferenceReq: s.interferenceReq + 1 })),
   setInterferences: (clashes) => set({ interferences: clashes }),
@@ -676,6 +806,11 @@ export const useCadStore = create<CadStore>((set, get) => ({
         mates: s.assembly.mates.filter((m) => m.a.instance !== id && m.b.instance !== id),
         joints: s.assembly.joints.filter((j) => j.parent !== id && j.child !== id),
       },
+      // S5 — also purge any pending mate picks pointing at the removed instance,
+      // so a subsequent applyMate/applyJoint can't build a constraint on a dead id
+      // (which `toMateRef` would then map to component:-1). matePicks is transient
+      // (not in the undo snapshot), so this is a plain field set.
+      matePicks: s.matePicks.filter((p) => p.instanceId !== id),
     }));
     // Re-solve so the remaining instances settle under the changed constraints
     // (consistent with addMate/removeMate; CADStudio.md §5.4).
@@ -710,13 +845,48 @@ export const useCadStore = create<CadStore>((set, get) => ({
     get().solveAssembly();
   },
 
-  setMateMode: (on) => set({ mateMode: on, matePicks: [] }),
+  setMateMode: (on) => {
+    const s = get();
+    if (on && s.explodeFactor > 0) {
+      set({
+        mateMode: false,
+        matePicks: [],
+        status: "collapse the explode (set explode to 0) before entering mate mode",
+      });
+      return;
+    }
+    set({ mateMode: on, matePicks: [] });
+  },
 
   addMatePick: ({ instanceId, faceId, worldPoint }) => {
     const s = get();
+    // S4 — the pick is localized against the DOCUMENT pose (worldToLocal below),
+    // but while the assembly is exploded the click hits the RENDERED (exploded)
+    // pose, so worldToLocal would produce a wrong local point (mate lands off the
+    // face). Full exploded-pose localization needs the viewport's per-instance
+    // offsets (out of scope here), so block picking until the explode is collapsed
+    // and say why — instead of silently recording a mislocalized pick.
+    if (s.explodeFactor > 0) {
+      set({
+        status:
+          "collapse the explode (set explode to 0) before picking mate faces — picks would land in the wrong place while exploded",
+      });
+      return;
+    }
     const inst = s.assembly.instances.find((i) => i.id === instanceId);
     const ref = s.selectionRefs.faces[faceId];
-    if (!inst || !ref) return;
+    // S6 — surface WHY a pick didn't register, instead of silently failing to
+    // advance the "Picking n/2" counter (the old `if (!inst || !ref) return`).
+    if (!inst) {
+      set({ status: `mate pick ignored — instance "${instanceId}" no longer exists` });
+      return;
+    }
+    if (!ref) {
+      set({
+        status: `mate pick ignored — face ${faceId} has no reference geometry (rebuild the part, then pick again)`,
+      });
+      return;
+    }
     // World hit point → instance-local point; the face normal is already local
     // (shared part geometry), giving the mate endpoint's point + direction.
     const point = worldToLocal(inst.pose, worldPoint);
@@ -727,9 +897,22 @@ export const useCadStore = create<CadStore>((set, get) => ({
   clearMatePicks: () => set({ matePicks: [] }),
 
   applyMate: (kind, value = 0) => {
-    const { matePicks } = get();
+    const s = get();
+    const { matePicks } = s;
     if (matePicks.length !== 2) return;
     const [p0, p1] = matePicks;
+    // S5 — a pick may reference an instance removed since it was made. Building a
+    // mate on a dead id would push `component:-1` into the solver; verify BOTH
+    // instances still exist, drop the now-stale picks, and tell the user.
+    const hasA = s.assembly.instances.some((i) => i.id === p0!.instanceId);
+    const hasB = s.assembly.instances.some((i) => i.id === p1!.instanceId);
+    if (!hasA || !hasB) {
+      set({
+        matePicks: [],
+        status: "can't build mate — a picked instance was removed; pick two faces again",
+      });
+      return;
+    }
     const a = { instance: p0!.instanceId, point: p0!.point, dir: p0!.dir };
     const b = { instance: p1!.instanceId, point: p1!.point, dir: p1!.dir };
     const id = `m${get().nextSeq}`;
@@ -772,7 +955,18 @@ export const useCadStore = create<CadStore>((set, get) => ({
     if (s.matePicks.length !== 2) return;
     const [p0, p1] = s.matePicks;
     const parentInst = s.assembly.instances.find((i) => i.id === p0!.instanceId);
-    if (!parentInst) return;
+    // S5 — a joint needs BOTH the parent and the child instance. The previous check
+    // guarded only the parent, so a removed CHILD produced a joint referencing a
+    // dead id. Verify both, drop the stale picks, and surface why (the old bare
+    // `return` was silent).
+    const childExists = s.assembly.instances.some((i) => i.id === p1!.instanceId);
+    if (!parentInst || !childExists) {
+      set({
+        matePicks: [],
+        status: "can't build joint — a picked instance was removed; pick two faces again",
+      });
+      return;
+    }
     // The joint frame lives in world coords: origin = the parent pick point, axis
     // = the parent face normal, both transformed out of the parent's local frame.
     const origin = localToWorld(parentInst.pose, p0!.point);

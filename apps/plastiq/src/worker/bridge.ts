@@ -125,9 +125,20 @@ export class GeometryClient {
    * camera (M3 on-face sketching); null if there's no body or the face is gone. */
   async facePlane(doc: CadDocument, face: FaceRef): Promise<PlaneFrame | null> {
     const res = await this.send({ op: "facePlane", doc, face });
-    if (!res.ok || res.op !== "facePlane")
-      throw new Error("facePlane: unexpected worker response");
+    if (!res.ok || res.op !== "facePlane") throw new Error("facePlane: unexpected worker response");
     return res.plane;
+  }
+
+  /** Resolve AABB broad-phase candidates with exact OCCT B-rep intersections. */
+  async interference(
+    doc: CadDocument,
+    candidates: { a: string; b: string }[],
+  ): Promise<{ a: string; b: string }[]> {
+    const res = await this.send({ op: "interference", doc, candidates });
+    if (!res.ok || res.op !== "interference") {
+      throw new Error("interference: unexpected worker response");
+    }
+    return res.clashes;
   }
 
   dispose(): void {

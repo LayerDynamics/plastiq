@@ -16,10 +16,7 @@ import {
   type Vec2,
 } from "./drawInput.js";
 import { nearestSnap, segmentHint, type SegHint, type Snap } from "./infer.js";
-import {
-  projectPlanePoint,
-  useCameraOrientation,
-} from "../viewport/cameraOrientation.js";
+import { projectPlanePoint, useCameraOrientation } from "../viewport/cameraOrientation.js";
 // `hitTest` moved to SketchScene with the pointer it serves (ADR-0014): the
 // 3D plane owns picking now. `canApply` stays — it gates these buttons.
 import { canApply, type ConstraintKind } from "./hit.js";
@@ -47,6 +44,7 @@ const TOOLS: { tool: SketchTool; label: string }[] = [
   { tool: "rectCenter", label: "Rect◉" },
   { tool: "circle", label: "Circle" },
   { tool: "circle3", label: "Circle3" },
+  { tool: "ellipse", label: "Ellipse" },
   { tool: "arc3", label: "Arc3" },
   { tool: "arcCenter", label: "Arc◉" },
   { tool: "polygon", label: "Poly" },
@@ -62,6 +60,7 @@ const TOOL_KEYS: Record<string, SketchTool> = {
   l: "line",
   r: "rectangle",
   c: "circle",
+  e: "ellipse",
   a: "arc3",
   g: "polygon",
   o: "slot",
@@ -174,6 +173,15 @@ const ConstraintGlyphs = memo(function ConstraintGlyphs({
     const e = model.entities.find((x) => x.id === circleId && x.kind === "circle");
     return e && e.kind === "circle" ? screen(e.center) : null;
   };
+  const curveAnchor = (entityId: string): { x: number; y: number } | null => {
+    const e = model.entities.find((x) => x.id === entityId);
+    if (!e) return null;
+    if (e.kind === "line") return lineMid(e.id);
+    if (e.kind === "circle") return circleCenter(e.id);
+    if (e.kind === "arc") return screen(e.through);
+    if (e.kind === "ellipse") return screen(e.center);
+    return null;
+  };
   const GLYPH: Record<string, string> = {
     horizontal: "H",
     vertical: "V",
@@ -181,6 +189,7 @@ const ConstraintGlyphs = memo(function ConstraintGlyphs({
     parallel: "∥",
     perpendicular: "⟂",
     equalLength: "=",
+    equalRadius: "=R",
     concentric: "◎",
     tangent: "T",
     midpoint: "M",
@@ -210,15 +219,17 @@ const ConstraintGlyphs = memo(function ConstraintGlyphs({
             ? lineMid(c.line)
             : "line1" in c
               ? lineMid(c.line1)
-              : "circle1" in c
-                ? circleCenter(c.circle1)
-                : "circle" in c
-                  ? circleCenter(c.circle)
-                  : "point" in c
-                    ? screen(c.point)
-                    : "a" in c
-                      ? pairMid(c.a, c.b)
-                      : null;
+              : "curve1" in c
+                ? curveAnchor(c.curve1)
+                : "circle1" in c
+                  ? circleCenter(c.circle1)
+                  : "circle" in c
+                    ? circleCenter(c.circle)
+                    : "point" in c
+                      ? screen(c.point)
+                      : "a" in c
+                        ? pairMid(c.a, c.b)
+                        : null;
         if (!at) return null;
         const label = dimLabel(c);
         const isDim = label !== null;
@@ -411,6 +422,14 @@ export function Sketcher(): React.JSX.Element | null {
   const setEditingDim = useSketchStore((s) => s.setEditingDim);
   const result = useSketchStore((s) => s.result);
   const addDrawDimensions = useSketchStore((s) => s.addDrawDimensions);
+  const offsetSelection = useSketchStore((s) => s.offsetSelection);
+  const applyPattern = useSketchStore((s) => s.applyPattern);
+  const [offsetMm, setOffsetMm] = useState(5);
+  const [patternCount, setPatternCount] = useState(3);
+  const [patternSpacingMm, setPatternSpacingMm] = useState(10);
+  const [patternCenterUmm, setPatternCenterUmm] = useState(0);
+  const [patternCenterVmm, setPatternCenterVmm] = useState(0);
+  const [patternAngleDeg, setPatternAngleDeg] = useState(360);
 
   // Finish (FR-21): commit the sketch via the shared helper (solve → derive the
   // closed profile → persist model+profile+plane → exit), used identically by the
@@ -499,17 +518,11 @@ export function Sketcher(): React.JSX.Element | null {
   // way — so it no longer has to be un-projected from pixels (which the fixed 2D
   // view could only ever approximate once the camera moved).
   const cursorW: Vec2 = sketchCursor ? { u: sketchCursor[0], v: sketchCursor[1] } : { u: 0, v: 0 };
-  const liveNow = drawFieldsNow.length
-    ? liveValues(tool, pending.length, anchorsW, cursorW)
-    : [];
+  const liveNow = drawFieldsNow.length ? liveValues(tool, pending.length, anchorsW, cursorW) : [];
   // Box position: follows the cursor (or anchor) while idle, but FREEZES once value
   // entry starts so its fields don't jump out from under the pointer mid-type.
   const drawBoxPos = useRef<Px | null>(null);
-  const liveBoxPos: Px | null = hover
-    ? hover.px
-    : anchor
-      ? project([anchor.u, anchor.v])
-      : null;
+  const liveBoxPos: Px | null = hover ? hover.px : anchor ? project([anchor.u, anchor.v]) : null;
   if (!draft && liveBoxPos) drawBoxPos.current = liveBoxPos;
   const boxPos = draft ? (drawBoxPos.current ?? liveBoxPos) : liveBoxPos;
   // Reset the draft whenever the tool or gesture step changes.
@@ -678,7 +691,8 @@ export function Sketcher(): React.JSX.Element | null {
     if (!active) return;
     const onKey = (e: KeyboardEvent): void => {
       const el = e.target as HTMLElement | null;
-      if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable)) return;
+      if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable))
+        return;
       if (e.metaKey || e.ctrlKey || e.altKey) return;
       const st = useSketchStore.getState();
       // Start typing a value over the canvas → open the inline value box seeded with
@@ -722,6 +736,10 @@ export function Sketcher(): React.JSX.Element | null {
 
   if (!active) return null;
 
+  const patternEntityIds = selection.filter((id) => model.entities.some((e) => e.id === id));
+  const patternReady =
+    patternEntityIds.length > 0 && Number.isInteger(patternCount) && patternCount >= 2;
+
   const toolBtn = (t: SketchTool, label: string): React.JSX.Element => (
     <button
       key={t}
@@ -736,151 +754,295 @@ export function Sketcher(): React.JSX.Element | null {
   );
 
   return (
-    <div
-      ref={hostRef}
-      data-testid="sketcher"
-      className="pointer-events-none absolute inset-0 z-10"
-    >
-      <div className="pointer-events-auto absolute left-2 top-2 z-20 flex items-center gap-2 rounded border border-[#2a3444] bg-black/60 px-2 py-1 text-xs text-[#cfe]">
-        <span className="font-bold">Sketch</span>
-        <button
-          type="button"
-          data-testid="sketch-look-at"
-          className="rounded border border-[#2a3444] px-1.5 py-0.5 text-[10px] text-[#9ab] hover:bg-[#1b2230]"
-          title="Look at the sketch plane (normal-to)"
-          onClick={() => {
-            const vp = (
-              globalThis as {
-                __plastiqViewport?: { setView?: (d: [number, number, number]) => void };
-              }
-            ).__plastiqViewport;
-            // Default: look along +Z; for non-XY planes the Viewport sketchFrame
-            // drive is preferred — setView uses a world direction for now.
-            vp?.setView?.([0, -0.5, 1]);
-          }}
-        >
-          Look At
-        </button>
-        <span className="text-[#789]">{plane}</span>
-        <div className="mx-1 h-3 w-px bg-[#2a3444]" />
-        {TOOLS.map((t) => toolBtn(t.tool, t.label))}
-        {tool === "polygon" && (
-          <label className="ml-1 flex items-center gap-1 text-[#9ab]">
-            sides
-            <input
-              type="number"
-              min={3}
-              max={64}
-              data-testid="polygon-sides"
-              value={polygonSides}
-              onChange={(e) => setPolygonSides(Number(e.currentTarget.value))}
-              className="w-12 rounded border border-[#2a3444] bg-[#0e1219] px-1 py-0.5 text-[#cfe] outline-none"
-            />
-          </label>
-        )}
-        {tool === "spline" && pending.length >= 2 && (
+    <div ref={hostRef} data-testid="sketcher" className="pointer-events-none absolute inset-0 z-10">
+      <div className="pointer-events-none absolute left-2 right-52 top-2 z-20 flex flex-col items-start gap-1">
+        <div className="pointer-events-auto flex w-fit max-w-full flex-wrap items-center gap-x-2 gap-y-1 rounded border border-[#2a3444] bg-black/60 px-2 py-1 text-xs text-[#cfe]">
+          <span className="font-bold">Sketch</span>
           <button
             type="button"
-            data-testid="spline-done"
-            onClick={finishGesture}
-            className="rounded border border-[#3a6ea5] px-2 py-0.5 text-[#9fd0ff] hover:bg-[#11202e]"
-            title="Finish the spline (Enter)"
+            data-testid="sketch-look-at"
+            className="rounded border border-[#2a3444] px-1.5 py-0.5 text-[10px] text-[#9ab] hover:bg-[#1b2230]"
+            title="Look at the sketch plane (normal-to)"
+            onClick={() => {
+              const vp = (
+                globalThis as {
+                  __plastiqViewport?: { setView?: (d: [number, number, number]) => void };
+                }
+              ).__plastiqViewport;
+              // Look along the resolved sketch-plane normal (R13/S7). Fall back to a
+              // mild +Z view when the frame has not been published yet.
+              const n = useSketchStore.getState().resolvedFrame?.normal;
+              vp?.setView?.(n ? [n[0], n[1], n[2]] : [0, -0.5, 1]);
+            }}
           >
-            Done
+            Look At
           </button>
-        )}
-        <label className="ml-1 flex items-center gap-1 text-[#9ab]">
-          <input
-            type="checkbox"
-            data-testid="construction-toggle"
-            checked={construction}
-            onChange={(e) => setConstruction(e.currentTarget.checked)}
-          />
-          constr
-        </label>
-        <button
-          type="button"
-          data-testid="sketch-finish"
-          disabled={!profileReady}
-          onClick={() => finishSketchFeature()}
-          className="rounded border border-[#3a6b3a] bg-[#1c2a14] px-2 py-0.5 text-[#cfe6a0] enabled:hover:bg-[#24341a] disabled:opacity-40"
-          title={
-            profileReady ? "Finish: use this profile in a feature" : "Draw a closed profile first"
-          }
-        >
-          Finish
-        </button>
-        <button
-          type="button"
-          data-testid="sketch-close"
-          onClick={exitSketch}
-          className="rounded border border-[#2a3444] px-2 py-0.5 hover:bg-[#1b2230]"
-        >
-          Cancel
-        </button>
-      </div>
+          <span className="text-[#789]">{plane}</span>
+          <div className="mx-1 h-3 w-px bg-[#2a3444]" />
+          {TOOLS.map((t) => toolBtn(t.tool, t.label))}
+          <label className="ml-1 flex items-center gap-1 text-[#9ab]">
+            offset
+            <input
+              type="number"
+              step="any"
+              data-testid="offset-distance"
+              value={offsetMm}
+              onChange={(e) => setOffsetMm(Number(e.currentTarget.value))}
+              className="w-12 rounded border border-[#2a3444] bg-[#0e1219] px-1 py-0.5 text-right text-[#cfe] outline-none"
+            />
+            mm
+          </label>
+          <button
+            type="button"
+            data-testid="offset-selected"
+            disabled={
+              !Number.isFinite(offsetMm) ||
+              offsetMm === 0 ||
+              !selection.some((id) =>
+                model.entities.some(
+                  (e) =>
+                    e.id === id &&
+                    (e.kind === "line" ||
+                      e.kind === "circle" ||
+                      e.kind === "arc" ||
+                      e.kind === "ellipse"),
+                ),
+              )
+            }
+            onClick={() => offsetSelection(offsetMm / MM)}
+            className="rounded border border-[#2a3444] px-1.5 py-0.5 enabled:hover:bg-[#1b2230] disabled:opacity-30"
+          >
+            Offset
+          </button>
+          {tool === "polygon" && (
+            <label className="ml-1 flex items-center gap-1 text-[#9ab]">
+              sides
+              <input
+                type="number"
+                min={3}
+                max={64}
+                data-testid="polygon-sides"
+                value={polygonSides}
+                onChange={(e) => setPolygonSides(Number(e.currentTarget.value))}
+                className="w-12 rounded border border-[#2a3444] bg-[#0e1219] px-1 py-0.5 text-[#cfe] outline-none"
+              />
+            </label>
+          )}
+          {tool === "spline" && pending.length >= 2 && (
+            <button
+              type="button"
+              data-testid="spline-done"
+              onClick={finishGesture}
+              className="rounded border border-[#3a6ea5] px-2 py-0.5 text-[#9fd0ff] hover:bg-[#11202e]"
+              title="Finish the spline (Enter)"
+            >
+              Done
+            </button>
+          )}
+          <label className="ml-1 flex items-center gap-1 text-[#9ab]">
+            <input
+              type="checkbox"
+              data-testid="construction-toggle"
+              checked={construction}
+              onChange={(e) => setConstruction(e.currentTarget.checked)}
+            />
+            constr
+          </label>
+          <button
+            type="button"
+            data-testid="sketch-finish"
+            disabled={!profileReady}
+            onClick={() => finishSketchFeature()}
+            className="rounded border border-[#3a6b3a] bg-[#1c2a14] px-2 py-0.5 text-[#cfe6a0] enabled:hover:bg-[#24341a] disabled:opacity-40"
+            title={
+              profileReady ? "Finish: use this profile in a feature" : "Draw a closed profile first"
+            }
+          >
+            Finish
+          </button>
+          <button
+            type="button"
+            data-testid="sketch-close"
+            onClick={exitSketch}
+            className="rounded border border-[#2a3444] px-2 py-0.5 hover:bg-[#1b2230]"
+          >
+            Cancel
+          </button>
+        </div>
 
-      {/* Select-then-constrain palette (FR-18): each button enables only when the
+        <div
+          data-testid="sketch-pattern-controls"
+          className="pointer-events-auto flex w-fit max-w-full flex-wrap items-center gap-1 rounded border border-[#2a3444] bg-black/60 px-2 py-1 text-xs text-[#cfe]"
+        >
+          <span className="text-[10px] uppercase text-[#567]">Pattern</span>
+          <label className="flex items-center gap-1 text-[#9ab]">
+            count
+            <input
+              type="number"
+              min={2}
+              max={10_000}
+              data-testid="sketch-pattern-count"
+              value={patternCount}
+              onChange={(e) => setPatternCount(Math.round(Number(e.currentTarget.value)))}
+              className="w-12 rounded border border-[#2a3444] bg-[#0e1219] px-1 py-0.5 text-right text-[#cfe] outline-none"
+            />
+          </label>
+          <label className="flex items-center gap-1 text-[#9ab]">
+            step
+            <input
+              type="number"
+              step="any"
+              data-testid="sketch-pattern-spacing"
+              value={patternSpacingMm}
+              onChange={(e) => setPatternSpacingMm(Number(e.currentTarget.value))}
+              className="w-14 rounded border border-[#2a3444] bg-[#0e1219] px-1 py-0.5 text-right text-[#cfe] outline-none"
+            />
+            mm
+          </label>
+          <button
+            type="button"
+            data-testid="sketch-pattern-linear"
+            disabled={!patternReady || !Number.isFinite(patternSpacingMm) || patternSpacingMm === 0}
+            onClick={() =>
+              applyPattern(
+                {
+                  kind: "linear",
+                  count: patternCount,
+                  direction: [1, 0],
+                  spacing: patternSpacingMm / MM,
+                },
+                { entityIds: patternEntityIds },
+              )
+            }
+            className="rounded px-1.5 py-0.5 enabled:hover:bg-[#1b2230] disabled:opacity-30"
+          >
+            Linear +U
+          </button>
+          <label className="flex items-center gap-1 text-[#9ab]">
+            center
+            <input
+              type="number"
+              step="any"
+              aria-label="pattern center U millimetres"
+              data-testid="sketch-pattern-center-u"
+              value={patternCenterUmm}
+              onChange={(e) => setPatternCenterUmm(Number(e.currentTarget.value))}
+              className="w-12 rounded border border-[#2a3444] bg-[#0e1219] px-1 py-0.5 text-right text-[#cfe] outline-none"
+            />
+            ,
+            <input
+              type="number"
+              step="any"
+              aria-label="pattern center V millimetres"
+              data-testid="sketch-pattern-center-v"
+              value={patternCenterVmm}
+              onChange={(e) => setPatternCenterVmm(Number(e.currentTarget.value))}
+              className="w-12 rounded border border-[#2a3444] bg-[#0e1219] px-1 py-0.5 text-right text-[#cfe] outline-none"
+            />
+            mm
+          </label>
+          <label className="flex items-center gap-1 text-[#9ab]">
+            sweep
+            <input
+              type="number"
+              step="any"
+              data-testid="sketch-pattern-angle"
+              value={patternAngleDeg}
+              onChange={(e) => setPatternAngleDeg(Number(e.currentTarget.value))}
+              className="w-14 rounded border border-[#2a3444] bg-[#0e1219] px-1 py-0.5 text-right text-[#cfe] outline-none"
+            />
+            °
+          </label>
+          <button
+            type="button"
+            data-testid="sketch-pattern-circular"
+            disabled={
+              !patternReady ||
+              !Number.isFinite(patternCenterUmm) ||
+              !Number.isFinite(patternCenterVmm) ||
+              !Number.isFinite(patternAngleDeg) ||
+              patternAngleDeg === 0
+            }
+            onClick={() =>
+              applyPattern(
+                {
+                  kind: "circular",
+                  count: patternCount,
+                  center: [patternCenterUmm / MM, patternCenterVmm / MM],
+                  angle: patternAngleDeg / DEG,
+                },
+                { entityIds: patternEntityIds },
+              )
+            }
+            className="rounded px-1.5 py-0.5 enabled:hover:bg-[#1b2230] disabled:opacity-30"
+          >
+            Circular
+          </button>
+        </div>
+
+        {/* Select-then-constrain palette (FR-18): each button enables only when the
           current selection fits the constraint. */}
-      <div
-        data-testid="constraint-palette"
-        className="pointer-events-auto absolute left-2 top-12 z-20 flex items-center gap-1 rounded border border-[#2a3444] bg-black/60 px-2 py-1 text-xs text-[#cfe]"
-      >
-        <span className="text-[10px] uppercase text-[#567]">Constrain</span>
-        {(
-          [
-            ["horizontal", "H"],
-            ["vertical", "V"],
-            ["coincident", "Coin"],
-            ["parallel", "∥"],
-            ["perpendicular", "⟂"],
-            ["equalLength", "="],
-            ["concentric", "◎"],
-            ["tangent", "T"],
-            ["midpoint", "Mid"],
-            ["pointOnObject", "On"],
-            ["symmetric", "Sym"],
-          ] as [ConstraintKind, string][]
-        ).map(([kind, label]) => {
-          const enabled = canApply(kind, model, selection);
-          return (
+        <div
+          data-testid="constraint-palette"
+          className="pointer-events-auto flex w-fit max-w-full flex-wrap items-center gap-1 rounded border border-[#2a3444] bg-black/60 px-2 py-1 text-xs text-[#cfe]"
+        >
+          <span className="text-[10px] uppercase text-[#567]">Constrain</span>
+          {(
+            [
+              ["horizontal", "H"],
+              ["vertical", "V"],
+              ["coincident", "Coin"],
+              ["parallel", "∥"],
+              ["perpendicular", "⟂"],
+              ["equalLength", "="],
+              ["equalRadius", "=R"],
+              ["concentric", "◎"],
+              ["tangent", "T"],
+              ["midpoint", "Mid"],
+              ["pointOnObject", "On"],
+              ["symmetric", "Sym"],
+            ] as [ConstraintKind, string][]
+          ).map(([kind, label]) => {
+            const enabled = canApply(kind, model, selection);
+            return (
+              <button
+                key={kind}
+                type="button"
+                data-testid={`constrain-${kind}`}
+                disabled={!enabled}
+                onClick={() => applyConstraint(kind)}
+                className="rounded px-1.5 py-0.5 enabled:hover:bg-[#1b2230] disabled:opacity-30"
+              >
+                {label}
+              </button>
+            );
+          })}
+          <span className="ml-1 text-[10px] text-[#678]">{selection.length} sel</span>
+          <div className="mx-1 h-3 w-px bg-[#2a3444]" />
+          <span className="text-[10px] uppercase text-[#567]">Dim</span>
+          {(
+            [
+              ["distance", "Dist"],
+              ["hDistance", "↔"],
+              ["vDistance", "↕"],
+              ["radius", "Radius"],
+              ["diameter", "⌀"],
+              ["angle", "Angle"],
+              ["lineAngle", "∠X"],
+            ] as [DimensionKind, string][]
+          ).map(([kind, label]) => (
             <button
               key={kind}
               type="button"
-              data-testid={`constrain-${kind}`}
-              disabled={!enabled}
-              onClick={() => applyConstraint(kind)}
+              data-testid={`dim-${kind}`}
+              disabled={!canDimension(kind, model, selection)}
+              onClick={() => addDimension(kind)}
               className="rounded px-1.5 py-0.5 enabled:hover:bg-[#1b2230] disabled:opacity-30"
             >
               {label}
             </button>
-          );
-        })}
-        <span className="ml-1 text-[10px] text-[#678]">{selection.length} sel</span>
-        <div className="mx-1 h-3 w-px bg-[#2a3444]" />
-        <span className="text-[10px] uppercase text-[#567]">Dim</span>
-        {(
-          [
-            ["distance", "Dist"],
-            ["hDistance", "↔"],
-            ["vDistance", "↕"],
-            ["radius", "Radius"],
-            ["diameter", "⌀"],
-            ["angle", "Angle"],
-            ["lineAngle", "∠X"],
-          ] as [DimensionKind, string][]
-        ).map(([kind, label]) => (
-          <button
-            key={kind}
-            type="button"
-            data-testid={`dim-${kind}`}
-            disabled={!canDimension(kind, model, selection)}
-            onClick={() => addDimension(kind)}
-            className="rounded px-1.5 py-0.5 enabled:hover:bg-[#1b2230] disabled:opacity-30"
-          >
-            {label}
-          </button>
-        ))}
+          ))}
+        </div>
       </div>
 
       {/* Solver feedback (FR-20): DOF counter, three-state verdict, conflict list. */}
@@ -974,14 +1136,14 @@ export function Sketcher(): React.JSX.Element | null {
         // the live length/angle readout is the point of a drag — it simply
         // stops intercepting until the gesture ends.
         <div className={dragDraw ? "pointer-events-none" : "pointer-events-auto"}>
-        <DrawInputBox
-          fields={drawFieldsNow}
-          live={liveNow}
-          draft={draft}
-          setDraft={setDraft}
-          onCommit={commitDraft}
-          at={boxPos}
-        />
+          <DrawInputBox
+            fields={drawFieldsNow}
+            live={liveNow}
+            draft={draft}
+            setDraft={setDraft}
+            onCommit={commitDraft}
+            at={boxPos}
+          />
         </div>
       )}
     </div>
@@ -991,7 +1153,15 @@ export function Sketcher(): React.JSX.Element | null {
 /** Dashed rubber-band shown while drag-drawing a 2-click primitive (press → cursor):
  * a line, an axis-aligned rectangle (corner or centred), or a circle. Display only —
  * the real geometry is built on release. */
-function DragDrawPreview({ tool, from, to }: { tool: SketchTool; from: Px; to: Px }): React.JSX.Element {
+function DragDrawPreview({
+  tool,
+  from,
+  to,
+}: {
+  tool: SketchTool;
+  from: Px;
+  to: Px;
+}): React.JSX.Element {
   const stroke = "#4ea1ff";
   const common = { fill: "none", stroke, strokeWidth: 1.5, strokeDasharray: "5 4" } as const;
   if (tool === "circle") {
@@ -1014,7 +1184,14 @@ function DragDrawPreview({ tool, from, to }: { tool: SketchTool; from: Px; to: P
     const hw = Math.abs(to.x - from.x);
     const hh = Math.abs(to.y - from.y);
     return (
-      <rect x={from.x - hw} y={from.y - hh} width={hw * 2} height={hh * 2} {...common} pointerEvents="none" />
+      <rect
+        x={from.x - hw}
+        y={from.y - hh}
+        width={hw * 2}
+        height={hh * 2}
+        {...common}
+        pointerEvents="none"
+      />
     );
   }
   return <line x1={from.x} y1={from.y} x2={to.x} y2={to.y} {...common} pointerEvents="none" />;

@@ -69,8 +69,9 @@ mamba run -n plastiq-nurbs uvicorn app.main:app --port 8003
 
 `app.main` serves the §6.1 contract on :8003. The env is created and proven (mlx + geomdl + OCCT
 importable together) per milestone U0.3, which also registers the service in
-`scripts/dev-services.sh` / `just services` alongside reconstruct :8000, capture :8001, and
-nerf :8002.
+`scripts/dev-services.sh` / `just services` alongside reconstruct :8000, capture :8001,
+nerf :8002, and photogrammetry :8004. `pnpm dev` owns that five-service supervisor together
+with the editor; app shutdown stops only supervisor-owned processes.
 
 ## Test
 

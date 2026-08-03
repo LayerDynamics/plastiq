@@ -4,10 +4,11 @@
 // transforms.json (nerfstudio/OpenGL convention) + a sparse cloud + an optional dense oriented
 // point cloud. The submit→poll shape mirrors the capture/nerf/reconstruct services exactly — POST a
 // job, GET /jobs/{id}/status until "completed", then GET /jobs/{id}/result (SPEC-13 §6.1) — so the
-// browser reuses the same polling machinery. The transforms.json + undistorted images feed
-// services/nerf; the dense PLY feeds services/capture (via @plastiq/capture's parser). Self-hosted,
-// reached by base URL.
+// browser reuses the same polling machinery. The transforms.json (with the uploads paired to its
+// frames by filename) feeds services/nerf; the dense PLY feeds services/capture (via
+// @plastiq/capture's parser). Self-hosted, reached by base URL.
 
+import { cancelServiceJob, serviceHttpError } from "@plastiq/ml";
 import type {
   PhotogrammetryCancelOptions,
   PhotogrammetryOptions,
@@ -21,28 +22,24 @@ import type {
 const DEFAULT_BASE_URL = "http://localhost:8004";
 
 /** Shape of `GET /jobs/{id}/result` on the photogrammetry service (snake_case wire form, §6.1).
- * `images_undistorted` and `dense_ply_base64` are `null` when undistort/dense are off (D-6/§7). */
+ * `dense_ply_base64` is `null` when dense is off or fusion produced no points (§7). */
 interface PhotogrammetryResultWire {
   transforms_json: string;
-  images_undistorted: string[] | null;
   sparse_ply_base64: string;
   dense_ply_base64: string | null;
   report: PhotogrammetryReport;
 }
 
 async function httpError(res: Response, what: string): Promise<string> {
-  const detail = await res
-    .json()
-    .then((b: { detail?: string }) => b.detail ?? "")
-    .catch(() => "");
-  return `photogrammetry ${what}: HTTP ${res.status}${detail ? ` — ${detail}` : ""}`;
+  return serviceHttpError(res, "photogrammetry", what);
 }
 
 /** Solve camera poses + point clouds from unposed photos (submit → poll → result, SPEC-13 §6.1).
  *
  * Throws on submit/status/result HTTP errors, on a `failed` job, on an aborted signal, and on poll
- * timeout. The returned `transformsJson` + `imagesUndistorted` feed `services/nerf` `/train`, and
- * `densePly` feeds `services/capture` `/capture` via the `@plastiq/capture` PLY parser. When
+ * timeout. The returned `transformsJson` feeds `services/nerf` `/train` (the app pairs the uploads to
+ * its frames by filename), and `densePly` feeds `services/capture` `/capture` via the
+ * `@plastiq/capture` PLY parser. When
  * `opts.apiKey` is set it is sent as `Authorization: Bearer <key>` on EVERY request — the service
  * enforces it on `POST /solve` (and `DELETE /jobs/{id}`) when deployed with `PHOTOGRAMMETRY_API_KEY`;
  * sending it uniformly keeps the client correct if the read endpoints are ever guarded too (§6.1).
@@ -70,7 +67,6 @@ export async function solvePhotos(
   if (input.names !== undefined) body.names = input.names;
   if (input.matching !== undefined) body.matching = input.matching;
   if (input.dense !== undefined) body.dense = input.dense;
-  if (input.undistort !== undefined) body.undistort = input.undistort;
   if (input.maxFeatures !== undefined) body.max_features = input.maxFeatures;
   if (input.seed !== undefined) body.seed = input.seed;
   if (input.sparseMaxDim !== undefined) body.sparse_max_dim = input.sparseMaxDim;
@@ -92,13 +88,13 @@ export async function solvePhotos(
     const statusRes = await f(`${base}/jobs/${id}/status`, getInit);
     if (!statusRes.ok) throw new Error(await httpError(statusRes, "status"));
     const status = (await statusRes.json()) as { state?: string; error?: string };
+    opts.onState?.(status.state ?? "?");
     if (status.state === "completed") {
       const resultRes = await f(`${base}/jobs/${id}/result`, getInit);
       if (!resultRes.ok) throw new Error(await httpError(resultRes, "result"));
       const wire = (await resultRes.json()) as PhotogrammetryResultWire;
       return {
         transformsJson: wire.transforms_json,
-        imagesUndistorted: wire.images_undistorted,
         sparsePly: wire.sparse_ply_base64,
         densePly: wire.dense_ply_base64,
         report: wire.report,
@@ -120,14 +116,9 @@ export async function solvePhotos(
  * endpoint when deployed with `PHOTOGRAMMETRY_API_KEY`. Other HTTP errors throw with the server
  * detail. */
 export async function cancelJob(id: string, opts: PhotogrammetryCancelOptions = {}): Promise<void> {
-  const base = (opts.baseURL ?? DEFAULT_BASE_URL).replace(/\/+$/, "");
-  const f = opts.fetchImpl ?? globalThis.fetch;
-  if (!f) throw new Error("photogrammetry: no fetch implementation available");
-  const auth: Record<string, string> = opts.apiKey ? { Authorization: `Bearer ${opts.apiKey}` } : {};
-  const res = await f(`${base}/jobs/${id}`, {
-    method: "DELETE",
-    ...(opts.apiKey ? { headers: auth } : {}),
+  await cancelServiceJob(id, {
+    ...opts,
+    defaultBaseURL: DEFAULT_BASE_URL,
+    label: "photogrammetry",
   });
-  if (res.ok || res.status === 404) return;
-  throw new Error(await httpError(res, "cancel"));
 }

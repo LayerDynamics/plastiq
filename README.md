@@ -1,10 +1,37 @@
-# Plastiq
+# Plastiq CAD Studio
 
-**Plastiq** is a browser-native parametric CAD studio: feature-based solid modeling on a real B-rep kernel, not a mesh sandbox with CAD branding. It ships in the browser and as a thin native desktop shell (Tauri) around the same app.
+<p align="center">
+  <img src="./plastiq.svg" width="180" alt="Plastiq" />
+</p>
+
+<p align="center">
+  <strong>Local-first parametric CAD, freeform modeling, assemblies, simulation, and scan-to-CAD in one studio.</strong>
+</p>
+
+**Plastiq** is a browser-native CAD studio: feature-based solid modeling on a real B-rep kernel, not a mesh sandbox with CAD branding. It ships in the browser and as a thin native desktop shell (Tauri) around the same app.
 
 The intent is to own the full design loop on the client. Sketches, ordered feature history, assemblies, physics simulation, voxel sculpting, and project storage all run locally — Open CASCADE for solids, FreeCAD’s PlaneGCS for constraints, and interchangeable in-browser physics engines. No modeling server is required. The same serializable feature document the UI builds by hand is what AI generation authors and edits, so a prompt produces geometry you can still dimension, suppress, and rebuild — not a frozen blob you throw away. Organic form and the physical world enter through mesh and capture paths; optional self-hosted services (reconstruction, NURBS fitting, photogrammetry, NeRF, scan completion) turn those into STEP that re-enters the parametric history.
 
 Local-first is the architecture, not a marketing line. Your geometry never leaves the machine for ordinary CAD work. Language models and paid cloud 3D generators are bring-your-own: they are called only when you configure them, and billable mesh jobs always require confirmation first.
+
+---
+
+## The studio
+
+![Plastiq Design workspace running the OCCT-backed feature modeler](docs/assets/readme/plastiq-design.png)
+
+<table>
+  <tr>
+    <td width="50%"><img src="docs/assets/readme/plastiq-sketch.png" alt="Plastiq constrained sketch workspace" /></td>
+    <td width="50%"><img src="docs/assets/readme/plastiq-sculpt.png" alt="Plastiq voxel sculpt workspace" /></td>
+  </tr>
+  <tr>
+    <td align="center"><strong>Constrained sketching</strong></td>
+    <td align="center"><strong>Voxel sculpting</strong></td>
+  </tr>
+</table>
+
+These are reproducible captures of the real running application. Start the editor on port 4177, then run `pnpm capture:readme` to refresh them through Playwright.
 
 ---
 
@@ -145,6 +172,7 @@ Switch to **Simulate** — the assembly lowers to a `SimManifest` and steps unde
 
 - New default **32³** grid (2 mm voxels) with a starter slab  
 - **Add** / **Erase** by click (Alt inverts per click)  
+- SDF brushes: **Draw · Clay · Smooth · Flatten · Inflate · Pinch · Grab**  
 - Sculpt-local undo / redo  
 - **Export GLB** of the surface mesh  
 - **Convert to CAD** stages a mesh document for reconstruct / NURBS (original voxels kept)  
@@ -212,7 +240,10 @@ In-app panels: Mesh convert, NeRF capture, Photo solve (handoff to NeRF or captu
 
 **Canvas drop:** drop ≥3 photos → photogrammetry dense cloud; drop `.ply` / `.xyz` / `.json` → point-cloud project.
 
-Start all five locally: `just services` (stop with `just services-stop`). Base URLs and optional API keys live in Settings.
+`pnpm dev` starts and supervises all five services with the editor. The first run creates any
+missing conda environments. Use `just services` only for a service-only session and
+`just services-stop` to stop supervisor-owned fleets; healthy services that were already running
+are adopted and never terminated. Base URLs and optional deployment API keys live in Settings.
 
 ---
 
@@ -301,7 +332,7 @@ services/:  reconstruct:8000 · capture:8001 · nerf:8002 · nurbs:8003 · photo
 
 ```bash
 pnpm install
-pnpm dev                 # http://localhost:5173
+pnpm dev                 # services :8000–:8004 + editor http://localhost:5173
 # or: just dev
 ```
 
@@ -325,8 +356,8 @@ pnpm -C apps/desktop build
 ### Optional services
 
 ```bash
-just services            # all five on :8000–:8004
-just services-stop
+just services            # service-only supervisor for all five on :8000–:8004
+just services-stop       # stop only Plastiq-owned service fleets
 ```
 
 ### Develop

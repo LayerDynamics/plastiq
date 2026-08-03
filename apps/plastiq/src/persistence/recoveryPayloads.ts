@@ -1,9 +1,9 @@
 // Content-addressed recovery payload store (Review #13). Large import payloads
-// (an importStep feature's verbatim STEP text) are heavy and immutable, so the
+// (verbatim STEP/IGES source text) are heavy and immutable, so the
 // crash-recovery snapshot must not re-serialize them into localStorage on every
 // debounced edit — a single big import can blow the ~5 MB localStorage quota and
 // silently kill crash recovery. Instead each payload is stored ONCE here, keyed
-// by its content hash, and the snapshot carries a tiny `data.stepRef` in its
+// by its content hash, and the snapshot carries a tiny import reference in its
 // place; recovery.ts compacts on write and re-inflates on read.
 //
 // The store lives in its own IndexedDB database (NOT idb.ts's "plastiq" DB) so
@@ -42,7 +42,10 @@ function request<T>(req: IDBRequest<T>): Promise<T> {
 }
 
 /** Run a single request against the payloads store and resolve with its result. */
-async function run<T>(mode: IDBTransactionMode, op: (s: IDBObjectStore) => IDBRequest<T>): Promise<T> {
+async function run<T>(
+  mode: IDBTransactionMode,
+  op: (s: IDBObjectStore) => IDBRequest<T>,
+): Promise<T> {
   const db = await openDb();
   try {
     return await request(op(db.transaction(STORE, mode).objectStore(STORE)));

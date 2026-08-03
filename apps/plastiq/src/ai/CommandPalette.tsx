@@ -131,7 +131,10 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
   const actionMatches = useMemo(() => {
     const q = query.trim().toLowerCase();
     return Object.values(ACTIONS)
-      .filter((a) => a.enabled(ctx))
+      // R13/C3: require enabled AND visible (when provided). Sketch constraints/
+      // dims and sim pause/rewind/stop are enabled:always but only belong in-context;
+      // without the visible gate they appear runnable and no-op from the palette.
+      .filter((a) => a.enabled(ctx) && (a.visible?.(ctx) ?? true))
       .map((a) => ({ id: a.id, label: a.label(ctx) }))
       .filter((a) => !q || a.label.toLowerCase().includes(q))
       .slice(0, MAX_ACTIONS);

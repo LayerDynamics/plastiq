@@ -47,7 +47,6 @@ function solveResult(overrides: Record<string, unknown> = {}) {
   return {
     transformsJson:
       '{"frames":[{"file_path":"./images/a.jpg"},{"file_path":"./images/b.jpg"},{"file_path":"./images/c.jpg"}]}',
-    imagesUndistorted: null,
     sparsePly: "cGx5",
     densePly: "ZGVuc2VwbHk=",
     report: {
@@ -61,7 +60,6 @@ function solveResult(overrides: Record<string, unknown> = {}) {
       matching: "exhaustive",
       seed: 0,
       dense: true,
-      undistorted: true,
     },
     ...overrides,
   } as never;
@@ -200,7 +198,7 @@ describe("PhotoSolveSection — solve + hand-offs (SPEC-13 P11.2)", () => {
     expect(captureFromPhotosMock).toHaveBeenCalledTimes(1);
     const [nerfInput] = captureFromPhotosMock.mock.calls[0]!;
     expect((nerfInput as { transformsJson: string }).transformsJson).toContain("frames");
-    // imagesUndistorted was null → the 3 original uploads were paired to the 3 emitted frames by name.
+    // The 3 original uploads were paired to the 3 emitted frames by filename (the only NeRF-leg path).
     expect((nerfInput as { images: string[] }).images).toHaveLength(3);
   });
 

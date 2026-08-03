@@ -8,6 +8,7 @@
 import type { Occt } from "../oc/init.js";
 import { quatMul, quatRotate, vAdd, type Quat, type Vec3 } from "../assembly/quat.js";
 import { tessellateTagged } from "../mesh/tessellate.js";
+import { bodyKindOf } from "../solid/bodyKind.js";
 import { IDENTITY_PLACEMENT, type Component, type MaterialLibrary, type Placement } from "./component.js";
 import { collidersFor } from "./decompose.js";
 import { massProperties } from "./massprops.js";
@@ -51,7 +52,27 @@ export function exportForSim(
     const fixed = parentFixed || comp.fixed;
     for (const body of comp.bodies) {
       const solid = body.geometry;
-      if (!solid) continue;
+      // K5 — a Body reaching lowering with no geometry is a WIRING BUG, not a
+      // legitimate case: every producing path assigns `body.geometry` (the
+      // synthesized body0 wrapping the bare part, and each assembly instance in
+      // worker/lower.ts share the part solid). Silently `continue`-ing made a
+      // mis-wired body VANISH from the SimManifest with no error; name it and
+      // throw instead so the defect surfaces at lowering rather than as a body
+      // that never spawns.
+      if (!solid) {
+        throw new Error(
+          `exportForSim: body '${body.id}' in component '${comp.name}' has no geometry — it cannot be lowered to a sim body`,
+        );
+      }
+      // Sim lowering needs a closed solid (volume → mass, convex hull colliders).
+      // Shells/faces (§14) are first-class CAD bodies but must not silently become
+      // zero-mass rigid bodies — reject with a named error (R8 / §17).
+      const kind = bodyKindOf(oc, solid);
+      if (kind !== "solid") {
+        throw new Error(
+          `exportForSim: body '${body.id}' in component '${comp.name}' is a ${kind}, not a solid — only solids can be lowered to sim`,
+        );
+      }
       const density = library.density(body.material);
       const mp = massProperties(oc, solid, density);
       const localCom: Vec3 = [mp.com[0], mp.com[1], mp.com[2]];

@@ -8,16 +8,16 @@
 //     faces are unshared so computeVertexNormals yields crisp per-face voxel shading,
 //     and at the 64³ worst case (~25k exposed quads) it is trivially light. A dashed
 //     work-volume box + the standard grid complete the stage.
-//   • TOOLS — LEFT-click sculpts with the active tool (add on the hit face's empty
-//     neighbour via rayVoxelHit; erase the hit voxel); holding ⌥/Alt inverts the tool
-//     for that gesture; clicking empty space with Add places on the ground work plane
-//     (rayWorkPlaneCell). Orbit lives on the RIGHT button in this mode (Scene.tsx).
-//   • DRAG-TO-PAINT — shipped for both tools. An erase stroke re-picks the LIVE grid
-//     each move (so it can carve inward). An add stroke picks against the grid FROZEN
-//     at pointer-down, so painting across a surface lays ONE layer instead of
-//     stacking towers toward the camera; the whole stroke folds into a single undo
-//     step (the store's history:false live-write pattern).
-//   • HOVER PREVIEW — a translucent cell at the would-be target (green add/red erase).
+//   • TOOLS — LEFT-click sculpts with the active tool:
+//       - add/erase: single-cell occupancy (Alt inverts); empty-space Add uses the
+//         ground work plane (rayWorkPlaneCell).
+//       - SDF brushes (draw/clay/smooth/flatten/inflate/pinch/grab): ray → world
+//         centre → applyBrushToDoc (§16). Grab uses the stroke drag delta.
+//     Orbit lives on the RIGHT button in this mode (Scene.tsx).
+//   • DRAG-TO-PAINT — cell tools: erase re-picks the LIVE grid; add picks a FROZEN
+//     stroke-start grid (one layer, no towers). Brush tools re-sample every move
+//     with history:false after the first dab so a stroke is one undo step.
+//   • HOVER PREVIEW — translucent cell (add/erase) or brush-radius sphere (brushes).
 //   • UNDO/REDO — ⌘/Ctrl-Z (+Shift / Ctrl-Y) route to the sculpt history while this
 //     component is mounted; a capture-phase listener stops the app-shell handler from
 //     also undoing the (hidden) parametric document.
@@ -26,7 +26,14 @@ import { useEffect, useMemo, useState } from "react";
 import * as THREE from "three";
 import { useThree } from "@react-three/fiber";
 import { useCadStore } from "../store/store.js";
-import { useVoxelStore, sculptTarget, type SculptTarget, type VoxelTool } from "../voxel/voxelStore.js";
+import {
+  useVoxelStore,
+  sculptTarget,
+  isBrushTool,
+  brushCenterAt,
+  type SculptTarget,
+  type VoxelTool,
+} from "../voxel/voxelStore.js";
 import { docToGrid } from "../voxel/doc.js";
 import type { VoxelDoc } from "../store/types.js";
 import type { V3 } from "../voxel/grid.js";
@@ -34,6 +41,7 @@ import type { V3 } from "../voxel/grid.js";
 const VOXEL_COLOR = 0x9aa7c7;
 const ADD_PREVIEW = 0x4eff8a;
 const ERASE_PREVIEW = 0xff6b6b;
+const BRUSH_PREVIEW = 0x6ec8ff;
 const BOUNDS_COLOR = 0x3a4a6a;
 
 /** World-space centre of a grid cell. */
@@ -46,18 +54,38 @@ function cellCenter(doc: VoxelDoc, cell: readonly [number, number, number]): [nu
   ];
 }
 
-/** The effective tool for a gesture: ⌥/Alt inverts the active tool (add ⇄ erase). */
+/** The effective tool for a gesture: ⌥/Alt inverts add ⇄ erase (brushes unchanged). */
 function effectiveTool(tool: VoxelTool, altKey: boolean): VoxelTool {
-  if (!altKey) return tool;
+  if (!altKey || isBrushTool(tool)) return tool;
   return tool === "add" ? "erase" : "add";
 }
+
+type CellStroke = {
+  kind: "cell";
+  tool: "add" | "erase";
+  frozen: VoxelDoc;
+  painted: Set<string>;
+  first: boolean;
+};
+
+type BrushStroke = {
+  kind: "brush";
+  tool: Exclude<VoxelTool, "add" | "erase">;
+  /** World centre at pointer-down (grab delta is relative to this). */
+  startCenter: V3 | null;
+  lastCenter: V3 | null;
+  first: boolean;
+};
+
+type Stroke = CellStroke | BrushStroke;
 
 export function VoxelSculpt(): React.JSX.Element | null {
   const doc = useVoxelStore((s) => s.doc);
   const gl = useThree((s) => s.gl);
   const camera = useThree((s) => s.camera);
   const invalidate = useThree((s) => s.invalidate);
-  const [hover, setHover] = useState<SculptTarget | null>(null);
+  /** Cell-tool hover target, or a brush world-centre for the radius sphere preview. */
+  const [hover, setHover] = useState<(SculptTarget & { brushCenter?: V3 }) | null>(null);
 
   // Surface mesh of the occupancy grid — rebuilt per document edit, disposed on swap.
   const geometry = useMemo(() => {
@@ -99,11 +127,8 @@ export function VoxelSculpt(): React.JSX.Element | null {
   // directly so they never see stale state.
   useEffect(() => {
     const el = gl.domElement;
-    // Non-null while a LEFT-drag stroke is active. `frozen` is the grid snapshot an
-    // ADD stroke picks against (see header); `painted` dedupes per-stroke cells;
-    // `first` makes only the stroke's first edit push an undo snapshot.
-    let stroke: { tool: VoxelTool; frozen: VoxelDoc; painted: Set<string>; first: boolean } | null =
-      null;
+    // Non-null while a LEFT-drag stroke is active.
+    let stroke: Stroke | null = null;
 
     const rayFor = (e: PointerEvent): { origin: V3; dir: V3 } => {
       const r = el.getBoundingClientRect();
@@ -122,8 +147,43 @@ export function VoxelSculpt(): React.JSX.Element | null {
       const s = useVoxelStore.getState();
       if (!s.doc || !stroke) return false;
       const { origin, dir } = rayFor(e);
-      // Erase re-picks the live grid (carves); add picks the stroke-frozen grid
-      // (paints one layer, never towers).
+
+      if (stroke.kind === "brush") {
+        const center = brushCenterAt(s.doc, origin, dir);
+        if (!center) return false;
+        if (!stroke.startCenter) stroke.startCenter = center;
+        const delta: V3 | undefined =
+          stroke.tool === "grab" && stroke.startCenter
+            ? [
+                center[0] - stroke.startCenter[0],
+                center[1] - stroke.startCenter[1],
+                center[2] - stroke.startCenter[2],
+              ]
+            : undefined;
+        // Grab applies delta from stroke start at the current centre each move;
+        // other brushes stamp at the live centre.
+        const applied = s.sculptBrushAt(
+          origin,
+          dir,
+          {
+            type: stroke.tool,
+            radius: s.brushRadius,
+            strength: s.brushStrength,
+            ...(delta ? { delta } : {}),
+          },
+          { history: stroke.first },
+        );
+        if (!applied) return false;
+        stroke.lastCenter = center;
+        stroke.first = false;
+        useCadStore
+          .getState()
+          .setStatus(`sculpt · ${stroke.tool} · ${useVoxelStore.getState().doc?.cells.length ?? 0} voxels`);
+        return true;
+      }
+
+      // Cell tools: erase re-picks the live grid (carves); add picks the stroke-frozen
+      // grid (paints one layer, never towers).
       const pickDoc = stroke.tool === "erase" ? s.doc : stroke.frozen;
       const target = sculptTarget(pickDoc, stroke.tool, origin, dir);
       if (!target) return false;
@@ -140,12 +200,18 @@ export function VoxelSculpt(): React.JSX.Element | null {
       if (e.button !== 0) return; // LEFT sculpts; right/middle are orbit/pan
       const s = useVoxelStore.getState();
       if (!s.doc) return;
-      stroke = {
-        tool: effectiveTool(s.tool, e.altKey),
-        frozen: s.doc,
-        painted: new Set(),
-        first: true,
-      };
+      const tool = effectiveTool(s.tool, e.altKey);
+      if (isBrushTool(tool)) {
+        stroke = { kind: "brush", tool, startCenter: null, lastCenter: null, first: true };
+      } else {
+        stroke = {
+          kind: "cell",
+          tool,
+          frozen: s.doc,
+          painted: new Set(),
+          first: true,
+        };
+      }
       // Keep receiving the stroke's moves even when the pointer leaves the canvas.
       // Guarded: synthetic events (tests/jsdom) carry no live pointer id.
       try {
@@ -166,7 +232,13 @@ export function VoxelSculpt(): React.JSX.Element | null {
       const s = useVoxelStore.getState();
       if (!s.doc) return;
       const { origin, dir } = rayFor(e);
-      setHover(sculptTarget(s.doc, effectiveTool(s.tool, e.altKey), origin, dir));
+      const tool = effectiveTool(s.tool, e.altKey);
+      if (isBrushTool(tool)) {
+        const c = brushCenterAt(s.doc, origin, dir);
+        setHover(c ? { cell: [0, 0, 0], kind: "add", brushCenter: c } : null);
+        return;
+      }
+      setHover(sculptTarget(s.doc, tool, origin, dir));
     };
 
     const onUp = (e: PointerEvent): void => {
@@ -216,8 +288,12 @@ export function VoxelSculpt(): React.JSX.Element | null {
     return () => window.removeEventListener("keydown", onKey, { capture: true });
   }, []);
 
+  const brushRadius = useVoxelStore((s) => s.brushRadius);
+  const activeTool = useVoxelStore((s) => s.tool);
+
   if (!doc) return null;
-  const previewCenter = hover ? cellCenter(doc, hover.cell) : null;
+  const brushPreview = hover?.brushCenter;
+  const cellPreview = hover && !hover.brushCenter ? cellCenter(doc, hover.cell) : null;
   return (
     <group name="voxel-sculpt">
       {geometry && (
@@ -230,8 +306,8 @@ export function VoxelSculpt(): React.JSX.Element | null {
           <lineBasicMaterial color={BOUNDS_COLOR} />
         </lineSegments>
       )}
-      {hover && previewCenter && (
-        <mesh name="voxel-preview" position={previewCenter}>
+      {cellPreview && hover && (
+        <mesh name="voxel-preview" position={cellPreview}>
           <boxGeometry args={[doc.voxelSize, doc.voxelSize, doc.voxelSize]} />
           <meshStandardMaterial
             color={hover.kind === "add" ? ADD_PREVIEW : ERASE_PREVIEW}
@@ -239,6 +315,12 @@ export function VoxelSculpt(): React.JSX.Element | null {
             opacity={0.45}
             depthWrite={false}
           />
+        </mesh>
+      )}
+      {brushPreview && isBrushTool(activeTool) && (
+        <mesh name="voxel-brush-preview" position={brushPreview}>
+          <sphereGeometry args={[brushRadius, 16, 12]} />
+          <meshStandardMaterial color={BRUSH_PREVIEW} transparent opacity={0.25} depthWrite={false} />
         </mesh>
       )}
     </group>

@@ -8,8 +8,11 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import * as THREE from "three";
-import { useCadStore } from "../store/store.js";
-import { PLACEMENT_TYPE, type CadDocument, type MeshDoc, type PointCloudDoc } from "../store/types.js";
+import { useCadStore, type SelectionRefs } from "../store/store.js";
+import { type CadDocument, type MeshDoc, type PointCloudDoc } from "../store/types.js";
+import { buildFeatures, geometrySignature, rolledBackDocument } from "./rollbackDoc.js";
+import { applySimFailure } from "./simControl.js";
+import { remapPicks, samePickList } from "./pickRemap.js";
 import { GeometryClient, type BuildOutcome, type ExportResult } from "../worker/bridge.js";
 import { useProjectsStore } from "../persistence/projectsStore.js";
 import { importGltf } from "../mesh/importGltf.js";
@@ -105,30 +108,17 @@ function worldBox(id: string, local: { min: Vec3; max: Vec3 }, body: InstanceBod
             cz ? local.max[2] : local.min[2],
           )
           .applyQuaternion(q);
-        const w: Vec3 = [corner.x + body.position[0], corner.y + body.position[1], corner.z + body.position[2]];
+        const w: Vec3 = [
+          corner.x + body.position[0],
+          corner.y + body.position[1],
+          corner.z + body.position[2],
+        ];
         for (let a = 0; a < 3; a++) {
           if (w[a]! < min[a]!) min[a] = w[a]!;
           if (w[a]! > max[a]!) max[a] = w[a]!;
         }
       }
   return { id, min, max };
-}
-
-/** Features that actually build, honouring the rollback point (FR-25). */
-function buildFeatures(s: {
-  features: CadDocument["features"];
-  rollbackIndex: number | null;
-}): CadDocument["features"] {
-  return s.rollbackIndex == null ? s.features : s.features.slice(0, s.rollbackIndex);
-}
-
-/** Signature of only the geometry-affecting features (placement excluded), so a
- * pure pose change doesn't trigger an OCCT rebuild but a rollback move does. */
-function geometrySignature(s: {
-  features: CadDocument["features"];
-  rollbackIndex: number | null;
-}): string {
-  return JSON.stringify(buildFeatures(s).filter((f) => f.type !== PLACEMENT_TYPE));
 }
 
 /** Decode a base64 GLB to bytes (the MeshDoc stores the model inline; SPEC-6 R4.2). */
@@ -177,13 +167,15 @@ export function Viewport(): React.JSX.Element {
   useEffect(() => {
     const client = new GeometryClient();
 
-    // Interchange export (M6.2/M6.3) + assembly lowering (M4.5) seams.
+    // Interchange export (M6.2/M6.3) + assembly lowering (M4.5) seams. Both go
+    // through rolledBackDocument so a rollback-active export/lower matches the
+    // rendered geometry instead of silently carrying hidden features (R2/P1).
     (globalThis as { __plastiqLower?: () => Promise<unknown> }).__plastiqLower = () =>
-      client.lower(useCadStore.getState().toDocument());
+      client.lower(rolledBackDocument(useCadStore.getState()));
     (
       globalThis as { __plastiqExport?: (f: "gltf" | "step" | "iges") => Promise<ExportResult> }
     ).__plastiqExport = (format) =>
-      client.exportFile(useCadStore.getState().toDocument(), format);
+      client.exportFile(rolledBackDocument(useCadStore.getState()), format);
 
     // AI generation seam (SPEC-6 R2.4): off-thread build of an arbitrary document on
     // the ONE geometry worker — the build_part probe + inspect_geometry both use this
@@ -209,103 +201,137 @@ export function Viewport(): React.JSX.Element {
     // latest state. The building/pending machine lives in createCoalescer, which
     // is unit-tested in coalesce.test.ts (the trailing re-run is suppressed once
     // `cancelled` flips on unmount).
-    const coalescer = createCoalescer(async (): Promise<void> => {
-      setStatus("building");
-      const state = useCadStore.getState();
-      const full = state.toDocument();
-      const doc: CadDocument = { features: buildFeatures(state), params: full.params };
-      lastSig = geometrySignature(state);
-      try {
-        // Per-feature failures are isolated (FR-24): `mesh` is whatever geometry
-        // survived and `statuses` says which features failed and why.
-        const { mesh: built, statuses } = await client.build(doc);
-        if (!cancelled) {
-          setMesh(built);
-          meshRef.current = built;
-          const store = useCadStore.getState();
-          const errors: Record<string, string> = {};
-          // A build-level error carries no feature id (e.g. tessellation failed
-          // AFTER every feature built). It has no tree row to badge, so it must
-          // be surfaced in the status line — dropping it would report "empty",
-          // which is precisely the silent-failure this section exists to kill.
-          const buildErrors: string[] = [];
-          // Features that BUILT but changed nothing visible (§13.8 P0). They ride
-          // the per-feature channel (an amber ⚠ badge + tooltip in the tree,
-          // beside the red error badge) and deliberately do NOT displace the
-          // status line: `status` reports the BUILD's state, and a no-op join is
-          // a SUCCESSFUL build — "ready" is the truthful answer there. Errors do
-          // reach the status line because a failed feature means the build did
-          // not fully succeed; a warning does not.
-          const warnings: Record<string, string> = {};
-          for (const s of statuses) {
-            if (s.status === "warning") {
-              if (s.featureId) warnings[s.featureId] = s.message ?? "changed nothing";
-              continue;
-            }
-            if (s.status !== "error") continue;
-            if (s.featureId) errors[s.featureId] = s.message ?? "failed";
-            else buildErrors.push(s.message ?? "the build failed");
-          }
-          store.setFeatureErrors(errors);
-          store.setFeatureWarnings(warnings);
-          const failed = Object.keys(errors);
-          setStatus(
-            buildErrors.length > 0
-              ? `rebuild failed: ${buildErrors[0]!}`
-              : failed.length > 0
-                ? `${failed.length} feature${failed.length === 1 ? "" : "s"} failed: ${errors[failed[0]!]!}`
-                : built
-                  ? "ready"
-                  : "empty",
-          );
-          if (built) {
-            // Capture the positional disambiguators (face centroid / edge midpoint)
-            // alongside the normal signatures so a selection re-resolves to the
-            // RIGHT same-normal face/edge after a parametric rebuild (FR-16).
-            const faces: Record<
-              number,
-              { normal: [number, number, number]; centroid: [number, number, number] }
-            > = {};
-            for (const g of built.faceGroups) faces[g.faceId] = { normal: g.normal, centroid: g.centroid };
-            const edges: Record<
-              number,
-              {
-                faceNormals: (typeof built.edges)[number]["faceNormals"];
-                midpoint: [number, number, number];
+    const coalescer = createCoalescer(
+      async (): Promise<void> => {
+        setStatus("building");
+        const state = useCadStore.getState();
+        const full = state.toDocument();
+        const doc: CadDocument = { features: buildFeatures(state), params: full.params };
+        lastSig = geometrySignature(state);
+        try {
+          // Per-feature failures are isolated (FR-24): `mesh` is whatever geometry
+          // survived and `statuses` says which features failed and why.
+          const { mesh: built, statuses } = await client.build(doc);
+          if (!cancelled) {
+            setMesh(built);
+            meshRef.current = built;
+            const store = useCadStore.getState();
+            const errors: Record<string, string> = {};
+            // A build-level error carries no feature id (e.g. tessellation failed
+            // AFTER every feature built). It has no tree row to badge, so it must
+            // be surfaced in the status line — dropping it would report "empty",
+            // which is precisely the silent-failure this section exists to kill.
+            const buildErrors: string[] = [];
+            // Features that BUILT but changed nothing visible (§13.8 P0). They ride
+            // the per-feature channel (an amber ⚠ badge + tooltip in the tree,
+            // beside the red error badge) and deliberately do NOT displace the
+            // status line: `status` reports the BUILD's state, and a no-op join is
+            // a SUCCESSFUL build — "ready" is the truthful answer there. Errors do
+            // reach the status line because a failed feature means the build did
+            // not fully succeed; a warning does not.
+            const warnings: Record<string, string> = {};
+            for (const s of statuses) {
+              if (s.status === "warning") {
+                if (s.featureId) warnings[s.featureId] = s.message ?? "changed nothing";
+                continue;
               }
-            > = {};
-            for (const e of built.edges) edges[e.edgeId] = { faceNormals: e.faceNormals, midpoint: e.midpoint };
-            store.setSelectionRefs({ faces, edges });
-          } else {
-            store.setSelectionRefs({ faces: {}, edges: {} });
+              if (s.status !== "error") continue;
+              if (s.featureId) errors[s.featureId] = s.message ?? "failed";
+              else buildErrors.push(s.message ?? "the build failed");
+            }
+            store.setFeatureErrors(errors);
+            store.setFeatureWarnings(warnings);
+            const failed = Object.keys(errors);
+            setStatus(
+              buildErrors.length > 0
+                ? `rebuild failed: ${buildErrors[0]!}`
+                : failed.length > 0
+                  ? `${failed.length} feature${failed.length === 1 ? "" : "s"} failed: ${errors[failed[0]!]!}`
+                  : built
+                    ? "ready"
+                    : "empty",
+            );
+            if (built) {
+              // Capture the PRIMARY analytic signatures (face `surface` / edge
+              // `faceSurfaces`) alongside the legacy normal + positional
+              // disambiguators (centroid / midpoint), so a selection re-resolves to
+              // the RIGHT face/edge after a parametric rebuild — including on closed
+              // curved walls where the averaged normal is meaningless residue
+              // (R1/§4.2). `built.faceGroups[].surface` and `built.edges[].faceSurfaces`
+              // already arrive intact in the transfer payload; this is the seam that
+              // used to drop them and force every pick onto the documented-to-break
+              // legacy path.
+              const faces: SelectionRefs["faces"] = {};
+              for (const g of built.faceGroups)
+                faces[g.faceId] = { normal: g.normal, centroid: g.centroid, surface: g.surface };
+              const edges: SelectionRefs["edges"] = {};
+              for (const e of built.edges)
+                edges[e.edgeId] = {
+                  faceNormals: e.faceNormals,
+                  midpoint: e.midpoint,
+                  faceSurfaces: e.faceSurfaces,
+                };
+              // R12: VertexRef.position is the primary signature (B-rep corner point).
+              // adjacentEdgeMidpoints are not on the transfer mesh yet — position alone
+              // is unambiguous within a single solid (see tagged.ts VertexRef docs).
+              const vertices: NonNullable<SelectionRefs["vertices"]> = {};
+              for (let i = 0; i < built.vertexIds.length; i++) {
+                const id = built.vertexIds[i]!;
+                const o = i * 3;
+                vertices[id] = {
+                  position: [
+                    built.vertexPositions[o]!,
+                    built.vertexPositions[o + 1]!,
+                    built.vertexPositions[o + 2]!,
+                  ],
+                };
+              }
+              const newRefs: SelectionRefs = { faces, edges, vertices };
+              // R4/S1: this rebuild re-numbers render-group ids, so a stale pick id
+              // could now denote a DIFFERENT entity. Remap each pick through its
+              // stored (outgoing) ref against the new refs and drop what no longer
+              // resolves — BEFORE swapping selectionRefs — so a pick follows its
+              // face/edge/vertex or clears, never rebinds silently. Highlights repaint
+              // from the remapped `picks` on the next render.
+              const picks = store.picks;
+              if (picks.length > 0) {
+                const remapped = remapPicks(picks, store.selectionRefs, newRefs);
+                if (!samePickList(remapped, picks)) store.setPicks(remapped);
+              }
+              store.setSelectionRefs(newRefs);
+            } else {
+              store.setSelectionRefs({ faces: {}, edges: {}, vertices: {} });
+              if (store.picks.length > 0) store.clearPicks(); // no geometry ⇒ no valid picks
+            }
+            store.setMassProps(
+              built && built.volume != null && built.com
+                ? { volume: built.volume, com: built.com, bodyVolumes: built.bodyVolumes ?? [] }
+                : null,
+            );
           }
-          store.setMassProps(
-            built && built.volume != null && built.com
-              ? { volume: built.volume, com: built.com, bodyVolumes: built.bodyVolumes ?? [] }
-              : null,
-          );
+        } catch (err) {
+          // Reaching here means the whole RPC failed (worker died, timed out, OCCT
+          // could not init) — per-FEATURE failures no longer land here, they come
+          // back as `statuses` above.
+          if (!cancelled) {
+            // describeOcctError, not `(err as Error).message`: a raw OCCT
+            // Standard_Failure is a pointer with no `.message`, which is what
+            // rendered "rebuild failed: undefined".
+            setStatus(`rebuild failed: ${describeOcctError(err)}`);
+            // Drop the stale mesh: leaving the previous geometry on screen after a
+            // failed rebuild is what made a broken op look like "nothing happened".
+            setMesh(null);
+            meshRef.current = null;
+            const store = useCadStore.getState();
+            store.setFeatureErrors({});
+            store.setFeatureWarnings({});
+            store.setSelectionRefs({ faces: {}, edges: {}, vertices: {} });
+            store.setMassProps(null);
+          }
         }
-      } catch (err) {
-        // Reaching here means the whole RPC failed (worker died, timed out, OCCT
-        // could not init) — per-FEATURE failures no longer land here, they come
-        // back as `statuses` above.
-        if (!cancelled) {
-          // describeOcctError, not `(err as Error).message`: a raw OCCT
-          // Standard_Failure is a pointer with no `.message`, which is what
-          // rendered "rebuild failed: undefined".
-          setStatus(`rebuild failed: ${describeOcctError(err)}`);
-          // Drop the stale mesh: leaving the previous geometry on screen after a
-          // failed rebuild is what made a broken op look like "nothing happened".
-          setMesh(null);
-          meshRef.current = null;
-          const store = useCadStore.getState();
-          store.setFeatureErrors({});
-          store.setFeatureWarnings({});
-          store.setSelectionRefs({ faces: {}, edges: {} });
-          store.setMassProps(null);
-        }
-      }
-    }, () => cancelled);
+      },
+      () => cancelled,
+    );
 
     coalescer.schedule(); // initial build of whatever is already in the store
     const unsub = useCadStore.subscribe((state, prev) => {
@@ -391,10 +417,7 @@ export function Viewport(): React.JSX.Element {
       const speeds = simulator.speeds();
       const fixedSet = new Set(
         // Ground is always fixed; assembly "Fix" instances too.
-        [
-          "__experiment_ground",
-          ...st.assembly.instances.filter((i) => i.fixed).map((i) => i.id),
-        ],
+        ["__experiment_ground", ...st.assembly.instances.filter((i) => i.fixed).map((i) => i.id)],
       );
       // Bare single-part path uses body0.
       if (ids.length === 0 && coms.length > 0) {
@@ -406,15 +429,15 @@ export function Viewport(): React.JSX.Element {
         speed: speeds[i] ?? 0,
         fixed: fixedSet.has(id) || id === "__experiment_ground",
       }));
-      st.setSimTelemetry(
-        buildTelemetry(simulator.elapsedSeconds, st.simExperiment.kind, rows),
-      );
+      st.setSimTelemetry(buildTelemetry(simulator.elapsedSeconds, st.simExperiment.kind, rows));
     };
     // Lower the document, apply the experiment recipe, spawn the sim. Returns body count.
     const buildSimulator = async (): Promise<number> => {
       simTicks = 0; // a fresh run starts at t=0
       const state = useCadStore.getState();
-      const { manifest, localCom } = await client.lower(state.toDocument());
+      // R2/P1: simulate exactly the rolled-back geometry the viewport shows, not
+      // the full document (which would spawn hidden bodies into the sim world).
+      const { manifest, localCom } = await client.lower(rolledBackDocument(state));
       // Experiment layer: lift, gravity, ground — pure transform of the CAD lower.
       const prepared = applyExperiment(manifest as SimManifest, state.simExperiment);
       const bodies = simBodies(state);
@@ -422,7 +445,11 @@ export function Viewport(): React.JSX.Element {
       // Experiment backend override (else last explicit setBackend / default MuJoCo).
       const expBackend =
         state.simExperiment.backend === "default" ? undefined : state.simExperiment.backend;
-      simulator = new Simulator(JSON.stringify(prepared), localCom, bodies.map((b) => b.id));
+      simulator = new Simulator(
+        JSON.stringify(prepared),
+        localCom,
+        bodies.map((b) => b.id),
+      );
       const count = await simulator.start(expBackend ?? simBackend);
       publishTelemetry();
       return count;
@@ -504,14 +531,28 @@ export function Viewport(): React.JSX.Element {
       backend: () => activeBackend(),
     };
 
+    // R3/P2: a Simulate start/rewind can REJECT — client.lower is fail-fast, so
+    // any document with one errored feature (which the viewport happily renders
+    // via per-feature isolation) rejects the lower. Without a handler that was an
+    // unhandled rejection with no status and `simulating` wedged `true` and no
+    // world. Surface the failure and return to design mode (the authority that
+    // resets `simulating`).
+    const reportSimFailure = (err: unknown): void => {
+      if (cancelled) return;
+      applySimFailure(useCadStore.getState(), err);
+    };
+
     renderDoc(); // initial assembly render
     const unsubAssembly = useCadStore.subscribe((s, prev) => {
       // Simulate toggle (FR-41): start a RAF-driven sim, or stop and return to edit.
       if (s.simulating !== prev.simulating) {
         if (s.simulating) {
-          void buildSimulator().then(() => {
-            if (!cancelled && useCadStore.getState().simulating) raf = requestAnimationFrame(loop);
-          });
+          void buildSimulator()
+            .then(() => {
+              if (!cancelled && useCadStore.getState().simulating)
+                raf = requestAnimationFrame(loop);
+            })
+            .catch(reportSimFailure);
         } else {
           stopSimulator();
         }
@@ -520,8 +561,10 @@ export function Viewport(): React.JSX.Element {
       // Playback one-shots while simulating (FR-41): step one frame / rewind to t=0
       // / restart with a new experiment recipe.
       if (s.simStepReq !== prev.simStepReq) stepOnce();
-      if (s.simRewindReq !== prev.simRewindReq && s.simulating) void rewindSimulator();
-      if (s.simRestartReq !== prev.simRestartReq && s.simulating) void rewindSimulator();
+      if (s.simRewindReq !== prev.simRewindReq && s.simulating)
+        void rewindSimulator().catch(reportSimFailure);
+      if (s.simRestartReq !== prev.simRestartReq && s.simulating)
+        void rewindSimulator().catch(reportSimFailure);
       if (s.simulating) return; // the sim owns the poses
       if (
         s.assembly !== prev.assembly ||
@@ -531,7 +574,8 @@ export function Viewport(): React.JSX.Element {
         renderDoc();
         if (s.interferences) useCadStore.getState().setInterferences(null); // moved → stale
       }
-      // Interference check (FR-33): clashes from the ASSEMBLED instance AABBs.
+      // Interference check (FR-33): rotated world AABBs are only the broad phase;
+      // the worker confirms positive-volume B-rep intersections with OCCT.
       if (s.interferenceReq !== prev.interferenceReq) {
         const mesh = meshRef.current;
         const a = useCadStore.getState().assembly;
@@ -544,7 +588,23 @@ export function Viewport(): React.JSX.Element {
               orientation: i.pose.orientation,
             }),
           );
-          useCadStore.getState().setInterferences(findClashes(boxes));
+          const candidates = findClashes(boxes);
+          const request = s.interferenceReq;
+          void client
+            .interference(rolledBackDocument(useCadStore.getState()), candidates)
+            .then((clashes) => {
+              if (useCadStore.getState().interferenceReq === request) {
+                useCadStore.getState().setInterferences(clashes);
+              }
+            })
+            .catch((error: unknown) => {
+              if (useCadStore.getState().interferenceReq === request) {
+                useCadStore.getState().setInterferences(null);
+                useCadStore
+                  .getState()
+                  .setStatus(`interference failed: ${describeOcctError(error)}`);
+              }
+            });
         } else {
           useCadStore.getState().setInterferences([]);
         }

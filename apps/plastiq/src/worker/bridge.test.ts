@@ -90,4 +90,38 @@ describe("GeometryClient worker timeout (CADStudio.md §5.6)", () => {
     client.dispose(); // must reject the pending build now, not after 60s
     await expect(inFlight).rejects.toThrow(/disposed/);
   });
+
+  it("sends AABB candidates and returns the worker's exact interference pairs", async () => {
+    const responder = {
+      posted: null as Record<string, unknown> | null,
+      postMessage(msg: Record<string, unknown>) {
+        responder.posted = msg;
+        queueMicrotask(() => {
+          responder.onmessage?.({
+            data: {
+              id: msg["id"],
+              ok: true,
+              op: "interference",
+              clashes: [{ a: "i1", b: "i2" }],
+            },
+          } as MessageEvent);
+        });
+      },
+      terminate: () => {},
+      onmessage: null as ((ev: MessageEvent) => void) | null,
+      onerror: null,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+    };
+    const client = new GeometryClient({ worker: responder as unknown as Worker, timeoutMs: 1000 });
+    const candidates = [
+      { a: "i1", b: "i2" },
+      { a: "i1", b: "i3" },
+    ];
+    await expect(client.interference({ features: [], params: {} }, candidates)).resolves.toEqual([
+      { a: "i1", b: "i2" },
+    ]);
+    expect(responder.posted).toMatchObject({ op: "interference", candidates });
+    client.dispose();
+  });
 });

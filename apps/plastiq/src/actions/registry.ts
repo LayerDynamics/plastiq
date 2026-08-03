@@ -13,18 +13,30 @@ import { useProjectsStore } from "../persistence/projectsStore.js";
 import { useVoxelStore } from "../voxel/voxelStore.js";
 import { assemblyToAssy, parseAssy, realizeAssembly } from "../assembly/assy.js";
 import { startingSketchModel } from "../sketch/defaultPlane.js";
+import { getProjectableEdgePolylines } from "../sketch/projectableEdges.js";
 import type { AssemblyModel } from "../assembly/model.js";
 import { voxelDocToMesh } from "../voxel/doc.js";
 import { voxelMeshToGlbBase64 } from "../voxel/glb.js";
 import { exportMeshGlb } from "../mesh/exportGlb.js";
-import type { EdgeRef, FaceRef } from "@plastiq/cad";
+import type { EdgeRef, FaceRef, NurbsSurface, VertexRef } from "@plastiq/cad";
+import {
+  planeSurface,
+  cylinderSurface,
+  sphereSurface,
+  worldPolylinesToPlaneSegments,
+} from "@plastiq/cad";
 import {
   booleanBodyFeature,
   edgeRefsFromPicks,
   faceRefsFromPicks,
   loftFromSketchFeatures,
+  surfaceLoftFromSketchFeatures,
+  surfaceSweepFromSketchFeature,
+  surfaceSweepFromSketchAlongPickedEdges,
   sweepFromSketchFeature,
   sweepFromSketchAlongPickedEdges,
+  helixSweepFromSketchFeature,
+  vertexRefsFromPicks,
 } from "../viewport/dressup.js";
 import type { Profile } from "../sketch/profile.js";
 import type { MeshDoc, SelectionMode } from "../store/types.js";
@@ -43,6 +55,13 @@ export interface ActionDef {
   run: (ctx: ContextTarget) => void;
   /** Optional toggle-active predicate (e.g. selection mode / section on) for the ribbon. */
   active?: (ctx: ContextTarget) => boolean;
+  /**
+   * Optional context visibility (from the context-menu catalog). The ribbon greys
+   * via `enabled` only; the command palette filters on this so sketch/sim actions
+   * that are `enabled: always` do not appear runnable outside their context (R13/C3).
+   * Absent → always visible in the palette.
+   */
+  visible?: (ctx: ContextTarget) => boolean;
 }
 
 const cad = (): ReturnType<typeof useCadStore.getState> => useCadStore.getState();
@@ -77,20 +96,34 @@ function faceOrigin(face: FaceRef, fallback: V3): V3 {
   return c ? [c[0], c[1], c[2]] : fallback;
 }
 
+/** SI origin from a VertexRef signature (R12) — the B-rep corner point. */
+function vertexOrigin(v: VertexRef): V3 {
+  return [v.position[0], v.position[1], v.position[2]];
+}
+
 /**
  * Placement params for a round primitive (§4.11), selection-driven per the C6
  * convention: a picked face gives its centroid as the origin and its normal as
  * the axis, so "select a face → Cylinder" lands a boss (or, with op:"cut", a
- * bore) ON that face. With nothing picked it falls back to the world origin, +Z.
+ * bore) ON that face. A picked vertex (R12) places the origin on that corner's
+ * VertexRef.position (still a vector in params — the hole/primitive contract).
+ * With nothing picked it falls back to the world origin, +Z.
  *
  * Returns EVERY placement key even at its default — see the §9 note at the
  * primitive actions: the properties panel can only edit params that creation
  * baked, so an omitted key is an uneditable one forever.
  */
 function primitivePlacementParams(ctx: ContextTarget): Record<string, number> {
+  // Vertex pick wins for origin: a corner is a more precise point placement
+  // than a face centroid (R12 measure / hole / point placements).
+  const vertex = vertexRefsFromPicks(ctx.picks, ctx.refs)[0];
   const face = faceRefsFromPicks(ctx.picks, ctx.refs)[0];
   const axis = face ? unit3(face.normal) : null;
-  const origin = face ? faceOrigin(face, ctx.worldPoint) : ([0, 0, 0] as V3);
+  const origin = vertex
+    ? vertexOrigin(vertex)
+    : face
+      ? faceOrigin(face, ctx.worldPoint)
+      : ([0, 0, 0] as V3);
   const a = axis ?? ([0, 0, 1] as V3);
   return {
     ox: origin[0],
@@ -108,12 +141,36 @@ function primitivePlacementParams(ctx: ContextTarget): Record<string, number> {
 
 /** The round-primitive ribbon actions, plus Bore (§4.11). */
 function primitiveActions(): ActionDef[] {
-  const specs: { id: string; type: string; label: string; icon: string; params: Record<string, number> }[] = [
+  const specs: {
+    id: string;
+    type: string;
+    label: string;
+    icon: string;
+    params: Record<string, number>;
+  }[] = [
     // Defaults are SI metres, matching every other registry default (§4.9).
-    { id: "cylinder", type: "cylinder", label: "Cylinder", icon: "⬭", params: { radius: 0.01, height: 0.03 } },
+    {
+      id: "cylinder",
+      type: "cylinder",
+      label: "Cylinder",
+      icon: "⬭",
+      params: { radius: 0.01, height: 0.03 },
+    },
     { id: "sphere", type: "sphere", label: "Sphere", icon: "●", params: { radius: 0.015 } },
-    { id: "cone", type: "cone", label: "Cone", icon: "▲", params: { radius1: 0.015, radius2: 0, height: 0.03 } },
-    { id: "torus", type: "torus", label: "Torus", icon: "◎", params: { majorRadius: 0.02, minorRadius: 0.006 } },
+    {
+      id: "cone",
+      type: "cone",
+      label: "Cone",
+      icon: "▲",
+      params: { radius1: 0.015, radius2: 0, height: 0.03 },
+    },
+    {
+      id: "torus",
+      type: "torus",
+      label: "Torus",
+      icon: "◎",
+      params: { majorRadius: 0.02, minorRadius: 0.006 },
+    },
   ];
   const additive: ActionDef[] = specs.map(({ id, type, label, icon, params }) => ({
     id,
@@ -135,7 +192,214 @@ function primitiveActions(): ActionDef[] {
       );
     },
   }));
-  return [...additive, boreAction()];
+  return [...additive, boreAction(), holeAction(), thickenAction(), ...freeformActions()];
+}
+
+/**
+ * §13.2/§14 thicken — grow the current solid (typically an open face/shell from
+ * a surface feature, or any sheet body) into a solid plate of wall `thickness`.
+ * Requires an existing body; thickness + bothSides are editable in Properties.
+ */
+function thickenAction(): ActionDef {
+  return {
+    id: "thicken",
+    label: () => "Thicken",
+    icon: "▥",
+    // Enabled when any solid exists (the rebuild path errors if none).
+    enabled: always,
+    run: () => {
+      cad().addFeature({
+        type: "thicken",
+        params: { thickness: 0.002 },
+        data: { bothSides: false },
+      });
+      cad().setStatus(
+        "Thicken: 2 mm wall on the current body — edit thickness / bothSides in Properties",
+      );
+    },
+  };
+}
+
+/** §13.2 real hole feature — a proper parametric hole (simple/counterbore/
+ * countersink/spotface, blind or through, drill tip) driven by the kernel `hole`
+ * op, versus `bore`'s single composed cylinder-cut. Drills along the picked
+ * face's INWARD normal. Every dimension + the kind are editable in Properties.
+ *
+ * Origin remains a 3-vector in feature data (the hole kernel contract). When the
+ * selection includes a vertex, the origin is taken from that VertexRef's
+ * position signature (R12) and the VertexRef is also stored as `originVertex` so
+ * a rebuild can re-resolve the corner after an upstream edit. */
+function holeAction(): ActionDef {
+  return {
+    id: "hole",
+    label: () => "Hole",
+    icon: "⌾",
+    enabled: (ctx) => faceRefsFromPicks(ctx.picks, ctx.refs).length > 0,
+    run: (ctx) => {
+      const face = faceRefsFromPicks(ctx.picks, ctx.refs)[0];
+      if (!face) return;
+      const n = unit3(face.normal) ?? ([0, 0, 1] as V3);
+      // Prefer a co-selected vertex's VertexRef for the drill point (R12); else
+      // face centroid / click world point as before.
+      const vertex = vertexRefsFromPicks(ctx.picks, ctx.refs)[0];
+      const o = vertex ? vertexOrigin(vertex) : faceOrigin(face, ctx.worldPoint);
+      cad().addFeature({
+        type: "hole",
+        params: { diameter: 0.006, depth: 0.02 },
+        data: {
+          origin: [o[0], o[1], o[2]],
+          axis: [-n[0], -n[1], -n[2]], // drill INTO the body along the inward normal
+          kind: "simple",
+          // Persistent corner signature when the origin came from a vertex pick.
+          ...(vertex ? { originVertex: vertex } : {}),
+        },
+      });
+      cad().setStatus(
+        vertex
+          ? "Hole: Ø6 × 20 mm at the selected vertex into the face — set diameter/depth and kind in Properties"
+          : "Hole: Ø6 × 20 mm into the selected face — set diameter/depth and kind (counterbore/countersink) in Properties",
+      );
+    },
+  };
+}
+
+/** Serialize a freeform NurbsSurface into plain JSON for feature.data.surface. */
+function serializeFreeformSurface(s: NurbsSurface): Record<string, unknown> {
+  const out: Record<string, unknown> = {
+    degU: s.degU,
+    degV: s.degV,
+    knotsU: s.knotsU.slice(),
+    knotsV: s.knotsV.slice(),
+    controlNet: s.controlNet.map((row) => row.map((p) => [p[0], p[1], p[2]] as V3)),
+  };
+  if (s.weights) out.weights = s.weights.map((row) => row.slice());
+  return out;
+}
+
+/**
+ * §15 freeform primitives — plane / cylinder / sphere control-lattice generators.
+ * Stores NurbsSurface JSON on the feature; rebuild samples via pure-TS evaluate
+ * and commits a face Solid through surfaceFromPoints (viewport tessellation path).
+ */
+function freeformActions(): ActionDef[] {
+  return [
+    {
+      id: "freeform-plane",
+      label: () => "Freeform Plane",
+      icon: "▱",
+      enabled: always,
+      run: (ctx) => {
+        const place = primitivePlacementParams(ctx);
+        const origin: V3 = [place.ox!, place.oy!, place.oz!];
+        // Build a local frame from the picked face normal (or +Z): u along a
+        // helper ⊥ normal, v = n × u so the plane lies on the face.
+        const n = unit3([place.ax!, place.ay!, place.az!]) ?? ([0, 0, 1] as V3);
+        const helper: V3 = Math.abs(n[0]) < 0.9 ? [1, 0, 0] : [0, 1, 0];
+        const ux = n[1] * helper[2] - n[2] * helper[1];
+        const uy = n[2] * helper[0] - n[0] * helper[2];
+        const uz = n[0] * helper[1] - n[1] * helper[0];
+        const ul = Math.hypot(ux, uy, uz) || 1;
+        const uDir: V3 = [ux / ul, uy / ul, uz / ul];
+        const vDir: V3 = [
+          n[1] * uDir[2] - n[2] * uDir[1],
+          n[2] * uDir[0] - n[0] * uDir[2],
+          n[0] * uDir[1] - n[1] * uDir[0],
+        ];
+        const uSize = 0.04;
+        const vSize = 0.03;
+        const surface = planeSurface(origin, uDir, vDir, uSize, vSize);
+        cad().addFeature({
+          type: "freeform",
+          name: "Freeform Plane",
+          params: {
+            uSize,
+            vSize,
+            ox: origin[0],
+            oy: origin[1],
+            oz: origin[2],
+            resU: 8,
+            resV: 8,
+          },
+          data: {
+            kind: "plane",
+            uDir,
+            vDir,
+            surface: serializeFreeformSurface(surface),
+            op: "new",
+          },
+        });
+        cad().setStatus("Freeform plane: 40 × 30 mm NURBS patch — edit sizes in Properties");
+      },
+    },
+    {
+      id: "freeform-cylinder",
+      label: () => "Freeform Cylinder",
+      icon: "⌭",
+      enabled: always,
+      run: (ctx) => {
+        const place = primitivePlacementParams(ctx);
+        const origin: V3 = [place.ox!, place.oy!, place.oz!];
+        const axis: V3 = [place.ax!, place.ay!, place.az!];
+        const radius = 0.01;
+        const height = 0.03;
+        const surface = cylinderSurface(origin, axis, radius, height);
+        cad().addFeature({
+          type: "freeform",
+          name: "Freeform Cylinder",
+          params: {
+            radius,
+            height,
+            ox: origin[0],
+            oy: origin[1],
+            oz: origin[2],
+            ax: axis[0],
+            ay: axis[1],
+            az: axis[2],
+            resU: 16,
+            resV: 8,
+          },
+          data: {
+            kind: "cylinder",
+            surface: serializeFreeformSurface(surface),
+            op: "new",
+          },
+        });
+        cad().setStatus(
+          "Freeform cylinder: Ø20 × 30 mm NURBS wall — edit radius/height in Properties",
+        );
+      },
+    },
+    {
+      id: "freeform-sphere",
+      label: () => "Freeform Sphere",
+      icon: "◍",
+      enabled: always,
+      run: (ctx) => {
+        const place = primitivePlacementParams(ctx);
+        const origin: V3 = [place.ox!, place.oy!, place.oz!];
+        const radius = 0.015;
+        const surface = sphereSurface(origin, radius);
+        cad().addFeature({
+          type: "freeform",
+          name: "Freeform Sphere",
+          params: {
+            radius,
+            ox: origin[0],
+            oy: origin[1],
+            oz: origin[2],
+            resU: 16,
+            resV: 12,
+          },
+          data: {
+            kind: "sphere",
+            surface: serializeFreeformSurface(surface),
+            op: "new",
+          },
+        });
+        cad().setStatus("Freeform sphere: Ø30 mm NURBS surface — edit radius in Properties");
+      },
+    },
+  ];
 }
 
 /**
@@ -220,7 +484,9 @@ async function exportFile(
 ): Promise<void> {
   const exporter = (
     globalThis as {
-      __plastiqExport?: (f: "gltf" | "step" | "iges") => Promise<{ content: string; bodyCount: number }>;
+      __plastiqExport?: (
+        f: "gltf" | "step" | "iges",
+      ) => Promise<{ content: string; bodyCount: number }>;
     }
   ).__plastiqExport;
   if (!exporter) return;
@@ -243,7 +509,7 @@ async function exportFile(
   }
 }
 
-/** Imports at/above this size get a status warning (never a block): the STEP
+/** Imports at/above this size get a status warning (never a block): the source
  * text is the import feature's source of truth, so it rides along in browser
  * storage — crash recovery keeps it as a single content-addressed payload
  * (persistence/recovery.ts, Review #13), and storage pressure can make that
@@ -251,12 +517,12 @@ async function exportFile(
  * user saves the project promptly. */
 export const LARGE_IMPORT_WARN_BYTES = 8 * 1024 * 1024;
 
-/** Status-line message for a completed STEP import — size-aware (FR-43). */
-export function importStatusMessage(name: string, bytes: number): string {
+/** Status-line message for a completed interchange import — size-aware (FR-43). */
+export function importStatusMessage(name: string, bytes: number, format = "STEP"): string {
   if (bytes < LARGE_IMPORT_WARN_BYTES) return `imported ${name}`;
   const mb = (bytes / (1024 * 1024)).toFixed(1);
   return (
-    `imported ${name} (${mb} MB) — large STEP: kept out of quick crash-recovery ` +
+    `imported ${name} (${mb} MB) — large ${format}: kept out of quick crash-recovery ` +
     `snapshots and stored once in browser storage; save your project to keep it safe`
   );
 }
@@ -274,6 +540,22 @@ export function importStepFromDisk(): void {
     void file.text().then((step) => {
       cad().addFeature({ type: "importStep", name: file.name, data: { step } });
       cad().setStatus(importStatusMessage(file.name, step.length));
+    });
+  };
+  input.click();
+}
+
+/** Open a file picker and persist an IGES import as a rebuildable base feature. */
+export function importIgesFromDisk(): void {
+  const input = document.createElement("input");
+  input.type = "file";
+  input.accept = ".iges,.igs";
+  input.onchange = (): void => {
+    const file = input.files?.[0];
+    if (!file) return;
+    void file.text().then((iges) => {
+      cad().addFeature({ type: "importIges", name: file.name, data: { iges } });
+      cad().setStatus(importStatusMessage(file.name, iges.length, "IGES"));
     });
   };
   input.click();
@@ -370,8 +652,49 @@ const RIBBON_ONLY: ActionDef[] = [
     // Opens the sketcher (T13); sample rect remains as a separate discoverability path.
     enabled: always,
     run: () => {
-      useSketchStore.getState().enterSketch("XY", 0, undefined, startingSketchModel("XY", cad().selectionRefs.faces));
+      useSketchStore
+        .getState()
+        .enterSketch("XY", 0, undefined, startingSketchModel("XY", cad().selectionRefs.faces));
       cad().setStatus("Sketch: draw a closed profile, then Finish");
+    },
+  },
+  {
+    // §13.3 project-body-edges: coplanar mesh edges → construction lines on the
+    // active sketch. Uses the viewport edge-polyline cache + pure plane projection
+    // (no worker round-trip). Exact body∩plane via sectionCurves is available
+    // kernel-side as `sectionCurvesToPlaneSegments` for tests / rebuild paths.
+    id: "project-edges",
+    label: () => "Project edges",
+    icon: "⊏",
+    enabled: () => {
+      const sk = useSketchStore.getState();
+      return sk.active && sk.resolvedFrame != null;
+    },
+    run: () => {
+      const sk = useSketchStore.getState();
+      const plane = sk.resolvedFrame;
+      if (!sk.active || !plane) {
+        cad().setStatus("Project edges: open a sketch first");
+        return;
+      }
+      const polys = getProjectableEdgePolylines();
+      if (!polys || polys.length === 0) {
+        cad().setStatus("Project edges: no body edges available — rebuild the part first");
+        return;
+      }
+      const segs = worldPolylinesToPlaneSegments(plane, polys);
+      if (segs.length === 0) {
+        cad().setStatus(
+          "Project edges: no edges lie on the sketch plane (only coplanar edges project)",
+        );
+        return;
+      }
+      const before = sk.model.entities.length;
+      sk.appendProjectedSegments(segs);
+      const added = useSketchStore.getState().model.entities.length - before;
+      cad().setStatus(
+        `Project edges: added ${added} construction line${added === 1 ? "" : "s"} from the body`,
+      );
     },
   },
   {
@@ -404,10 +727,170 @@ const RIBBON_ONLY: ActionDef[] = [
     },
   },
   {
+    id: "rib",
+    label: () => "Rib / linear form",
+    icon: "▰",
+    enabled: () =>
+      cad().features.some(
+        (f) => f.type === "sketch" && !f.suppressed && f.data?.["profile"] != null,
+      ),
+    run: () => {
+      const sketches = cad().features.filter(
+        (f) => f.type === "sketch" && !f.suppressed && f.data?.["profile"] != null,
+      );
+      const selected = sketches.find((f) => f.id === cad().selectedFeatureId);
+      const profile = selected ?? sketches[sketches.length - 1];
+      if (!profile) {
+        cad().setStatus("Rib: finish a sketch profile first");
+        return;
+      }
+      cad().addFeature({
+        type: "rib",
+        params: { length: 0.01 },
+        data: { sketchId: profile.id, op: "join" },
+        deps: [profile.id],
+      });
+      cad().setStatus(
+        `Rib: 10 mm native linear form from sketch ${profile.id} — edit length/direction in Properties`,
+      );
+    },
+  },
+  {
     id: "loft",
     label: () => "Loft",
     icon: "⬗",
-    // Product path: last ≥2 finished sketches only — no demo frustum injector (C4).
+    // Product path: ALL finished sketches as multi-sections (≥2) — no demo frustum (C4).
+    enabled: (ctx) => {
+      void ctx;
+      const n = cad().features.filter(
+        (f) => f.type === "sketch" && !f.suppressed && f.data?.["profile"] != null,
+      ).length;
+      return n >= 2;
+    },
+    run: () => {
+      const feats = cad().features;
+      // Multi-section: every finished sketch profile, in tree order (not only last two).
+      const sketchIds = feats
+        .filter((f) => f.type === "sketch" && !f.suppressed && f.data?.["profile"] != null)
+        .map((f) => f.id);
+      if (sketchIds.length < 2) {
+        cad().setStatus("Loft: finish ≥2 sketches first (no demo loft)");
+        return;
+      }
+      const f = loftFromSketchFeatures(feats, sketchIds);
+      if (!f) {
+        cad().setStatus("Loft: could not build from the finished sketches");
+        return;
+      }
+      cad().addFeature(f);
+      cad().setStatus(`Loft: ${sketchIds.length} sections from sketches ${sketchIds.join(" + ")}`);
+    },
+  },
+  {
+    id: "sweep",
+    label: () => "Sweep",
+    icon: "❧",
+    // Product path: selected sketch (else last) as profile + picked edges as path (C4).
+    // No hardcoded demo pipe.
+    enabled: (ctx) => {
+      void ctx;
+      return cad().features.some(
+        (f) => f.type === "sketch" && !f.suppressed && f.data?.["profile"] != null,
+      );
+    },
+    run: (ctx) => {
+      const feats = cad().features;
+      const sketches = feats.filter(
+        (f) => f.type === "sketch" && !f.suppressed && f.data?.["profile"] != null,
+      );
+      // Prefer the feature-tree selection when it is a finished sketch profile.
+      const selId = cad().selectedFeatureId;
+      const selectedSketch = selId != null ? sketches.find((s) => s.id === selId) : undefined;
+      const profile = selectedSketch ?? sketches[sketches.length - 1];
+      if (!profile) {
+        cad().setStatus("Sweep: finish a sketch profile first (no demo sweep)");
+        return;
+      }
+      // Sweep along the PICKED edge chain when one is selected: the spine is
+      // stored as persistent EdgeRefs and re-resolved every rebuild, so the pipe
+      // follows those edges parametrically. With no edges picked, fall back to a
+      // straight path along the profile plane's normal — a real, editable spine
+      // (Properties → Path), not a canned elbow.
+      const fromEdges = sweepFromSketchAlongPickedEdges(feats, profile.id, ctx.picks, ctx.refs);
+      if (fromEdges) {
+        const n = ctx.picks.filter((p) => p.kind === "edge").length;
+        cad().addFeature(fromEdges);
+        cad().setStatus(
+          `Sweep: profile from sketch ${profile.id} along ${n} picked edge${n === 1 ? "" : "s"}`,
+        );
+        return;
+      }
+      const path = {
+        kind: "polyline" as const,
+        points: [
+          [0, 0, 0],
+          [0, 0, 0.04],
+        ] as [number, number, number][],
+      };
+      const f = sweepFromSketchFeature(feats, profile.id, path);
+      if (!f) {
+        cad().setStatus("Sweep: could not build from the sketch profile");
+        return;
+      }
+      cad().addFeature(f);
+      cad().setStatus(
+        `Sweep: profile from sketch ${profile.id} along a default 40 mm path — pick edges first, or edit Properties → Path`,
+      );
+    },
+  },
+  {
+    // §13.2 helical pipe: same sweep feature type with data.helix (kernel helix()
+    // wire consumed by sweepAlongWire). Not a separate FEATURE_TYPES entry.
+    id: "helixSweep",
+    label: () => "Helix sweep",
+    icon: "🌀",
+    enabled: (ctx) => {
+      void ctx;
+      return cad().features.some(
+        (f) => f.type === "sketch" && !f.suppressed && f.data?.["profile"] != null,
+      );
+    },
+    run: () => {
+      const feats = cad().features;
+      const sketches = feats.filter(
+        (f) => f.type === "sketch" && !f.suppressed && f.data?.["profile"] != null,
+      );
+      const selId = cad().selectedFeatureId;
+      const selectedSketch = selId != null ? sketches.find((s) => s.id === selId) : undefined;
+      const profile = selectedSketch ?? sketches[sketches.length - 1];
+      if (!profile) {
+        cad().setStatus("Helix sweep: finish a sketch profile first");
+        return;
+      }
+      // Defaults SI: Ø20 mm helix, 5 mm pitch, 4 turns, right-handed (Properties editable).
+      const helix = {
+        radius: 0.01,
+        pitch: 0.005,
+        turns: 4,
+        handedness: "right" as const,
+      };
+      const f = helixSweepFromSketchFeature(feats, profile.id, helix);
+      if (!f) {
+        cad().setStatus("Helix sweep: could not build from the sketch profile");
+        return;
+      }
+      cad().addFeature(f);
+      cad().setStatus(
+        `Helix sweep: profile from sketch ${profile.id} along Ø20 × pitch 5 mm × 4 turns — edit helix in Properties`,
+      );
+    },
+  },
+  // §14 SURFACE pillar — open sheets + closure. Mirrors solid loft/sweep authoring
+  // but installs shell/face bodies (thicken to plate; sew/solidify to close).
+  {
+    id: "surfaceLoft",
+    label: () => "Surface Loft",
+    icon: "◇",
     enabled: (ctx) => {
       void ctx;
       const n = cad().features.filter(
@@ -421,25 +904,25 @@ const RIBBON_ONLY: ActionDef[] = [
         .filter((f) => f.type === "sketch" && !f.suppressed && f.data?.["profile"] != null)
         .map((f) => f.id);
       if (sketchIds.length < 2) {
-        cad().setStatus("Loft: finish ≥2 sketches first (no demo loft)");
+        cad().setStatus("Surface loft: finish ≥2 sketches first");
         return;
       }
-      const ids = sketchIds.slice(-2);
-      const f = loftFromSketchFeatures(feats, ids);
+      // Multi-section like solid loft: every finished sketch in tree order.
+      const f = surfaceLoftFromSketchFeatures(feats, sketchIds);
       if (!f) {
-        cad().setStatus("Loft: could not build from the last two sketches");
+        cad().setStatus("Surface loft: could not build from the finished sketches");
         return;
       }
       cad().addFeature(f);
-      cad().setStatus(`Loft: from sketches ${ids.join(" + ")}`);
+      cad().setStatus(
+        `Surface loft: shell from ${sketchIds.length} sketches ${sketchIds.join(" + ")} — Thicken to solidify`,
+      );
     },
   },
   {
-    id: "sweep",
-    label: () => "Sweep",
-    icon: "❧",
-    // Product path: last finished sketch as profile + path from selected edge when present (C4).
-    // No hardcoded demo pipe.
+    id: "surfaceSweep",
+    label: () => "Surface Sweep",
+    icon: "⌒",
     enabled: (ctx) => {
       void ctx;
       return cad().features.some(
@@ -451,22 +934,24 @@ const RIBBON_ONLY: ActionDef[] = [
       const sketches = feats.filter(
         (f) => f.type === "sketch" && !f.suppressed && f.data?.["profile"] != null,
       );
-      const last = sketches[sketches.length - 1];
-      if (!last) {
-        cad().setStatus("Sweep: finish a sketch profile first (no demo sweep)");
+      const selId = cad().selectedFeatureId;
+      const selectedSketch = selId != null ? sketches.find((s) => s.id === selId) : undefined;
+      const profile = selectedSketch ?? sketches[sketches.length - 1];
+      if (!profile) {
+        cad().setStatus("Surface sweep: finish a sketch profile first");
         return;
       }
-      // Sweep along the PICKED edge chain when one is selected: the spine is
-      // stored as persistent EdgeRefs and re-resolved every rebuild, so the pipe
-      // follows those edges parametrically. With no edges picked, fall back to a
-      // straight path along the profile plane's normal — a real, editable spine
-      // (Properties → Path), not a canned elbow.
-      const fromEdges = sweepFromSketchAlongPickedEdges(feats, last.id, ctx.picks, ctx.refs);
+      const fromEdges = surfaceSweepFromSketchAlongPickedEdges(
+        feats,
+        profile.id,
+        ctx.picks,
+        ctx.refs,
+      );
       if (fromEdges) {
         const n = ctx.picks.filter((p) => p.kind === "edge").length;
         cad().addFeature(fromEdges);
         cad().setStatus(
-          `Sweep: profile from sketch ${last.id} along ${n} picked edge${n === 1 ? "" : "s"}`,
+          `Surface sweep: shell from sketch ${profile.id} along ${n} picked edge${n === 1 ? "" : "s"}`,
         );
         return;
       }
@@ -477,14 +962,157 @@ const RIBBON_ONLY: ActionDef[] = [
           [0, 0, 0.04],
         ] as [number, number, number][],
       };
-      const f = sweepFromSketchFeature(feats, last.id, path);
+      const f = surfaceSweepFromSketchFeature(feats, profile.id, path);
       if (!f) {
-        cad().setStatus("Sweep: could not build from the last sketch");
+        cad().setStatus("Surface sweep: could not build from the sketch profile");
         return;
       }
       cad().addFeature(f);
       cad().setStatus(
-        `Sweep: profile from sketch ${last.id} along a default 40 mm path — pick edges first, or edit Properties → Path`,
+        `Surface sweep: shell from sketch ${profile.id} along a default 40 mm path — Thicken to solidify`,
+      );
+    },
+  },
+  {
+    id: "surfaceRevolve",
+    label: () => "Surface Revolve",
+    icon: "◌",
+    enabled: (ctx) => {
+      void ctx;
+      return cad().features.some(
+        (f) => f.type === "sketch" && !f.suppressed && f.data?.["profile"] != null,
+      );
+    },
+    run: (ctx) => {
+      const feats = cad().features;
+      const sketches = feats.filter(
+        (f) => f.type === "sketch" && !f.suppressed && f.data?.["profile"] != null,
+      );
+      const selId = cad().selectedFeatureId;
+      const selectedSketch = selId != null ? sketches.find((s) => s.id === selId) : undefined;
+      const last = selectedSketch ?? sketches[sketches.length - 1];
+      if (!last) {
+        cad().setStatus("Surface revolve: finish a sketch profile first");
+        return;
+      }
+      const prof = last.data?.["profile"] as Profile | undefined;
+      if (!prof) {
+        cad().setStatus("Surface revolve: sketch has no profile");
+        return;
+      }
+      const plane = last.data?.["plane"];
+      const edges = edgeRefsFromPicks(ctx.picks, ctx.refs);
+      const axisEdge = edges[0];
+      cad().addFeature({
+        type: "surfaceRevolve",
+        params: {
+          angle: Math.PI * 2,
+          ox: 0,
+          oy: 0,
+          oz: 0,
+          ax: 0,
+          ay: 1,
+          az: 0,
+        },
+        data: {
+          profile: prof,
+          ...(plane ? { plane } : {}),
+          ...(axisEdge ? { axisEdge } : {}),
+        },
+      });
+      cad().setStatus(
+        axisEdge
+          ? `Surface revolve: shell from sketch ${last.id} about picked edge — Thicken to solidify`
+          : `Surface revolve: shell from sketch ${last.id} about +Y — pick an edge first for a custom axis`,
+      );
+    },
+  },
+  {
+    id: "offsetSurface",
+    label: () => "Offset Surface",
+    icon: "⧉",
+    enabled: always,
+    run: () => {
+      cad().addFeature({
+        type: "offsetSurface",
+        params: { distance: 0.002 },
+      });
+      cad().setStatus(
+        "Offset surface: 2 mm offset of the current body — edit distance in Properties",
+      );
+    },
+  },
+  {
+    id: "sew",
+    label: () => "Sew",
+    icon: " intern",
+    enabled: always,
+    run: () => {
+      cad().addFeature({
+        type: "sew",
+        params: { tolerance: 1e-6 },
+      });
+      cad().setStatus("Sew: stitch the current body's faces into a shell");
+    },
+  },
+  {
+    id: "solidify",
+    label: () => "Solidify",
+    icon: "⬢",
+    enabled: always,
+    run: () => {
+      cad().addFeature({ type: "solidify" });
+      cad().setStatus("Solidify: promote a closed shell to a solid (sew free edges first)");
+    },
+  },
+  {
+    id: "patch",
+    label: () => "Patch",
+    icon: "▣",
+    // §14 free-edge fill: needs ≥3 picked free edges forming a closed loop.
+    enabled: (ctx) => edgeRefsFromPicks(ctx.picks, ctx.refs).length >= 3,
+    run: (ctx) => {
+      const edges = edgeRefsFromPicks(ctx.picks, ctx.refs);
+      if (edges.length < 3) {
+        cad().setStatus("Patch: pick ≥3 free edges of an open shell (isFree boundary)");
+        return;
+      }
+      cad().addFeature({
+        type: "patch",
+        data: { edges, continuity: "c0" },
+      });
+      cad().setStatus(
+        `Patch: fill ${edges.length} free edges into a face — prefer naked boundary edges on a shell`,
+      );
+    },
+  },
+  {
+    id: "trim",
+    label: () => "Trim",
+    icon: "✂",
+    enabled: always,
+    run: (ctx) => {
+      // Default mid-YZ trim (keep +X half). Face pick supplies the plane when available.
+      const face = faceRefsFromPicks(ctx.picks, ctx.refs)[0];
+      const plane = face
+        ? {
+            origin: face.centroid ?? ([0, 0, 0] as [number, number, number]),
+            normal: face.normal ?? ([1, 0, 0] as [number, number, number]),
+            xAxis: [0, 1, 0] as [number, number, number],
+          }
+        : {
+            origin: [0.02, 0, 0] as [number, number, number],
+            normal: [1, 0, 0] as [number, number, number],
+            xAxis: [0, 1, 0] as [number, number, number],
+          };
+      cad().addFeature({
+        type: "trim",
+        data: { plane, keep: "positive" },
+      });
+      cad().setStatus(
+        face
+          ? "Trim: keep +side of the selected face plane — flip keep in Properties"
+          : "Trim: keep +X half at x=20 mm — select a face for the cut plane, or edit in Properties",
       );
     },
   },
@@ -531,10 +1159,26 @@ const RIBBON_ONLY: ActionDef[] = [
         cad().setStatus("Mirror: plane from selected face normal + origin");
         return;
       }
-      cad().addFeature({ type: "mirror", params: { nx: 1, ox: 0, merge: 1 } });
+      cad().addFeature({
+        type: "mirror",
+        params: { nx: 1, ny: 0, nz: 0, ox: 0, oy: 0, oz: 0, merge: 1 },
+      });
       cad().setStatus(
         "Mirror: default YZ plane at origin — select a face for its plane, then run Mirror again",
       );
+    },
+  },
+  {
+    id: "scale",
+    label: () => "Scale",
+    icon: "⤢",
+    enabled: always,
+    run: () => {
+      // Uniform resize (§2.5) — the kernel op existed but was reachable from
+      // nowhere. Bake the FULL param set at creation so every field is editable
+      // in Properties (avoids the C2 "uneditable defaults" trap): factor + pivot.
+      cad().addFeature({ type: "scale", params: { factor: 2, px: 0, py: 0, pz: 0 } });
+      cad().setStatus("Scale ×2 about origin — edit factor / pivot in Properties");
     },
   },
   {
@@ -621,16 +1265,88 @@ const RIBBON_ONLY: ActionDef[] = [
     },
   },
   {
-    // Primary boolean authoring: tool = last finished sketch extruded (user geometry), not a
-    // fixed demo box. Requires ≥1 sketch + an existing body (C5).
+    // §13.2 patternAlongPath — N instances along a spine polyline (or selected edges).
+    id: "pathPattern",
+    label: () => "Path pattern",
+    icon: "〰",
+    enabled: always,
+    run: (ctx) => {
+      const edges = edgeRefsFromPicks(ctx.picks, ctx.refs);
+      if (edges.length > 0) {
+        cad().addFeature({
+          type: "pathPattern",
+          params: { count: 3 },
+          data: { pathEdges: edges, align: false },
+        });
+        cad().setStatus("Path pattern: along selected edge(s) — edit count / align in Properties");
+        return;
+      }
+      // Default straight +X spine (160 mm) so count=3 places start/mid/end without a pick.
+      cad().addFeature({
+        type: "pathPattern",
+        params: { count: 3 },
+        data: {
+          path: {
+            kind: "polyline",
+            points: [
+              [0, 0, 0],
+              [0.16, 0, 0],
+            ],
+          },
+          align: false,
+        },
+      });
+      cad().setStatus(
+        "Path pattern: default +X polyline — select edge(s) for a model spine, then re-run",
+      );
+    },
+  },
+  {
+    // §13.2 split — keep both sides of a plane cut (face pick → plane, else YZ at origin).
+    id: "split",
+    label: () => "Split",
+    icon: "✂",
+    enabled: always,
+    run: (ctx) => {
+      const face = faceRefsFromPicks(ctx.picks, ctx.refs)[0];
+      if (face) {
+        const n = unit3(face.normal) ?? ([1, 0, 0] as V3);
+        const o = faceOrigin(face, ctx.worldPoint);
+        cad().addFeature({
+          type: "split",
+          data: {
+            plane: {
+              origin: [o[0], o[1], o[2]],
+              normal: [n[0], n[1], n[2]],
+            },
+          },
+        });
+        cad().setStatus("Split: plane from selected face — both sides kept as multi-body");
+        return;
+      }
+      cad().addFeature({
+        type: "split",
+        data: {
+          plane: {
+            origin: [0, 0, 0],
+            normal: [1, 0, 0],
+          },
+        },
+      });
+      cad().setStatus(
+        "Split: default YZ plane at origin — select a face for its plane, then re-run Split",
+      );
+    },
+  },
+  {
+    // Primary boolean authoring (C5): tool = selected feature when possible
+    // (sketch→extrude, or a solid primitive), else last finished sketch. Never a
+    // fixed DEFAULT_RECT / demo box.
     id: "booleanBody",
-    label: () => "Subtract last sketch",
+    label: () => "Subtract tool",
     icon: "⊖",
     enabled: () => {
       const s = cad();
-      const hasSketch = s.features.some(
-        (f) => f.type === "sketch" && !f.suppressed && f.data?.["profile"] != null,
-      );
       const hasBody = s.features.some(
         (f) =>
           !f.suppressed &&
@@ -639,28 +1355,77 @@ const RIBBON_ONLY: ActionDef[] = [
             f.type === "revolve" ||
             f.type === "loft" ||
             f.type === "sweep" ||
+            f.type === "cylinder" ||
+            f.type === "sphere" ||
+            f.type === "cone" ||
+            f.type === "torus" ||
             f.type === "importStep"),
       );
-      return hasSketch && hasBody;
+      if (!hasBody) return false;
+      const hasSketch = s.features.some(
+        (f) => f.type === "sketch" && !f.suppressed && f.data?.["profile"] != null,
+      );
+      // Also enable when the user has selected a solid primitive as the tool (C5).
+      const sel =
+        s.selectedFeatureId != null
+          ? s.features.find((f) => f.id === s.selectedFeatureId && !f.suppressed)
+          : undefined;
+      const solidToolTypes = new Set(["box", "cylinder", "sphere", "cone", "torus"]);
+      const hasSelectedSolidTool = sel != null && solidToolTypes.has(sel.type);
+      return hasSketch || hasSelectedSolidTool;
     },
     run: () => {
       const feats = cad().features;
-      const lastSketch = [...feats]
-        .reverse()
-        .find((f) => f.type === "sketch" && !f.suppressed && f.data?.["profile"] != null);
-      if (!lastSketch) {
-        cad().setStatus("Subtract: finish a sketch for the tool profile first");
+      const selId = cad().selectedFeatureId;
+      const selected =
+        selId != null ? feats.find((f) => f.id === selId && !f.suppressed) : undefined;
+      const solidToolTypes = new Set(["box", "cylinder", "sphere", "cone", "torus"]);
+
+      // Selected solid primitive → tool body is that primitive alone (C5 select tool).
+      if (selected && solidToolTypes.has(selected.type)) {
+        cad().addFeature(
+          booleanBodyFeature("subtract", [
+            {
+              type: selected.type,
+              params: { ...(selected.params ?? {}) },
+              data: { ...(selected.data ?? {}), op: "new" },
+            },
+          ]),
+        );
+        cad().setStatus(`Subtract: tool from selected ${selected.type} ${selected.id}`);
+        return;
+      }
+
+      // Selected sketch, else last finished sketch → extrude as tool.
+      const sketches = feats.filter(
+        (f) => f.type === "sketch" && !f.suppressed && f.data?.["profile"] != null,
+      );
+      const toolSketch =
+        selected?.type === "sketch" && selected.data?.["profile"] != null
+          ? selected
+          : sketches[sketches.length - 1];
+      if (!toolSketch) {
+        cad().setStatus("Subtract: select a tool sketch/primitive, or finish a sketch first");
         return;
       }
       const depth =
-        typeof lastSketch.params?.["depth"] === "number" ? (lastSketch.params["depth"] as number) : 0.05;
+        typeof toolSketch.params?.["depth"] === "number"
+          ? (toolSketch.params["depth"] as number)
+          : 0.05;
       cad().addFeature(
         booleanBodyFeature("subtract", [
-          { type: "sketch", data: { ...lastSketch.data, profile: lastSketch.data!["profile"] } },
-          { type: "extrude", params: { height: depth > 0 ? depth : 0.05 }, data: { op: "new" } },
+          {
+            type: "sketch",
+            data: { ...toolSketch.data, profile: toolSketch.data!["profile"] },
+          },
+          {
+            type: "extrude",
+            params: { height: depth > 0 ? depth : 0.05 },
+            data: { op: "new" },
+          },
         ]),
       );
-      cad().setStatus(`Subtract: tool from sketch ${lastSketch.id}`);
+      cad().setStatus(`Subtract: tool from sketch ${toolSketch.id}`);
     },
   },
   {
@@ -681,6 +1446,13 @@ const RIBBON_ONLY: ActionDef[] = [
     icon: "⤒",
     enabled: always,
     run: () => importStepFromDisk(),
+  },
+  {
+    id: "import-iges",
+    label: () => "Import IGES",
+    icon: "⤒",
+    enabled: always,
+    run: () => importIgesFromDisk(),
   },
   {
     id: "export-gltf",
@@ -741,7 +1513,7 @@ const RIBBON_ONLY: ActionDef[] = [
     id: "mate-mode",
     label: (ctx) => (ctx.mateMode ? "Exit mate" : "Mate"),
     icon: "⚯",
-    enabled: always,
+    enabled: (ctx) => ctx.explodeFactor === 0,
     active: (ctx) => ctx.mateMode,
     // Enter/leave mate authoring; the two-pick + apply flow lives in AssemblyTree.
     run: (ctx) => cad().setMateMode(!ctx.mateMode),
@@ -766,12 +1538,19 @@ const RIBBON_ONLY: ActionDef[] = [
   },
 ];
 
-/** Re-expose each context-menu action as an ActionDef (drop menu-only fields,
- * keep the optional toggle-active predicate for ribbon highlighting). */
+/** Re-expose each context-menu action as an ActionDef (drop menu-only `group`/
+ * danger; keep `visible` for palette context-gating + optional toggle-active). */
 const CONTEXT_DEFS: Record<string, ActionDef> = Object.fromEntries(
   CONTEXT_ACTIONS.map((a) => [
     a.id,
-    { id: a.id, label: a.label, enabled: a.enabled, run: a.run, active: a.active },
+    {
+      id: a.id,
+      label: a.label,
+      enabled: a.enabled,
+      run: a.run,
+      active: a.active,
+      visible: a.visible,
+    },
   ]),
 );
 
@@ -779,6 +1558,28 @@ const CONTEXT_DEFS: Record<string, ActionDef> = Object.fromEntries(
 // The Sculpt workspace's tool set. All voxel-scoped `enabled` predicates read the
 // voxel store directly (like meshMode below); the sidebar/topbar subscribe to it so
 // greying/highlighting stay live.
+
+/** Ribbon glyph for each §16 SDF brush. */
+function brushIcon(brush: string): string {
+  switch (brush) {
+    case "draw":
+      return "●";
+    case "clay":
+      return "◉";
+    case "smooth":
+      return "〰";
+    case "flatten":
+      return "▬";
+    case "inflate":
+      return "◎";
+    case "pinch":
+      return "⟩⟨";
+    case "grab":
+      return "✥";
+    default:
+      return "·";
+  }
+}
 
 /** Stage the open sculpt's SURFACE mesh as a mesh document — the exact `MeshDoc`
  * shape the AI panel's MeshConvertSection consumes — so "Convert to CAD (STEP)"
@@ -790,7 +1591,12 @@ function stageVoxelForConvert(): void {
   if (!doc || doc.cells.length === 0) return;
   const glb = voxelMeshToGlbBase64(voxelDocToMesh(doc));
   const name = doc.name ?? useProjectsStore.getState().currentName;
-  const meshDoc: MeshDoc = { kind: "mesh", name, glb, source: { mode: "voxel", providerId: "voxel-sculpt" } };
+  const meshDoc: MeshDoc = {
+    kind: "mesh",
+    name,
+    glb,
+    source: { mode: "voxel", providerId: "voxel-sculpt" },
+  };
   vox().close();
   useProjectsStore.setState({
     activeMeshDoc: meshDoc,
@@ -827,6 +1633,21 @@ const VOXEL_ACTIONS: ActionDef[] = [
     active: () => voxelMode() && vox().tool === "erase",
     run: () => vox().setTool("erase"),
   },
+  // §16 SDF brush set — each selects the brush tool; pointer path is VoxelSculpt.
+  ...(["draw", "clay", "smooth", "flatten", "inflate", "pinch", "grab"] as const).map(
+    (brush) =>
+      ({
+        id: `voxel-brush-${brush}`,
+        label: () => brush.charAt(0).toUpperCase() + brush.slice(1),
+        icon: brushIcon(brush),
+        enabled: () => voxelMode(),
+        active: () => voxelMode() && vox().tool === brush,
+        run: () => {
+          vox().setTool(brush);
+          cad().setStatus(`sculpt brush: ${brush} — drag on the surface`);
+        },
+      }) satisfies ActionDef,
+  ),
   {
     id: "voxel-convert-cad",
     label: () => "Convert to CAD",
@@ -862,7 +1683,8 @@ export const voxelMode = (): boolean => useVoxelStore.getState().doc != null;
 /** True when a dense point-cloud document is open (SPEC-13). The live document is neither a B-rep nor
  * a mesh, so B-rep/mesh ops are disabled-not-hidden (FR-18); only the editor-state set (and, once
  * added, the cloud→mesh / completion hand-offs) stays live. */
-export const pointCloudMode = (): boolean => useProjectsStore.getState().activePointCloudDoc != null;
+export const pointCloudMode = (): boolean =>
+  useProjectsStore.getState().activePointCloudDoc != null;
 
 /** Actions that remain meaningful while a mesh document is open: editor-state (undo/redo,
  * selection mode) AND the mesh→CAD conversions that CONSUME the open mesh (reconstruct to
@@ -888,6 +1710,13 @@ const VOXEL_SAFE_IDS: ReadonlySet<string> = new Set([
   "voxel-new",
   "voxel-add",
   "voxel-erase",
+  "voxel-brush-draw",
+  "voxel-brush-clay",
+  "voxel-brush-smooth",
+  "voxel-brush-flatten",
+  "voxel-brush-inflate",
+  "voxel-brush-pinch",
+  "voxel-brush-grab",
   "voxel-convert-cad",
   "voxel-export-glb",
 ]);

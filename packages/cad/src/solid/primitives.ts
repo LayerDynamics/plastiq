@@ -24,10 +24,10 @@ import { Solid } from "./solid.js";
 
 /** An axis-aligned box of size dx×dy×dz (SI metres) with a corner at the origin. */
 export function makeBox(oc: Occt, dx: number, dy: number, dz: number): Solid {
-  const maker = new oc.BRepPrimAPI_MakeBox_2(dx, dy, dz);
-  const solid = maker.Solid();
-  maker.delete();
-  return new Solid(oc, solid);
+  // K6 — route through the same maker → try/finally → IsNull discipline every
+  // other primitive uses (finishMaker), rather than the bare `maker.Solid()` that
+  // leaked the maker on a Standard_Failure and never guarded the null shape.
+  return finishMaker(oc, new oc.BRepPrimAPI_MakeBox_2(dx, dy, dz), "box");
 }
 
 /** An axis-aligned box of size dx×dy×dz with its minimum corner at `corner`. */
@@ -38,12 +38,14 @@ export function makeBoxAt(
   dy: number,
   dz: number,
 ): Solid {
+  // K6 — same discipline as makeBox; the corner point is freed on EVERY exit,
+  // incl. a Standard_Failure from the maker ctor or Shape().
   const p = new oc.gp_Pnt_3(corner[0], corner[1], corner[2]);
-  const maker = new oc.BRepPrimAPI_MakeBox_3(p, dx, dy, dz);
-  const solid = maker.Solid();
-  maker.delete();
-  p.delete();
-  return new Solid(oc, solid);
+  try {
+    return finishMaker(oc, new oc.BRepPrimAPI_MakeBox_3(p, dx, dy, dz), "box");
+  } finally {
+    p.delete();
+  }
 }
 
 /** Placement of a round primitive: where its base sits and which way its axis points. */
@@ -77,7 +79,32 @@ function placementAxes(oc: Occt, place: AxisPlacement | undefined): gp_Ax2 {
   }
 }
 
-/** Run a primitive maker to a Solid, freeing the maker and the axes. */
+/**
+ * Run a maker to a validated Solid, freeing the maker on EVERY exit and guarding
+ * the null Shape() (cf. extrude.ts / boolean.ts). Shared by the round primitives
+ * (via {@link finishPrimitive}) and the box makers (which take no axes) so box
+ * gets the same memory discipline as every other primitive (K6).
+ */
+function finishMaker(
+  oc: Occt,
+  maker: { Shape(): TopoDS_Shape; delete(): void },
+  name: string,
+): Solid {
+  try {
+    const shape = maker.Shape();
+    // A maker's Shape() is an owned handle EVEN WHEN NULL; free it before the
+    // throw or it leaks in the long-lived worker (cf. extrude.ts / boolean.ts).
+    if (shape.IsNull()) {
+      shape.delete();
+      throw new Error(`${name}: produced an empty shape`);
+    }
+    return new Solid(oc, shape);
+  } finally {
+    maker.delete();
+  }
+}
+
+/** Run a placement-based primitive maker to a Solid, freeing the maker and the axes. */
 function finishPrimitive(
   oc: Occt,
   make: (axes: gp_Ax2) => { Shape(): TopoDS_Shape; delete(): void },
@@ -86,19 +113,7 @@ function finishPrimitive(
 ): Solid {
   const axes = placementAxes(oc, place);
   try {
-    const maker = make(axes);
-    try {
-      const shape = maker.Shape();
-      // A maker's Shape() is an owned handle EVEN WHEN NULL; free it before the
-      // throw or it leaks in the long-lived worker (cf. extrude.ts / boolean.ts).
-      if (shape.IsNull()) {
-        shape.delete();
-        throw new Error(`${name}: produced an empty shape`);
-      }
-      return new Solid(oc, shape);
-    } finally {
-      maker.delete();
-    }
+    return finishMaker(oc, make(axes), name);
   } finally {
     axes.delete();
   }

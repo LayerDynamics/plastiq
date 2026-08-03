@@ -35,6 +35,7 @@ function quad(): TransferMesh {
           [0, 0, 1],
           [0, -1, 0],
         ],
+        faceSurfaces: [PLANE_Z0, { kind: "plane", normal: [0, -1, 0], origin: [0, 0, 0] }],
         midpoint: [0.5, 0, 0],
       },
     ],
@@ -59,6 +60,7 @@ function multiEdgeQuad(): TransferMesh {
       [0, 0, 1],
       [0, -1, 0],
     ],
+    faceSurfaces: [PLANE_Z0, { kind: "plane", normal: [0, -1, 0], origin: [0, 0, 0] }],
     midpoint,
     faceIds,
   });
@@ -218,14 +220,60 @@ describe("Picking — additive selection (Shift+click)", () => {
     await r.unmount();
   });
 
-  it("face mode still allows direct edge selection from the canvas", async () => {
+  it("face mode rejects edge hits (R5 — selMode is a strict click filter)", async () => {
     const part = buildPart(quad());
-    // Remove vertices for this regression so the test isolates edge-vs-face priority.
+    // Remove vertices so the only stubbed non-face hit is the edge — face mode must
+    // ignore it rather than cascading through (the pre-R5 permissive behaviour).
     part.vertexPoints = null;
     useCadStore.getState().setSelMode("face");
 
     vi.spyOn(Picker.prototype, "pick").mockImplementation((_part, _ndc, _camera, mode) =>
       mode === "edge" ? { kind: "edge", id: 4 } : null,
+    );
+
+    let canvas: HTMLCanvasElement | undefined;
+    const r = await ReactThreeTestRenderer.create(<Picking part={part} />, {
+      beforeReturn: (c) => {
+        canvas = c;
+      },
+    });
+
+    click(canvas!, 10, 10);
+    // Strict face mode: an edge under the cursor is NOT selected.
+    expect(useCadStore.getState().picks).toEqual([]);
+
+    await r.unmount();
+  });
+
+  it("null selMode keeps the permissive vertex→edge→face cascade (R5)", async () => {
+    const part = buildPart(quad());
+    part.vertexPoints = null;
+    useCadStore.getState().setSelMode(null);
+
+    vi.spyOn(Picker.prototype, "pick").mockImplementation((_part, _ndc, _camera, mode) =>
+      mode === "edge" ? { kind: "edge", id: 4 } : null,
+    );
+
+    let canvas: HTMLCanvasElement | undefined;
+    const r = await ReactThreeTestRenderer.create(<Picking part={part} />, {
+      beforeReturn: (c) => {
+        canvas = c;
+      },
+    });
+
+    click(canvas!, 10, 10);
+    expect(useCadStore.getState().picks).toEqual([{ kind: "edge", id: 4 }]);
+
+    await r.unmount();
+  });
+
+  it("edge mode only accepts edge hits (R5)", async () => {
+    const part = buildPart(quad());
+    useCadStore.getState().setSelMode("edge");
+
+    // A face-only raycast must not land under edge mode.
+    vi.spyOn(Picker.prototype, "pick").mockImplementation((_part, _ndc, _camera, mode) =>
+      mode === "face" ? { kind: "face", id: 7 } : mode === "edge" ? { kind: "edge", id: 4 } : null,
     );
 
     let canvas: HTMLCanvasElement | undefined;

@@ -100,12 +100,19 @@ describe("canApply / buildConstraints — concentric + tangent (D7)", () => {
     ]);
   });
 
-  it("tangent needs one line and one circle", () => {
+  it("tangent supports line↔circle and circle↔circle", () => {
     expect(canApply("tangent", m, ["l"])).toBe(false);
     expect(canApply("tangent", m, ["l", "circ1"])).toBe(true);
-    expect(canApply("tangent", m, ["circ1", "circ2"])).toBe(false);
+    expect(canApply("tangent", m, ["circ1", "circ2"])).toBe(true);
     expect(buildConstraints("tangent", m, ["l", "circ1"], nextId)).toEqual([
-      { id: "k2", kind: "tangent", line: "l", circle: "circ1" },
+      { id: "k2", kind: "tangent", curve1: "l", curve2: "circ1" },
+    ]);
+  });
+
+  it("equal radius authors against two selected radius curves", () => {
+    expect(canApply("equalRadius", m, ["circ1", "circ2"])).toBe(true);
+    expect(buildConstraints("equalRadius", m, ["circ1", "circ2"], nextId)).toEqual([
+      { id: "k3", kind: "equalRadius", curve1: "circ1", curve2: "circ2" },
     ]);
   });
 
@@ -113,7 +120,7 @@ describe("canApply / buildConstraints — concentric + tangent (D7)", () => {
     expect(canApply("midpoint", m, ["a"])).toBe(false);
     expect(canApply("midpoint", m, ["a", "l"])).toBe(true);
     expect(buildConstraints("midpoint", m, ["a", "l"], nextId)).toEqual([
-      { id: "k3", kind: "midpoint", point: "a", line: "l" },
+      { id: "k4", kind: "midpoint", point: "a", line: "l" },
     ]);
   });
 
@@ -123,7 +130,7 @@ describe("canApply / buildConstraints — concentric + tangent (D7)", () => {
     expect(canApply("pointOnObject", m, ["a", "circ1"])).toBe(true);
     expect(canApply("pointOnObject", m, ["a", "l", "circ1"])).toBe(false);
     expect(buildConstraints("pointOnObject", m, ["a", "circ1"], nextId)).toEqual([
-      { id: "k4", kind: "pointOnObject", point: "a", object: "circ1" },
+      { id: "k5", kind: "pointOnObject", point: "a", object: "circ1" },
     ]);
   });
 
@@ -131,7 +138,7 @@ describe("canApply / buildConstraints — concentric + tangent (D7)", () => {
     expect(canApply("symmetric", m, ["a", "b"])).toBe(false);
     expect(canApply("symmetric", m, ["a", "b", "l"])).toBe(true);
     expect(buildConstraints("symmetric", m, ["a", "b", "l"], nextId)).toEqual([
-      { id: "k5", kind: "symmetric", a: "a", b: "b", axis: "l" },
+      { id: "k6", kind: "symmetric", a: "a", b: "b", axis: "l" },
     ]);
   });
 });

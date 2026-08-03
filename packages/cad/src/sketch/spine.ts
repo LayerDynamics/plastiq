@@ -43,6 +43,12 @@ export interface SpineSegmented {
 /** Any spine the sweep builder accepts (polyline or mixed line/arc). */
 export type SpinePath = SpinePolyline | SpineSegmented;
 
+// Helical spines are NOT a SpinePath kind. Build them with `helix(oc, spec)` from
+// action/helix.ts (returns a ready TopoDS_Wire) and pass that wire to
+// `sweepAlongWire` — which takes ownership. Embedding `{kind:"helix"}` here would
+// force buildSpineWire to re-enter the helix op and blur the wire-ownership
+// contract sweepAlongWire already documents.
+
 function pnt(oc: Occt, p: Point3) {
   return new oc.gp_Pnt_3(p[0], p[1], p[2]);
 }

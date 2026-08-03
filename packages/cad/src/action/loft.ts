@@ -49,6 +49,14 @@ export function loft(oc: Occt, sketches: readonly Sketch[], opts: LoftOptions): 
       maker.AddWire(w);
     }
     maker.Build(progress);
+    // K8 — ThruSections is a BRepBuilderAPI_MakeShape: a failed build (sections
+    // that cannot be lofted — coincident or otherwise incompatible profiles) can
+    // leave IsDone() false WITHOUT nulling Shape(), so guard on it BEFORE trusting
+    // the shape. (A Standard_Failure thrown by Build/Shape is already handled by
+    // the finally below, which frees the maker, the progress range, and the wires.)
+    if (!maker.IsDone()) {
+      throw new Error("loft: ThruSections could not build a solid through the given sections");
+    }
     const shape = maker.Shape();
     // The null `Shape()` handle is itself an owned allocation — free it before the
     // throw. On success the returned Solid owns it, so it is freed exactly once.

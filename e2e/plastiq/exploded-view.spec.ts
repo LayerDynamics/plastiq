@@ -10,8 +10,10 @@ async function setRange(page: import("@playwright/test").Page, value: string): P
     '[data-testid="explode-slider"]',
     (el, v) => {
       const input = el as HTMLInputElement;
-      const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")!
-        .set!;
+      const setter = Object.getOwnPropertyDescriptor(
+        window.HTMLInputElement.prototype,
+        "value",
+      )!.set!;
       setter.call(input, v);
       input.dispatchEvent(new Event("input", { bubbles: true }));
     },
@@ -24,7 +26,8 @@ test("exploded view spreads the assembly and reassembles at factor 0", async ({ 
   await expect(page.getByTestId("status")).toHaveText("ready", { timeout: 240_000 });
   await page.waitForFunction(
     () =>
-      (globalThis as { __plastiqViewport?: { builtPart: unknown } }).__plastiqViewport?.builtPart != null,
+      (globalThis as { __plastiqViewport?: { builtPart: unknown } }).__plastiqViewport?.builtPart !=
+      null,
     undefined,
     { timeout: 240_000 },
   );
@@ -37,12 +40,11 @@ test("exploded view spreads the assembly and reassembles at factor 0", async ({ 
 
   const settle = (): Promise<void> =>
     page.evaluate(
-      () =>
-        new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r()))),
+      () => new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r()))),
     );
   const shot = (): Promise<string> =>
-    page.evaluate(
-      () => (document.querySelector("#viewport-root canvas") as HTMLCanvasElement).toDataURL(),
+    page.evaluate(() =>
+      (document.querySelector("#viewport-root canvas") as HTMLCanvasElement).toDataURL(),
     );
 
   await settle();
@@ -53,8 +55,40 @@ test("exploded view spreads the assembly and reassembles at factor 0", async ({ 
   const exploded = await shot();
   expect(exploded).not.toBe(assembled);
 
+  // R7/S4: mate authoring is visibly unavailable while picks would hit the
+  // rendered exploded pose instead of the document pose.
+  await page.getByTestId("workspace-switcher").selectOption("assemble");
+  await expect(page.getByTestId("act-mate-mode")).toBeDisabled();
+
   await setRange(page, "0"); // reassemble — back to the original render
   await settle();
   const reassembled = await shot();
   expect(reassembled).toBe(assembled);
+
+  await expect(page.getByTestId("act-mate-mode")).toBeEnabled();
+  await page.getByTestId("act-mate-mode").click();
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          (
+            globalThis as { __cadStore: { getState: () => { mateMode: boolean } } }
+          ).__cadStore.getState().mateMode,
+      ),
+    )
+    .toBe(true);
+
+  // Exploding an already-active mate session exits it and clears the unsafe state.
+  await setRange(page, "1.5");
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          (
+            globalThis as { __cadStore: { getState: () => { mateMode: boolean } } }
+          ).__cadStore.getState().mateMode,
+      ),
+    )
+    .toBe(false);
+  await expect(page.getByTestId("status")).toContainText(/mate mode exited/i);
 });

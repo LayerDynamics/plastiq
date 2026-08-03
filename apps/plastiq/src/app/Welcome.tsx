@@ -91,12 +91,18 @@ export function Welcome(): React.JSX.Element | null {
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-start justify-between border-b border-[#222a36] px-6 py-4">
-          <div>
-            <h1 className="text-lg font-bold text-[#eaf2ff]">Welcome to Plastiq</h1>
-            <p className="text-[13px] text-[#9ab]">
-              A parametric CAD editor in your browser — sketch a profile, turn it into a solid,
-              assemble parts, and simulate. Everything runs locally; nothing is uploaded.
-            </p>
+          <div className="flex items-start gap-3">
+            <img src="/plastiq.svg" alt="" aria-hidden="true" className="mt-0.5 h-10 w-auto" />
+            <div>
+              <div className="mb-0.5 text-[9px] font-bold uppercase tracking-[0.24em] text-[#7fb4ff]">
+                Local-first CAD studio
+              </div>
+              <h1 className="text-lg font-bold text-[#eaf2ff]">Welcome to Plastiq</h1>
+              <p className="text-[13px] text-[#9ab]">
+                Sketch precise profiles, build parametric solids, assemble mechanisms, simulate
+                motion, and turn physical captures into editable CAD—without leaving your machine.
+              </p>
+            </div>
           </div>
           <button
             type="button"

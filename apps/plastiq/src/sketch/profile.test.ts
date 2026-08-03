@@ -142,7 +142,8 @@ describe("extractProfile — circle profile (FR-16 true curved edge)", () => {
       if (hole.kind === "loop") {
         // The hole loop carries the 4 inner corners.
         const hv = new Set([hole.start, ...hole.segments.map((s) => s.to)].map((c) => c.join(",")));
-        for (const c of ["0.01,0.01", "0.04,0.01", "0.04,0.02", "0.01,0.02"]) expect(hv.has(c)).toBe(true);
+        for (const c of ["0.01,0.01", "0.04,0.01", "0.04,0.02", "0.01,0.02"])
+          expect(hv.has(c)).toBe(true);
       }
     }
   });
@@ -224,6 +225,26 @@ describe("extractProfile — circle profile (FR-16 true curved edge)", () => {
   });
 });
 
+describe("extractProfile — exact ellipse (§13.3)", () => {
+  it("derives the solver-native centre/focus/minor-radius profile", () => {
+    const m: SketchModel = {
+      plane: "XY",
+      points: [
+        { id: "c", u: 0.01, v: 0.02 },
+        { id: "f", u: 0.05, v: 0.02 },
+      ],
+      entities: [{ id: "e", kind: "ellipse", center: "c", focus1: "f", radmin: 0.02 }],
+      constraints: [],
+    };
+    expect(extractProfile(m)).toEqual({
+      kind: "ellipse",
+      center: [0.01, 0.02],
+      focus1: [0.05, 0.02],
+      minorRadius: 0.02,
+    });
+  });
+});
+
 describe("extractProfile — line + arc loop (FR-16 arc tool)", () => {
   it("walks a half-disc (diameter line + semicircular arc) into typed segments", () => {
     // a(−r,0) —line— b(r,0) —arc through (0,r)— back to a.
@@ -286,7 +307,7 @@ describe("extractProfile — line + spline loop (FR-16 spline tool)", () => {
 });
 
 describe("isProfile — validates a deserialized (persisted) payload", () => {
-  it("accepts a well-formed loop (line + arc) and circle", () => {
+  it("accepts a well-formed loop, circle, and ellipse", () => {
     expect(
       isProfile({
         kind: "loop",
@@ -298,6 +319,9 @@ describe("isProfile — validates a deserialized (persisted) payload", () => {
       }),
     ).toBe(true);
     expect(isProfile({ kind: "circle", center: [0, 0], radius: 0.01 })).toBe(true);
+    expect(
+      isProfile({ kind: "ellipse", center: [0, 0], focus1: [0.04, 0], minorRadius: 0.02 }),
+    ).toBe(true);
   });
 
   it("rejects malformed / legacy payloads", () => {

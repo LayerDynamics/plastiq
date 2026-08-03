@@ -13,9 +13,9 @@ The producer boundary of the pipeline. Two artifacts leave the service:
     ``x y z nx ny nz red green blue`` — the exact header property order
     ``packages/capture/src/pointcloud.ts`` reads by position.
 
-Distortion is **zeroed** in the emitted intrinsics when ``undistort=True`` (D-6: the frames are
-returned already undistorted); with ``undistort=False`` the calibrated Brown-Conrady coefficients
-ride on the wire for external consumers.
+The emitted intrinsics carry the Brown-Conrady coefficients from the calibrated ``dist`` argument when
+one is supplied; the sparse pipeline does not estimate distortion, so in practice ``dist`` is ``None``
+and ``k1..p2`` are emitted as zero.
 
 MLX-free by construction (numpy + stdlib only): this module is on the CI import seam (NFR-4) with
 ``normalize``/``exif``/``jobs``. It never imports ``mlx`` or ``cv2`` (D-1). Deterministic — no RNG,
@@ -58,7 +58,6 @@ def emit_transforms_json(
     image_names: Sequence[str],
     *,
     dist: Optional[Sequence[float]] = None,
-    undistort: bool = True,
     applied_transform: Optional[np.ndarray] = None,
     reproj_errors: Optional[Sequence[float]] = None,
 ) -> str:
@@ -72,10 +71,8 @@ def emit_transforms_json(
         image_names: ``N`` upload filenames; ``frames[i].file_path = "./images/<name>"`` (the panel's
             filename pairing).
         dist: optional calibrated Brown-Conrady ``[k1, k2, p1, p2(, k3)]``; only the first four are
-            emitted (§6.2 field set). Ignored when ``undistort=True``.
-        undistort: when ``True`` (D-6 default) the frames are already undistorted, so ``k1..p2`` are
-            **zeroed**; when ``False`` the calibrated ``dist`` coefficients are emitted (zeros if
-            ``dist`` is ``None``).
+            emitted (§6.2 field set). ``None`` (the default, and the sparse pipeline's only path, since
+            it does not estimate distortion) emits ``k1..p2`` as zero.
         applied_transform: optional ``(3, 4)`` forward normalization similarity (D-5) — emitted as
             ``applied_transform`` when given, omitted otherwise.
         reproj_errors: optional ``N`` per-frame mean reprojection errors (px) — emitted as each
@@ -98,7 +95,7 @@ def emit_transforms_json(
     if K.shape != (3, 3):
         raise ValueError(f"K must have shape (3, 3); got {K.shape}")
 
-    if undistort or dist is None:
+    if dist is None:
         k1 = k2 = p1 = p2 = 0.0
     else:
         coeffs = np.asarray(dist, dtype=np.float64).ravel()

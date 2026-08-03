@@ -40,7 +40,10 @@ import type { BRepAlgoAPI_BooleanOperation, TopoDS_Shape } from "opencascade.js"
 
 import type { Occt } from "../oc/init.js";
 import { shapeEnums } from "../mesh/normals.js";
+import type { OwnedShapeHistory, ShapeHistory } from "../mesh/remap.js";
 import { Solid } from "../solid/solid.js";
+
+export type { OwnedShapeHistory, ShapeHistory };
 
 export type BooleanResult =
   | {
@@ -56,8 +59,36 @@ export type BooleanResult =
        * legitimate cases (the same over-strict rejection §4.2 already flags in
        * `extrudeToFace`). Callers that require one body should check it. */
       lumps: number;
+      /**
+       * True when `ShapeUpgrade_UnifySameDomain` could NOT merge the coplanar
+       * fragments a boolean leaves behind (it threw a Standard_Failure on exotic
+       * input, or produced a null result) and the operation fell back to the
+       * fragmented-but-valid shape (K4). Downstream coplanar-face selection —
+       * "shell the top", "fillet the top edges", any pre-union FaceRef — may then
+       * act on only HALF of what the user sees as one face (see the module header).
+       * The rebuild loop lowers this to a feature-level warning. Omitted (falsy)
+       * on the normal path where the merge succeeded.
+       */
+      degraded?: boolean;
+      /**
+       * §13.1 derivation history: `BRepAlgoAPI_*::History()` (merged with
+       * UnifySameDomain's history when that step succeeded). Optional — absent
+       * when History() is uncallable/null or fill failed. Caller MUST
+       * `history.delete()` after faceIdRemap (or when discarding); {@link cut}
+       * frees it automatically.
+       */
+      history?: OwnedShapeHistory;
     }
   | { ok: false; error: string };
+
+/**
+ * Free an optional boolean history handle. Safe on failure results and when
+ * history was never attached. Call after taking `solid` when you do not need
+ * faceIdRemap — otherwise the long-lived worker leaks every boolean's Handle.
+ */
+export function releaseBooleanHistory(r: BooleanResult): void {
+  if (r.ok && r.history) r.history.delete();
+}
 
 /**
  * Fuzzy tolerance applied to every boolean, SI metres — OCCT's
@@ -100,8 +131,23 @@ function countLumps(oc: Occt, shape: TopoDS_Shape): number {
  * lose the caller's geometry, since the un-unified result is still valid (merely
  * fragmented). `ConcatBSplines` stays false: concatenating spline faces changes
  * their parameterisation for no benefit here.
+ *
+ * Returns `{ shape, degraded }`: `degraded` is true when the merge did NOT apply
+ * (threw, or produced a null result) so the returned shape is the fragmented
+ * input (K4) — the caller surfaces the flag instead of the old bare
+ * `catch { return shape; }` that swallowed the failure silently.
+ *
+ * When `booleanHistory` is the raw `BRepTools_History` from the boolean (still
+ * behind an owned Handle), a successful unify MERGES its own History into it so
+ * faceIdRemap walks input faces through to the FINAL unified faces rather than
+ * the pre-unify fragments. Merge failures are silent — boolean history alone
+ * still works via faceIdRemap's identity + signature fallback.
  */
-function unifySameDomain(oc: Occt, shape: TopoDS_Shape): TopoDS_Shape {
+function unifySameDomain(
+  oc: Occt,
+  shape: TopoDS_Shape,
+  booleanHistory?: { Merge_1(h: { IsNull(): boolean; delete(): void }): void } | null,
+): { shape: TopoDS_Shape; degraded: boolean } {
   const usd = new oc.ShapeUpgrade_UnifySameDomain_2(shape, true, true, false);
   try {
     // Do not mutate the input shape in place — the caller may still own copies of
@@ -110,17 +156,84 @@ function unifySameDomain(oc: Occt, shape: TopoDS_Shape): TopoDS_Shape {
     usd.Build();
     const merged = usd.Shape();
     if (merged.IsNull()) {
+      // Unify ran but produced nothing usable — keep the fragmented-but-valid
+      // input and FLAG the degrade rather than presenting it as a clean merge.
       merged.delete();
-      return shape;
+      return { shape, degraded: true };
+    }
+    // Chain unify's face map onto the boolean history so Modified/IsRemoved
+    // describe the final solid faceIdRemap will walk (not pre-unify fragments).
+    if (booleanHistory) {
+      try {
+        const uh = usd.History_1();
+        try {
+          if (!uh.IsNull()) booleanHistory.Merge_1(uh);
+        } finally {
+          uh.delete();
+        }
+      } catch {
+        // History_1 / Merge uncallable in this build — leave boolean history as-is.
+      }
     }
     shape.delete();
-    return merged;
+    return { shape: merged, degraded: false };
   } catch {
     // UnifySameDomain throws a raw Standard_Failure on exotic input. The boolean
-    // itself already succeeded, so degrade to the fragmented-but-valid result.
-    return shape;
+    // itself already succeeded, so degrade to the fragmented-but-valid result —
+    // but SIGNAL it (K4) instead of swallowing the failure silently.
+    return { shape, degraded: true };
   } finally {
     usd.delete();
+  }
+}
+
+/** BRepTools_History surface we need: ShapeHistory queries + Merge for unify. */
+type RawBooleanHistory = ShapeHistory & {
+  Merge_1(h: { IsNull(): boolean; delete(): void }): void;
+};
+
+/**
+ * Pull `op.History()` into an owned ShapeHistory. Returns undefined when the
+ * method is missing, HasHistory is false, or the handle is null — those paths
+ * are reported by the boolean.history tests, not assumed.
+ */
+function captureOpHistory(op: BRepAlgoAPI_BooleanOperation): {
+  owned: OwnedShapeHistory;
+  /** Raw history object for Merge_1 with UnifySameDomain (same lifetime as owned). */
+  raw: RawBooleanHistory;
+} | undefined {
+  try {
+    // SetToFillHistory(true) is required before Build; HasHistory may still be
+    // false on some paths. Guard every step — embind can ship declared-but-
+    // uncallable methods (see boolean.ts header on ArgumentAnalyzer).
+    if (typeof op.HasHistory === "function" && !op.HasHistory()) return undefined;
+    if (typeof op.History !== "function") return undefined;
+    const handle = op.History();
+    if (handle.IsNull()) {
+      handle.delete();
+      return undefined;
+    }
+    const raw = handle.get() as RawBooleanHistory | null | undefined;
+    if (!raw) {
+      handle.delete();
+      return undefined;
+    }
+    // Ownership of `handle` moves into the OwnedShapeHistory; `raw` stays valid
+    // until owned.delete() (Handle refcount).
+    let disposed = false;
+    const owned: OwnedShapeHistory = {
+      Modified: (s) => raw.Modified(s),
+      Generated: (s) => raw.Generated(s),
+      IsRemoved: (s) => raw.IsRemoved(s),
+      delete() {
+        if (disposed) return;
+        disposed = true;
+        handle.delete();
+      },
+    };
+    return { owned, raw };
+  } catch {
+    return undefined;
   }
 }
 
@@ -142,6 +255,10 @@ function runBoolean(
   const argList = new oc.TopTools_ListOfShape_1();
   const toolList = new oc.TopTools_ListOfShape_1();
   const range = new oc.Message_ProgressRange_1();
+  // Captured history must outlive `op.delete()` in finally — Handle refcount
+  // keeps BRepTools_History alive after the algo is freed. On failure paths we
+  // free it before returning so a failed boolean never leaks a Handle.
+  let captured: ReturnType<typeof captureOpHistory>;
   try {
     for (const s of args) argList.Append_1(s.shape);
     for (const s of tools) toolList.Append_1(s.shape);
@@ -152,12 +269,17 @@ function runBoolean(
     // the pattern/hole loops reuse the same Solid across successive booleans, and
     // per-feature shape caching (§2.5.5) depends on inputs being immutable.
     op.SetNonDestructive(true);
+    // §13.1 — fill BRepTools_History so faceIdRemap can re-anchor FaceRefs without
+    // a centroid tie-break. Cheap when nobody queries it; required for History().
+    if (typeof op.SetToFillHistory === "function") {
+      op.SetToFillHistory(true);
+    }
     op.Build(range);
 
     if (op.HasErrors() || !op.IsDone()) {
       return { ok: false, error: `${name} produced no valid result` };
     }
-    let shape = op.Shape();
+    const shape = op.Shape();
     // `Shape()` is an owned embind handle even when null — free it before the
     // failure return, or it leaks in the long-lived worker (cf. extrude/revolve,
     // which `shape.delete()` before throwing on `IsNull`). On success the returned
@@ -166,8 +288,24 @@ function runBoolean(
       shape.delete();
       return { ok: false, error: `${name} produced an empty shape` };
     }
-    shape = unifySameDomain(oc, shape);
-    return { ok: true, solid: new Solid(oc, shape), lumps: countLumps(oc, shape) };
+    // Capture BEFORE op.delete() in finally. Handle is refcounted; owned.history
+    // stays valid after the algo dies.
+    captured = captureOpHistory(op);
+    // unifySameDomain takes ownership of `shape` and returns the merged (or, on a
+    // degrade, the fragmented) shape plus the K4 flag. On success it also merges
+    // its History into the boolean's so remap sees final faces.
+    const unified = unifySameDomain(oc, shape, captured?.raw ?? null);
+    return {
+      ok: true,
+      solid: new Solid(oc, unified.shape),
+      lumps: countLumps(oc, unified.shape),
+      ...(unified.degraded ? { degraded: true } : {}),
+      ...(captured ? { history: captured.owned } : {}),
+    };
+  } catch (err) {
+    // A throw after capture (e.g. Solid ctor) must not leak the Handle.
+    captured?.owned.delete();
+    throw err;
   } finally {
     op.delete();
     range.delete();
@@ -213,5 +351,8 @@ export function intersect(oc: Occt, a: Solid, b: Solid): BooleanResult {
 export function cut(oc: Occt, base: Solid, tool: Solid): Solid {
   const r = subtract(oc, base, tool);
   if (!r.ok) throw new Error(`cut: ${r.error}`);
+  // cut() exposes only the solid — free history so hot rebuild/cut paths don't
+  // leak a Handle_BRepTools_History on every call (§13.1 memory contract).
+  releaseBooleanHistory(r);
   return r.solid;
 }

@@ -9,5 +9,8 @@
   "description": "Browser client for Plastiq's MLX capture/completion service (services/capture): submit an oriented point cloud (/capture) or a partial scan (/complete), poll, and receive a GLB that feeds the MeshDoc → reconstruct (mesh → B-rep) path. Includes the ASCII PLY/XYZ/JSON point-cloud parsers.",
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@plastiq/ml": "workspace:*"
   }
 }

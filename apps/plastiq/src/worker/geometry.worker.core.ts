@@ -12,6 +12,8 @@ import {
   exportStepAssembly,
   faceDatumPlane,
   initDecomposer,
+  intersect,
+  releaseBooleanHistory,
   resolveFaceRef,
   transformRigid,
   type Occt,
@@ -40,14 +42,23 @@ export function toTransfer(
       edgeId: e.edgeId,
       positions: Float32Array.from(e.positions),
       faceNormals: e.faceNormals,
+      // R1/§4.2: forward the PRIMARY analytic edge signature. It already exists
+      // on the TaggedEdge (mesh/tagged.ts:90); dropping it here was the seam that
+      // left every interactive edge pick on the legacy normal path.
+      faceSurfaces: e.faceSurfaces,
       faceIds: e.faceIds,
       midpoint: e.midpoint,
+      // §14 / §17 free-edge flag — only present when the kernel marked the edge.
+      ...(e.isFree ? { isFree: true as const } : {}),
     })),
     vertexIds: t.vertexPoints.map((v) => v.vertexId),
     vertexPositions: Float32Array.from(t.vertexPoints.flatMap((v) => [...v.position])),
     volume,
     com,
     bodyVolumes,
+    // §17: body kind + free-edge tally — lossless forward from TaggedMesh.
+    ...(t.bodyKind !== undefined ? { bodyKind: t.bodyKind } : {}),
+    ...(t.freeEdgeCount !== undefined ? { freeEdgeCount: t.freeEdgeCount } : {}),
   };
 }
 
@@ -213,6 +224,53 @@ export async function handleRequest(
         }
       } finally {
         solid.delete();
+      }
+    }
+    if (req.op === "interference") {
+      if (req.candidates.length === 0) {
+        return {
+          response: { id: req.id, ok: true, op: "interference", clashes: [] },
+          transfer: [],
+        };
+      }
+      const built = rebuildDocument(oc, req.doc);
+      if (!built) throw new Error("interference: the document has no geometry");
+      const instances = effectiveAssembly(req.doc).instances;
+      const posed = poseSolidsForExport(
+        oc,
+        built,
+        instances.map((instance) => instance.pose),
+      );
+      try {
+        const byId = new Map(instances.map((instance, i) => [instance.id, posed[i]!]));
+        const clashes: { a: string; b: string }[] = [];
+        for (const candidate of req.candidates) {
+          const a = byId.get(candidate.a);
+          const b = byId.get(candidate.b);
+          if (!a || !b) throw new Error("interference: candidate references an unknown instance");
+          // Exact-distance rejection is cheap compared with a boolean and removes
+          // AABB false positives before the positive-volume common is built.
+          if (a.distanceTo(b).distance > 1e-7) continue;
+          const common = intersect(oc, a, b);
+          if (!common.ok) throw new Error(`interference: ${common.error}`);
+          try {
+            // Touching faces/edges have zero common volume and are not a clash.
+            const scaleVolume = Math.max(a.volume(), b.volume());
+            if (common.solid.volume() > Math.max(scaleVolume * 1e-12, 1e-18)) {
+              clashes.push(candidate);
+            }
+          } finally {
+            releaseBooleanHistory(common);
+            common.solid.delete();
+          }
+        }
+        return {
+          response: { id: req.id, ok: true, op: "interference", clashes },
+          transfer: [],
+        };
+      } finally {
+        for (const solid of posed) solid.delete();
+        built.delete();
       }
     }
     // Isolating build (FR-24): a bad feature is reported in `statuses` and

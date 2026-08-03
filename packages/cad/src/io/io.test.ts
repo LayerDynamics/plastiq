@@ -5,7 +5,7 @@ import { beforeAll, describe, expect, it } from "vitest";
 import { initOcct, type Occt } from "../oc/init.js";
 import { mm } from "../unit/index.js";
 import { makeBox } from "../solid/primitives.js";
-import { exportGltf, exportIges, exportStep, importStep } from "./index.js";
+import { exportGltf, exportIges, exportStep, importIges, importStep } from "./index.js";
 
 let oc: Occt;
 
@@ -107,20 +107,21 @@ describe("STEP units (I1)", () => {
 });
 
 describe("IGES", () => {
-  it("exports a complete, well-formed IGES file (all five sections present)", () => {
+  it("exports a complete file and re-imports it at the correct SI size", () => {
     const box = makeBox(oc, mm(10), mm(10), mm(10));
     const iges = exportIges(oc, box);
     expect(iges.length).toBeGreaterThan(0);
-    // OCCT has no IGES importer here, so verify structural completeness instead
-    // of a round-trip. The IGES Terminate line summarises the record counts of
-    // every preceding section in order — Start, Global, Directory, Parameter —
-    // and is itself the 'T' section, e.g. "S      1G      4D     98P     49 ...
-    // T0000001". Matching it proves all five sections exist with positive counts;
-    // a truncated/garbage export would be missing this line or its tallies.
+    // The IGES Terminate line summarises all five sections.
     expect(iges).toMatch(/S\s+\d+G\s+\d+D\s+\d+P\s+\d+\s+T\s*\d+/);
     // The Directory/Parameter counts are non-trivial — the box geometry really
     // got written (a 1×1×1 cm box yields dozens of entity records, not zero).
     expect(iges).toMatch(/D\s+([1-9]\d+)P\s+([1-9]\d+)/);
+
+    const back = importIges(oc, iges);
+    expect(back.volume()).toBeCloseTo(mm(10) ** 3, 12);
+    // BRepBndLib includes OCCT's 0.1 µm geometric gap in each maximum.
+    for (const maximum of back.boundingBox().max) expect(maximum).toBeCloseTo(mm(10), 6);
+    back.delete();
     box.delete();
   });
 });

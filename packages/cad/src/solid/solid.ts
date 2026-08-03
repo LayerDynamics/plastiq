@@ -9,6 +9,15 @@ import type { Occt } from "../oc/init.js";
 import type { TopoDS_Shape } from "opencascade.js";
 import { shapeEnums } from "../mesh/normals.js";
 
+export interface ShapeDistance {
+  /** Exact minimum B-rep separation in SI metres (zero for touching/intersection). */
+  distance: number;
+  /** Closest points on this shape and `other`, respectively, in SI metres. */
+  points: readonly [readonly [number, number, number], readonly [number, number, number]];
+  /** OCCT reports one shape contained inside the other. */
+  inner: boolean;
+}
+
 export class Solid {
   /** True once {@link delete} has freed the shape — guards against a double-free. */
   private disposed = false;
@@ -27,54 +36,122 @@ export class Solid {
     this.shape.delete();
   }
 
-  /** A deep copy of this solid as a new owned Solid (callers must delete it). */
+  /** A deep copy of this solid as a new owned Solid (callers must delete it).
+   *
+   * K6 — the copier is freed on EVERY exit: should `Shape()` raise a
+   * Standard_Failure it would otherwise leak in the long-lived worker. */
   copy(): Solid {
     const copier = new this.oc.BRepBuilderAPI_Copy_2(this.shape, true, false);
-    const dup = copier.Shape();
-    copier.delete();
-    return new Solid(this.oc, dup);
+    try {
+      return new Solid(this.oc, copier.Shape());
+    } finally {
+      copier.delete();
+    }
   }
 
   /** Whether the B-rep shape passes OCCT's validity checks. */
   isValid(): boolean {
     const analyzer = new this.oc.BRepCheck_Analyzer(this.shape, true, false);
-    const valid = analyzer.IsValid_2();
-    analyzer.delete();
-    return valid;
+    try {
+      return analyzer.IsValid_2();
+    } finally {
+      analyzer.delete();
+    }
   }
 
   /** Volume in cubic metres (closed-shape volume properties). */
   volume(): number {
     const props = new this.oc.GProp_GProps_1();
-    this.oc.BRepGProp.VolumeProperties_1(this.shape, props, false, false, false);
-    const v = props.Mass();
-    props.delete();
-    return v;
+    try {
+      this.oc.BRepGProp.VolumeProperties_1(this.shape, props, false, false, false);
+      return props.Mass();
+    } finally {
+      props.delete();
+    }
   }
 
   /** Centre of mass in SI metres. */
   centreOfMass(): [number, number, number] {
+    // K6 — props and the returned gp_Pnt are freed on every exit (nested finally),
+    // so a Standard_Failure from VolumeProperties/CentreOfMass leaks neither.
     const props = new this.oc.GProp_GProps_1();
-    this.oc.BRepGProp.VolumeProperties_1(this.shape, props, false, false, false);
-    const c = props.CentreOfMass();
-    const out: [number, number, number] = [c.X(), c.Y(), c.Z()];
-    c.delete();
-    props.delete();
-    return out;
+    try {
+      this.oc.BRepGProp.VolumeProperties_1(this.shape, props, false, false, false);
+      const c = props.CentreOfMass();
+      try {
+        return [c.X(), c.Y(), c.Z()];
+      } finally {
+        c.delete();
+      }
+    } finally {
+      props.delete();
+    }
   }
 
   /** Axis-aligned bounding box corners [min, max] in SI metres. */
   boundingBox(): { min: [number, number, number]; max: [number, number, number] } {
+    // K6 — box and both corner points are freed on every exit; nested finallys so
+    // a throw between allocating `lo` and `hi` still frees whatever exists.
     const box = new this.oc.Bnd_Box_1();
-    this.oc.BRepBndLib.Add(this.shape, box, true);
-    const lo = box.CornerMin();
-    const hi = box.CornerMax();
-    const min: [number, number, number] = [lo.X(), lo.Y(), lo.Z()];
-    const max: [number, number, number] = [hi.X(), hi.Y(), hi.Z()];
-    lo.delete();
-    hi.delete();
-    box.delete();
-    return { min, max };
+    try {
+      this.oc.BRepBndLib.Add(this.shape, box, true);
+      const lo = box.CornerMin();
+      try {
+        const hi = box.CornerMax();
+        try {
+          const min: [number, number, number] = [lo.X(), lo.Y(), lo.Z()];
+          const max: [number, number, number] = [hi.X(), hi.Y(), hi.Z()];
+          return { min, max };
+        } finally {
+          hi.delete();
+        }
+      } finally {
+        lo.delete();
+      }
+    } finally {
+      box.delete();
+    }
+  }
+
+  /**
+   * Exact minimum distance to another B-rep shape via
+   * `BRepExtrema_DistShapeShape`. Unlike tessellation/AABB approximations this
+   * evaluates the underlying curves and surfaces. Both solids must belong to
+   * this OCCT engine instance.
+   */
+  distanceTo(other: Solid): ShapeDistance {
+    if (other.oc !== this.oc)
+      throw new Error("distanceTo: solids belong to different OCCT engines");
+    const extrema = new this.oc.BRepExtrema_DistShapeShape_1();
+    const progress = new this.oc.Message_ProgressRange_1();
+    try {
+      extrema.LoadS1(this.shape);
+      extrema.LoadS2(other.shape);
+      if (!extrema.Perform(progress) || !extrema.IsDone() || extrema.NbSolution() < 1) {
+        throw new Error("distanceTo: OCCT could not compute a shape distance");
+      }
+      const a = extrema.PointOnShape1(1);
+      try {
+        const b = extrema.PointOnShape2(1);
+        try {
+          return {
+            distance: extrema.Value(),
+            points: [
+              [a.X(), a.Y(), a.Z()],
+              [b.X(), b.Y(), b.Z()],
+            ],
+            inner: extrema.InnerSolution(),
+          };
+        } finally {
+          b.delete();
+        }
+      } finally {
+        a.delete();
+      }
+    } finally {
+      progress.delete();
+      extrema.delete();
+    }
   }
 }
 

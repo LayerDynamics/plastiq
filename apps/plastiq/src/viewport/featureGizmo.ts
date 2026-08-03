@@ -39,6 +39,7 @@ export const FEATURE_SECONDARY_PARAMS: Record<string, readonly string[]> = {
   cut: ["back"],
   linearPattern: ["spacing", "count"],
   circularPattern: ["count", "angle"],
+  pathPattern: ["count"],
   fillet: ["radius2"],
   chamfer: ["distance2"],
   loft: [],

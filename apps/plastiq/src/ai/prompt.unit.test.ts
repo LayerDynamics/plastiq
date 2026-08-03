@@ -54,7 +54,7 @@ describe("R2.4 parametric system prompt", () => {
 
   it("teaches the build vocabulary that fixes the common geometry mistakes", () => {
     // Each phrase guards a real failure observed in generation:
-    expect(p).toMatch(/silently ignored/i);   // features dumped under "assembly" vanish
+    expect(p).toMatch(/silently ignored/i);   // a feature OBJECT under a non-"features" key vanishes
     expect(p).toMatch(/round.*sketch|cylinder/i); // a cylinder is sketch-circle+extrude, not a box
     expect(p).toContain("boolean");           // REMOVE / multi-body tools, not boss pads
     expect(p).toMatch(/\bsubtract\b/i);
@@ -70,6 +70,24 @@ describe("R2.4 parametric system prompt", () => {
     expect(p).not.toMatch(/REPLACE the current body/i);
     expect(p).toMatch(/data\.op is "new"|data\.op "new"/i);
     expect(p).toMatch(/toFace/i);
+  });
+
+  it("R11: documents assembly/placement TRUTHFULLY (both are schema-accepted)", () => {
+    // The schema accepts an "assembly" top-level key (schema.ts documentSchema) and a
+    // "placement" feature (schema.ts) — the prompt must NOT deny them.
+    expect(p).not.toMatch(/Do NOT invent other keys such as "assembly"/);
+    // It documents "assembly" as an accepted key, not a vanishing one...
+    expect(p).toMatch(/optional "assembly"|"assembly" \(component/i);
+    // ...and tells the model to PRESERVE an existing assembly/placement on re-emit.
+    expect(p).toMatch(/placement/i);
+    expect(p).toMatch(/PRESERVE/i);
+  });
+
+  it("R11: is selection-aware (honor 'the face I picked')", () => {
+    expect(p).toMatch(/CURRENT SELECTION/);
+    expect(p).toMatch(/the face I\s+picked|face I picked/i);
+    // The seed-a-selector-from-the-pick guidance (not raw pick ids).
+    expect(p).toMatch(/tangentFaces/);
   });
 });
 

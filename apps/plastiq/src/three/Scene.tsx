@@ -30,6 +30,7 @@ import { localToWorld } from "../assembly/model.js";
 import { VoxelSculpt } from "./VoxelSculpt.js";
 import { MeshEditing } from "./MeshEditing.js";
 import { SketchScene } from "../sketch/SketchScene.js";
+import { setProjectableEdgePolylines } from "../sketch/projectableEdges.js";
 import type { DatumPlane } from "@plastiq/cad";
 import { GRID_CENTER, GRID_CELL } from "./colors.js";
 import { buildPart, buildMeshBody, disposePart, type BuiltPart, type BuiltMeshBody } from "../viewport/buildMesh.js";
@@ -188,6 +189,13 @@ export function Scene({
   instances: InstanceBody[] | null;
   onMeshBodiesChange: (bodies: MeshBody[], persist?: boolean) => void;
 }): React.JSX.Element {
+  // §13.3 project-edges: publish edge polylines for the sketch "Project edges"
+  // action without threading mesh through the sketch store.
+  useEffect(() => {
+    setProjectableEdgePolylines(mesh ? mesh.edges.map((e) => e.positions) : null);
+    return () => setProjectableEdgePolylines(null);
+  }, [mesh]);
+
   const camera = useThree((s) => s.camera);
   const controls = useThree((s) => s.controls) as OrbitLike | null;
   // The open voxel sculpt (ADR-0010), or null. Non-null swaps the scene to the

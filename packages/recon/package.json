@@ -9,5 +9,8 @@
   "description": "Browser client for Plastiq's mesh→B-rep reconstruction service (services/reconstruct): submit a base64 GLB, poll, and receive STEP + report.",
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@plastiq/ml": "workspace:*"
   }
 }

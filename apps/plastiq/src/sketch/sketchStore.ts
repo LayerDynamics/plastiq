@@ -27,6 +27,13 @@ import {
   type SketchModel,
   type SketchPoint,
 } from "./model.js";
+import { appendProjectedSegments, type AppendProjectedOptions } from "./projectEdges.js";
+import {
+  patternSketch,
+  type PatternSketchOptions,
+  type SketchPatternParams,
+} from "./patternSketch.js";
+import type { PlaneSegment2 } from "@plastiq/cad";
 
 export type SketchTool =
   | "select"
@@ -35,6 +42,7 @@ export type SketchTool =
   | "rectCenter"
   | "circle"
   | "circle3"
+  | "ellipse"
   | "arc3"
   | "arcCenter"
   | "polygon"
@@ -131,6 +139,21 @@ export interface SketchStore {
   addPoint: (p: Omit<SketchPoint, "id">) => string;
   addEntity: (e: SketchEntity) => void;
   addConstraint: (c: SketchConstraint) => void;
+  /**
+   * §13.3 — merge projected plane segments as construction lines (one undo step).
+   * Pure geometry from `sectionCurvesToPlaneSegments` / mesh polylines.
+   */
+  appendProjectedSegments: (
+    segments: readonly PlaneSegment2[],
+    opts?: Omit<AppendProjectedOptions, "makeId">,
+  ) => void;
+  /**
+   * §13.3 — linear/circular pattern of sketch entities with constraint
+   * replication (one undo step). No-op when count ≤ 1 or nothing to pattern.
+   */
+  applyPattern: (params: SketchPatternParams, opts?: Omit<PatternSketchOptions, "makeId">) => void;
+  /** Create signed-distance derived offsets for selected line/circle/arc/ellipse curves. */
+  offsetSelection: (distance: number) => void;
   /** Apply a select-then-constrain constraint to the current selection (M3.4). */
   applyConstraint: (kind: ConstraintKind) => void;
   /** Add the driving dimensions a type-while-drawing commit produced, in ONE step:
@@ -254,6 +277,54 @@ export const useSketchStore = create<SketchStore>((set, get) => ({
   addEntity: (e) => {
     get().pushHistory();
     set((s) => ({ model: { ...s.model, entities: [...s.model.entities, e] } }));
+  },
+
+  appendProjectedSegments: (segments, opts) => {
+    if (segments.length === 0) return;
+    get().pushHistory();
+    set((s) => ({
+      model: appendProjectedSegments(s.model, segments, {
+        ...opts,
+        makeId: (prefix) => id(prefix === "p" ? "proj_p" : "proj_e"),
+      }),
+    }));
+  },
+
+  applyPattern: (params, opts) => {
+    if (params.count <= 1) return;
+    const { model } = get();
+    const result = patternSketch(model, params, {
+      ...opts,
+      makeId: (prefix) => id(prefix === "p" ? "pat_p" : prefix === "e" ? "pat_e" : "pat_c"),
+    });
+    if (result.createdEntityIds.length === 0) return;
+    get().pushHistory();
+    set({ model: result.model });
+    get().solve();
+  },
+
+  offsetSelection: (distance) => {
+    if (!Number.isFinite(distance) || Math.abs(distance) <= 1e-12) return;
+    const { model, selection, construction } = get();
+    const sources = model.entities.filter(
+      (e) =>
+        selection.includes(e.id) &&
+        (e.kind === "line" || e.kind === "circle" || e.kind === "arc" || e.kind === "ellipse"),
+    );
+    if (sources.length === 0) return;
+    get().pushHistory();
+    const created = sources.map((source) => ({
+      id: id("off"),
+      kind: "offset" as const,
+      source: source.id,
+      distance,
+      ...(construction ? { construction: true as const } : {}),
+    }));
+    set((s) => ({
+      model: { ...s.model, entities: [...s.model.entities, ...created] },
+      selection: created.map((e) => e.id),
+    }));
+    get().solve();
   },
 
   addConstraint: (c) => {
@@ -502,6 +573,60 @@ export const useSketchStore = create<SketchStore>((set, get) => ({
       return;
     }
 
+    if (tool === "ellipse") {
+      const pending = get().pending;
+      if (pending.length === 0) {
+        set({ pending: [opts?.reusePointId ?? newPoint(u, v)] });
+        return;
+      }
+      if (pending.length === 1) {
+        set({ pending: [...pending, newPoint(u, v)] });
+        return;
+      }
+      const center = get().model.points.find((p) => p.id === pending[0])!;
+      const majorPoint = get().model.points.find((p) => p.id === pending[1])!;
+      const du = majorPoint.u - center.u;
+      const dv = majorPoint.v - center.v;
+      const major = Math.hypot(du, dv);
+      const measuredMinor = perpDistance(
+        [u, v],
+        [center.u, center.v],
+        [majorPoint.u, majorPoint.v],
+      );
+      if (major <= 1e-12 || measuredMinor <= 1e-12) {
+        set({ pending: [] });
+        return;
+      }
+      // A proper ellipse requires b < a. Keep it non-degenerate even if the
+      // third click lands beyond the major-axis endpoint.
+      const minor = Math.min(measuredMinor, major * (1 - 1e-9));
+      const focal = Math.sqrt(Math.max(major * major - minor * minor, 0));
+      const focusU = center.u + (du / major) * focal;
+      const focusV = center.v + (dv / major) * focal;
+      set((s) => ({
+        model: {
+          ...s.model,
+          points: s.model.points.map((p) =>
+            p.id === pending[1] ? { ...p, u: focusU, v: focusV } : p,
+          ),
+          entities: [
+            ...s.model.entities,
+            {
+              id: id("e"),
+              kind: "ellipse",
+              center: pending[0]!,
+              focus1: pending[1]!,
+              radmin: minor,
+              ...ctor,
+            },
+          ],
+        },
+        pending: [],
+      }));
+      get().solve();
+      return;
+    }
+
     if (tool === "rectCenter") {
       // First click = centre; second click = a corner → centred rectangle.
       const centerId = get().pending[0];
@@ -696,7 +821,13 @@ export const useSketchStore = create<SketchStore>((set, get) => ({
   solve: () => {
     const { model } = get();
     const input = toSolverInput(model);
-    const result = solveSketch(input.points, input.circles, input.constraints);
+    const result = solveSketch(
+      input.points,
+      input.circles,
+      input.constraints,
+      input.ellipses,
+      input.arcs,
+    );
     // Write the solved positions back so the canvas reflects the satisfied model.
     // `result.radii` is parallel to the circle entities in `entities.filter(kind === "circle")`
     // order — the same order `toSolverInput` emits them — so consume it with a running circle
@@ -705,6 +836,64 @@ export const useSketchStore = create<SketchStore>((set, get) => ({
     // and the stale radius leaks into the rendered circle, the extracted profile, and hit-testing.
     set((s) => {
       let circleIdx = 0;
+      let ellipseIdx = 0;
+      const solvedPoint = (pointId: string): { x: number; y: number } | undefined => {
+        const i = s.model.points.findIndex((p) => p.id === pointId);
+        return i >= 0 ? result.points[i] : undefined;
+      };
+      const norm = (angle: number): number =>
+        ((angle % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2);
+      // Arc centres are solver-only points. Reconstruct each persisted through
+      // point at the same fractional sweep on the solved circle before ordinary
+      // point write-back, so circle↔arc / arc↔arc constraints visibly update the
+      // actual three-point arc entity.
+      for (const e of s.model.entities) {
+        if (e.kind !== "arc") continue;
+        const arcIdx = input.arcEntityIds.indexOf(e.id);
+        if (arcIdx < 0) continue;
+        const arcInput = input.arcs[arcIdx]!;
+        const center = result.points[arcInput.center];
+        const start = solvedPoint(e.a);
+        const end = solvedPoint(e.b);
+        const originalA = s.model.points.find((p) => p.id === e.a);
+        const originalB = s.model.points.find((p) => p.id === e.b);
+        const originalThrough = s.model.points.find((p) => p.id === e.through);
+        const throughIndex = s.model.points.findIndex((p) => p.id === e.through);
+        if (
+          !center ||
+          !start ||
+          !end ||
+          !originalA ||
+          !originalB ||
+          !originalThrough ||
+          throughIndex < 0
+        ) {
+          continue;
+        }
+        const cc = circumcircle(
+          [originalA.u, originalA.v],
+          [originalB.u, originalB.v],
+          [originalThrough.u, originalThrough.v],
+        );
+        if (!cc) continue;
+        const a0 = Math.atan2(originalA.v - cc.v, originalA.u - cc.u);
+        const throughAngle = Math.atan2(originalThrough.v - cc.v, originalThrough.u - cc.u);
+        const endDelta = norm(Math.atan2(originalB.v - cc.v, originalB.u - cc.u) - a0);
+        const throughDelta = norm(throughAngle - a0);
+        const originalSpan = throughDelta < endDelta ? endDelta : endDelta - Math.PI * 2;
+        const originalThroughDelta = originalSpan >= 0 ? throughDelta : -norm(a0 - throughAngle);
+        const fraction = originalSpan === 0 ? 0.5 : originalThroughDelta / originalSpan;
+        const newA = Math.atan2(start.y - center.y, start.x - center.x);
+        const endAngle = Math.atan2(end.y - center.y, end.x - center.x);
+        const solvedSpan = originalSpan >= 0 ? norm(endAngle - newA) : -norm(newA - endAngle);
+        const radius =
+          result.arcRadii[arcIdx] ?? Math.hypot(start.x - center.x, start.y - center.y);
+        const theta = newA + solvedSpan * fraction;
+        result.points[throughIndex] = {
+          x: center.x + radius * Math.cos(theta),
+          y: center.y + radius * Math.sin(theta),
+        };
+      }
       return {
         result,
         model: {
@@ -714,9 +903,15 @@ export const useSketchStore = create<SketchStore>((set, get) => ({
             return sp ? { ...p, u: sp.x, v: sp.y } : p;
           }),
           entities: s.model.entities.map((e) => {
-            if (e.kind !== "circle") return e;
-            const r = result.radii[circleIdx++];
-            return r != null ? { ...e, radius: r } : e;
+            if (e.kind === "circle") {
+              const r = result.radii[circleIdx++];
+              return r != null ? { ...e, radius: r } : e;
+            }
+            if (e.kind === "ellipse") {
+              const r = result.ellipseRadmin[ellipseIdx++];
+              return r != null && Number.isFinite(r) ? { ...e, radmin: r } : e;
+            }
+            return e;
           }),
         },
       };

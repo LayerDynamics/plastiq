@@ -5,7 +5,12 @@
 // recovery-snapshot implication so the user saves promptly.
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { importStatusMessage, importStepFromDisk, LARGE_IMPORT_WARN_BYTES } from "./registry.js";
+import {
+  importIgesFromDisk,
+  importStatusMessage,
+  importStepFromDisk,
+  LARGE_IMPORT_WARN_BYTES,
+} from "./registry.js";
 import { useCadStore } from "../store/store.js";
 
 afterEach(() => {
@@ -70,6 +75,32 @@ describe("importStepFromDisk — the guard warns but never blocks (Review #13)",
     importFile("small.step", "ISO-10303-21; tiny END-ISO-10303-21;");
     await vi.waitFor(() => {
       expect(useCadStore.getState().status).toBe("imported small.step");
+    });
+  });
+});
+
+describe("importIgesFromDisk", () => {
+  it("accepts IGES extensions and persists the complete source text", async () => {
+    const created: HTMLInputElement[] = [];
+    const orig = document.createElement.bind(document);
+    vi.spyOn(document, "createElement").mockImplementation((tag: string) => {
+      const el = orig(tag);
+      if (tag === "input") created.push(el as HTMLInputElement);
+      return el;
+    });
+    importIgesFromDisk();
+    const input = created[0]!;
+    expect(input.accept).toBe(".iges,.igs");
+    const text = "IGES source text";
+    Object.defineProperty(input, "files", {
+      value: [new File([text], "bracket.igs", { type: "application/iges" })],
+    });
+    input.onchange!(new Event("change"));
+
+    await vi.waitFor(() => {
+      const feature = useCadStore.getState().features.find((x) => x.type === "importIges");
+      expect(feature?.data?.["iges"]).toBe(text);
+      expect(useCadStore.getState().status).toBe("imported bracket.igs");
     });
   });
 });

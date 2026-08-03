@@ -59,10 +59,11 @@ function assertDone(oc: Occt, status: unknown, what: string): void {
  *
  * Multi-body is native: `STEPControl_Writer.Transfer` accumulates into the
  * writer's model, so N calls followed by one `Write` emit N bodies in one file
- * — each keeping its own identity. (Fusing them into a compound instead would
- * WELD mated parts into a single solid, which is exactly what an assembly
- * export must not do; `BRep_Builder`/`TopoDS_Builder` are unbound in the
- * trimmed wasm anyway, so a hand-built compound is not an option.)
+ * — each keeping its own identity. (A hand-built `TopoDS_Compound` is also
+ * available — `BRep_Builder`/`TopoDS_Builder` ARE bound, as `makeCompound`
+ * in solid/solid.ts uses them, and a compound holds its members separately
+ * WITHOUT welding — but transferring the solids one at a time keeps this writer
+ * path simple and each body independently addressable in the STEP model.)
  *
  * Each solid is scaled m → mm first so the numbers written match the declared
  * unit; the callers' solids are untouched (scale returns independent copies).
@@ -170,6 +171,36 @@ export function exportIgesAssembly(oc: Occt, solids: readonly Solid[]): string {
 /** Export a single solid to IGES text — `exportIgesAssembly` with one body. */
 export function exportIges(oc: Occt, solid: Solid): string {
   return exportIgesAssembly(oc, [solid]);
+}
+
+/**
+ * Import an IGES text as a single base body, converting the reader's
+ * millimetres into kernel metres. This mirrors `importStep`: OCCT transfers all
+ * roots into one shape, which may itself contain multiple independent bodies.
+ */
+export function importIges(oc: Occt, text: string): Solid {
+  const path = "/plastiq-import.igs";
+  oc.FS.writeFile(path, text);
+  const reader = new oc.IGESControl_Reader_1();
+  const progress = new oc.Message_ProgressRange_1();
+  try {
+    assertDone(oc, reader.ReadFile(path), "IGES read");
+    reader.TransferRoots(progress);
+    const shape = reader.OneShape();
+    if (shape.IsNull()) {
+      shape.delete();
+      throw new Error("IGES import produced an empty shape");
+    }
+    const mmSolid = new Solid(oc, shape);
+    try {
+      return scale(oc, mmSolid, 1 / M_TO_MM);
+    } finally {
+      mmSolid.delete();
+    }
+  } finally {
+    progress.delete();
+    reader.delete();
+  }
 }
 
 function toBase64(bytes: Uint8Array): string {

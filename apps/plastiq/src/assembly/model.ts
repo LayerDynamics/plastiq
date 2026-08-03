@@ -264,18 +264,30 @@ export function toAssemblyInput(model: AssemblyModel): {
     fixed: i.fixed,
   }));
 
-  const mates: Mate[] = model.mates.map((m) => {
+  const mates: Mate[] = [];
+  for (const m of model.mates) {
     const a = toMateRef(model, m.a);
     const b = toMateRef(model, m.b);
+    // S5/K9 defence-in-depth: `toMateRef` maps an instance id to its index via
+    // `findIndex`, which yields -1 for a missing instance. The store now purges
+    // stale mates (removeInstance) and existence-checks picks (applyMate/applyJoint),
+    // so a clean model never gets here with a dangling ref — but if one ever slips
+    // through, drop it rather than emit `component:-1` into the kernel (which the
+    // solver would then refuse as "invalid", failing the WHOLE assembly). Dropping
+    // the single bad mate degrades gracefully and solves the rest.
+    if (a.component < 0 || b.component < 0) continue;
     switch (m.kind) {
       case "distance":
-        return { kind: "distance", a, b, value: m.value };
+        mates.push({ kind: "distance", a, b, value: m.value });
+        break;
       case "angle":
-        return { kind: "angle", a, b, value: m.value };
+        mates.push({ kind: "angle", a, b, value: m.value });
+        break;
       default:
-        return { kind: m.kind, a, b };
+        mates.push({ kind: m.kind, a, b });
+        break;
     }
-  });
+  }
 
   return { components, mates };
 }

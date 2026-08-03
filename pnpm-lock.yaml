@@ -160,13 +160,31 @@ importers:
         specifier: 2.0.0-beta.b5ff984
         version: 2.0.0-beta.b5ff984(ws@8.21.0)
 
-  packages/capture: {}
+  packages/capture:
+    dependencies:
+      '@plastiq/ml':
+        specifier: workspace:*
+        version: link:../ml
 
-  packages/nerf: {}
+  packages/ml: {}
 
-  packages/nurbs: {}
+  packages/nerf:
+    dependencies:
+      '@plastiq/ml':
+        specifier: workspace:*
+        version: link:../ml
+
+  packages/nurbs:
+    dependencies:
+      '@plastiq/ml':
+        specifier: workspace:*
+        version: link:../ml
 
   packages/photogrammetry:
+    dependencies:
+      '@plastiq/ml':
+        specifier: workspace:*
+        version: link:../ml
     devDependencies:
       '@plastiq/capture':
         specifier: workspace:*
@@ -208,7 +226,11 @@ importers:
         specifier: ^5.0.0
         version: 5.0.14(@types/react@19.2.16)(react@19.2.7)(use-sync-external-store@1.6.0(react@19.2.7))
 
-  packages/recon: {}
+  packages/recon:
+    dependencies:
+      '@plastiq/ml':
+        specifier: workspace:*
+        version: link:../ml
 
   packages/sim:
     dependencies:

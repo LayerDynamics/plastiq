@@ -5,7 +5,7 @@
 // (u along xAxis, v along yAxis) map to 3D via origin + u·xAxis + v·yAxis.
 
 import type { Vec3 } from "../math/index.js";
-import { add, cross, scale } from "../math/index.js";
+import { add, cross, dot, scale, sub } from "../math/index.js";
 
 export interface DatumPlane {
   readonly origin: Vec3;
@@ -44,4 +44,24 @@ export function planeYAxis(plane: DatumPlane): Vec3 {
 export function planePointToWorld(plane: DatumPlane, u: number, v: number): Vec3 {
   const y = planeYAxis(plane);
   return add(plane.origin, add(scale(plane.xAxis, u), scale(y, v)));
+}
+
+/**
+ * Project a world point into the plane's (u, v) frame.
+ *
+ * `height` is the signed distance along the plane normal (0 when on-plane).
+ * Off-plane points still yield their planar components — the orthogonal
+ * projection onto the plane.
+ */
+export function worldPointToPlane(
+  plane: DatumPlane,
+  p: Vec3,
+): { u: number; v: number; height: number } {
+  const d = sub(p, plane.origin);
+  const y = planeYAxis(plane);
+  return {
+    u: dot(d, plane.xAxis),
+    v: dot(d, y),
+    height: dot(d, plane.normal),
+  };
 }

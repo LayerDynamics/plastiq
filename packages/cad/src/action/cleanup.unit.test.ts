@@ -197,7 +197,15 @@ describe("loft frees the maker, progress range, and wires on the failure path", 
     ] as unknown as Sketch[];
 
   it("deletes the null shape (plus maker/progress/wires) when Shape() is null", () => {
-    const maker = { AddWire: () => {}, Build: () => {}, Shape: () => nullShape(), delete: del("maker") };
+    // IsDone() is true here: this exercises the "done maker but Shape() came back
+    // null" cleanup path (K8 added an IsDone() guard BEFORE Shape()).
+    const maker = {
+      AddWire: () => {},
+      Build: () => {},
+      IsDone: () => true,
+      Shape: () => nullShape(),
+      delete: del("maker"),
+    };
     const oc = {
       BRepOffsetAPI_ThruSections: function () {
         return maker;
@@ -209,6 +217,31 @@ describe("loft frees the maker, progress range, and wires on the failure path", 
 
     expect(() => loft(oc, fakeSketches(), { ruled: true })).toThrow(/empty shape/);
     expect(deleted).toContain("shape");
+    expect(deleted).toEqual(expect.arrayContaining(["maker", "progress", "wire0", "wire1"]));
+  });
+
+  it("throws the K8 not-done error (and still frees maker/progress/wires) when IsDone() is false", () => {
+    // K8: a ThruSections that did not build must be rejected on IsDone() BEFORE
+    // Shape() is trusted. Shape() must never be called here — if it were, the
+    // guard would be a no-op — so the fake omits it entirely; cleanup still runs.
+    const maker = {
+      AddWire: () => {},
+      Build: () => {},
+      IsDone: () => false,
+      delete: del("maker"),
+    };
+    const oc = {
+      BRepOffsetAPI_ThruSections: function () {
+        return maker;
+      },
+      Message_ProgressRange_1: function () {
+        return { delete: del("progress") };
+      },
+    } as unknown as Occt;
+
+    expect(() => loft(oc, fakeSketches(), { ruled: true })).toThrow(
+      /could not build a solid through the given sections/,
+    );
     expect(deleted).toEqual(expect.arrayContaining(["maker", "progress", "wire0", "wire1"]));
   });
 

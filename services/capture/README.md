@@ -64,12 +64,12 @@ optimizer (defaults in `python -m app.train_completion --help`).
 
 ## Run locally (Apple Silicon)
 
-One command (repo root) starts **all three** Plastiq services — reconstruct :8000, capture
-:8001, nerf :8002 — creating any missing conda env from its `environment.yml` first, with
-name-prefixed logs and clean Ctrl-C shutdown:
+`pnpm dev` starts the editor with all five supervised services. For a service-only session,
+the repo-root command below starts reconstruct :8000, capture :8001, nerf :8002, nurbs :8003,
+and photogrammetry :8004, creating missing conda environments and requiring every health gate:
 
 ```bash
-just services          # scripts/dev-services.sh; `just services-stop` frees stray listeners
+just services          # `just services-stop` stops only supervisor-owned processes
 ```
 
 Or run just this service manually:

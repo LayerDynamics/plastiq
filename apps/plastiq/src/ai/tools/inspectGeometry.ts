@@ -8,19 +8,29 @@
 // index-aligned so the client writes the concrete FaceRef/EdgeRef into a
 // dress-up feature's data (these resolve on rebuild via resolveFaceRef/Edge).
 
-import type { FaceRef, EdgeRef } from "@plastiq/cad";
+import type { FaceRef, EdgeRef, SurfaceSignature } from "@plastiq/cad";
 import type { CadDocument } from "../../store/types.js";
 import { toMm } from "@plastiq/cad";
 
 type V3 = [number, number, number];
 
 /** The minimal mesh shape inspect needs — satisfied by both the kernel's TaggedMesh
- * (number[]) and the worker's TransferMesh (typed arrays). */
+ * (number[]) and the worker's TransferMesh (typed arrays). The analytic signatures
+ * (`surface`/`faceSurfaces`) are optional so hand-built test fixtures need not supply
+ * them, but the real probe (worker TransferMesh) always does — and when present they
+ * are carried onto the emitted refs so an AI-authored dress-up survives parametric
+ * edits on curved topology (R1/§4.2), instead of the degraded normal-only form the
+ * agent used to receive. */
 export interface MeshView {
   vertices: ArrayLike<number>;
   indices: ArrayLike<number>;
-  faceGroups: ReadonlyArray<{ normal: V3; centroid: V3; start: number; count: number }>;
-  edges: ReadonlyArray<{ faceNormals: readonly [V3, V3]; midpoint: V3; positions: ArrayLike<number> }>;
+  faceGroups: ReadonlyArray<{ normal: V3; centroid: V3; start: number; count: number; surface?: SurfaceSignature }>;
+  edges: ReadonlyArray<{
+    faceNormals: readonly [V3, V3];
+    midpoint: V3;
+    positions: ArrayLike<number>;
+    faceSurfaces?: readonly [SurfaceSignature, SurfaceSignature];
+  }>;
 }
 
 export interface InspectedFace {
@@ -234,7 +244,7 @@ export function inspectMesh(mesh: MeshView): Inspection {
       kind,
       ...(radius != null ? { radius: toMm(radius) } : {}),
     });
-    faceRefs.push({ normal: g.normal, centroid: g.centroid });
+    faceRefs.push({ normal: g.normal, centroid: g.centroid, ...(g.surface ? { surface: g.surface } : {}) });
   });
 
   const edges: InspectedEdge[] = [];
@@ -242,7 +252,7 @@ export function inspectMesh(mesh: MeshView): Inspection {
   mesh.edges.forEach((e, index) => {
     const { length, straight } = edgeLengthAndStraight(e.positions);
     edges.push({ index, faceNormals: e.faceNormals, midpoint: e.midpoint, length: toMm(length), straight });
-    edgeRefs.push({ faceNormals: e.faceNormals, midpoint: e.midpoint });
+    edgeRefs.push({ faceNormals: e.faceNormals, midpoint: e.midpoint, ...(e.faceSurfaces ? { faceSurfaces: e.faceSurfaces } : {}) });
   });
 
   const faceLines = faces.map(

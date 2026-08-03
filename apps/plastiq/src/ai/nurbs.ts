@@ -15,12 +15,14 @@ import {
   type NurbsCancelOptions,
   type NurbsOptions,
   type NurbsReport,
+  type NurbsSurfaceJson,
 } from "@plastiq/nurbs";
+import { serviceSurfaceToNurbs, type ServiceNurbsSurface } from "@plastiq/cad";
 
 import { useAiStore } from "./aiStore.js";
 import { commitStepDocument, stepToImportDocument } from "./reconstruct.js";
 import type { BuildProbe } from "./tools/buildPart.js";
-import type { CadDocument } from "../store/types.js";
+import type { CadDocument, EditorFeature } from "../store/types.js";
 
 /** The @plastiq/nurbs client default (services/nurbs dev port) — kept here for the panel's
  * pre-flight /health probe, mirroring RECONSTRUCT/NERF/CAPTURE_DEFAULT_BASE_URL (errorHints.ts). */
@@ -53,9 +55,47 @@ function withNurbsSettings<T extends NurbsCancelOptions>(opts: T): T {
   };
 }
 
-/** Fit smooth NURBS surfaces to a mesh (base64 GLB) and load the resulting STEP as an editable
- * B-rep document. Returns the loaded CadDocument and the FR-9 fitting report so the caller can
- * label the result honestly (shell vs solid, faceted fallbacks — NFR-5).
+/** Options for {@link fitMeshToCad} — extends the service client knobs. */
+export type FitMeshToCadOptions = NurbsOptions & {
+  /**
+   * §15 Lane B: land each fitted surface as an editable `freeform` feature
+   * (control net JSON) instead of an opaque `importStep`. When surfaces are
+   * missing/empty, falls back to the STEP import path.
+   */
+  keepEditable?: boolean;
+};
+
+/**
+ * Build a CadDocument of freeform features from service surface JSON (Lane B).
+ * Pure — no network. Exported for unit tests.
+ */
+export function freeformDocFromSurfaces(
+  surfaces: readonly NurbsSurfaceJson[],
+  name = "Fitted freeform",
+): CadDocument {
+  if (surfaces.length === 0) {
+    throw new Error("freeformDocFromSurfaces: no surfaces to land");
+  }
+  const features: EditorFeature[] = surfaces.map((s, i) => {
+    const nurbs = serviceSurfaceToNurbs(s as ServiceNurbsSurface);
+    return {
+      id: `ff${i + 1}`,
+      type: "freeform",
+      name: surfaces.length === 1 ? name : `${name} ${i + 1}`,
+      params: {},
+      data: {
+        kind: "custom",
+        surface: nurbs,
+        op: i === 0 ? "new" : "new",
+      },
+    };
+  });
+  return { features, params: {} };
+}
+
+/** Fit smooth NURBS surfaces to a mesh (base64 GLB) and load the result as an editable
+ * document. Default: STEP → importStep (opaque B-rep). With `keepEditable: true` and a
+ * non-empty surfaces payload: freeform features (§15 Lane B) so control nets stay editable.
  *
  * Resolution (SPEC-12 §6.1, the nerf.ts precedent): a caller-supplied `opts.baseURL`/`opts.apiKey`
  * wins; otherwise the persisted `nurbsBaseURL`/`nurbsApiKey` settings are threaded into `fitNurbs`
@@ -66,10 +106,21 @@ function withNurbsSettings<T extends NurbsCancelOptions>(opts: T): T {
 export async function fitMeshToCad(
   glbBase64: string,
   deps: FitMeshToCadDeps,
-  opts: NurbsOptions = {},
+  opts: FitMeshToCadOptions = {},
   name = "Fitted mesh",
 ): Promise<{ doc: CadDocument; report: NurbsReport }> {
-  const result = await fitNurbs({ glbBase64 }, withNurbsSettings(opts));
+  const { keepEditable, ...nurbsOpts } = opts;
+  const result = await fitNurbs({ glbBase64 }, withNurbsSettings(nurbsOpts));
+
+  // §15 Lane B: keep-editable freeform land when requested and surfaces exist.
+  if (keepEditable && result.surfaces.length > 0) {
+    const doc = freeformDocFromSurfaces(result.surfaces, name);
+    // Probe rebuilds freeform features through the same path as interactive authoring.
+    await deps.probe(doc);
+    deps.load(doc);
+    return { doc, report: result.report };
+  }
+
   // Validate-then-commit (§2.12.2): throws without touching the store if the
   // service returned STEP the kernel cannot build.
   const doc = await commitStepDocument(stepToImportDocument(result.step, name), {
@@ -93,8 +144,25 @@ export async function cancelFit(jobId: string, opts: NurbsCancelOptions = {}): P
 export function nurbsFitStatusMessage(report: NurbsReport): string {
   const patches = `${report.patches} patch${report.patches === 1 ? "" : "es"}`;
   const solidity = report.isSolid ? "solid" : "shell (not a solid)";
-  const fidelity = report.maxDeviation <= report.fidelityTol ? "good" : "coarse";
+  // Closed-mode watertightness detail (free_edges/volume) when the service reports it (M4).
+  const watertight =
+    report.freeEdges === undefined
+      ? ""
+      : report.freeEdges === 0
+        ? ", watertight (0 free edges)"
+        : `, ${report.freeEdges} free edge${report.freeEdges === 1 ? "" : "s"}`;
+  const volume =
+    report.volume !== undefined && report.volume > 0
+      ? `, volume ${(report.volume * 1e9).toFixed(0)} mm³` // metres³ → mm³
+      : "";
+  const dev = `Δ${report.maxDeviation.toFixed(4)}`;
+  // A null fidelityTol means no accuracy gate was set (the service default) — report the raw
+  // deviation without a good/coarse verdict rather than judging `x <= null` (always false, M2).
+  const fidelity =
+    report.fidelityTol === null
+      ? `fidelity ${dev} (no tolerance set)`
+      : `fidelity ${report.maxDeviation <= report.fidelityTol ? "good" : "coarse"} (${dev})`;
   const faceted =
     report.facetedPatches > 0 ? `, ${report.facetedPatches} of ${report.patches} faceted (fallback)` : "";
-  return `fitted smooth CAD (NURBS) — ${patches}, ${solidity}, fidelity ${fidelity} (Δ${report.maxDeviation.toFixed(4)})${faceted}`;
+  return `fitted smooth CAD (NURBS) — ${patches}, ${solidity}${watertight}${volume}, ${fidelity}${faceted}`;
 }

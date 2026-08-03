@@ -4,6 +4,8 @@
 // GLB + a report, and the *app* (apps/plastiq) maps that into its own MeshDoc. The dependency
 // direction is app → @plastiq/nerf, never the reverse, so the package stays embeddable anywhere.
 
+import type { JobCancelOptions, JobClientOptions } from "@plastiq/ml";
+
 /** Which MLX model the service trains to produce the surface (SPEC-11). */
 export type NerfMethod = "nerf" | "neus";
 
@@ -65,30 +67,10 @@ export interface NerfResult {
   report: NerfReport;
 }
 
-/** Knobs for {@link trainNerf}: where the service lives, how to talk to it, and how to poll. */
-export interface NerfOptions {
-  /** Base URL of the NeRF service. Default `http://localhost:8002` (the documented dev port). */
-  baseURL?: string;
-  /** API key for a key-protected deployment (the service's `NERF_API_KEY`) — sent as
-   * `Authorization: Bearer <key>` on every request. Absent ⇒ no auth header (open dev default). */
-  apiKey?: string;
-  /** Injectable fetch (tests pass a fake; defaults to the global `fetch`). */
-  fetchImpl?: typeof fetch;
-  signal?: AbortSignal;
-  /** Poll interval in ms (default 2000). */
-  pollIntervalMs?: number;
-  /** Max poll attempts before timing out (default 600 ≈ 20 min at 2s — training is slow). */
-  maxPolls?: number;
-  /** Per-poll delay (a constant `pollIntervalMs`, not a backoff; tests inject an instant resolver). */
-  delay?: (ms: number) => Promise<void>;
-  /** Job-state callback for UI progress (`"queued" | "running" | …`). */
-  onState?: (state: string) => void;
-  /** Job-id callback, fired once (right after the submit returns, before the first poll) — the
-   * handle a caller needs to cancel the in-flight job server-side via {@link cancelJob} while
-   * this same call keeps polling. */
-  onJob?: (id: string) => void;
-}
+/** Knobs for {@link trainNerf}: where the service lives, how to talk to it, and how to poll.
+ * Defaults: baseURL `http://localhost:8002`, poll 2s / 600. */
+export type NerfOptions = JobClientOptions;
 
 /** Knobs for {@link cancelJob}: the connection subset of {@link NerfOptions}. Cancel is a single
  * `DELETE` — the polling knobs don't apply. */
-export type NerfCancelOptions = Pick<NerfOptions, "baseURL" | "apiKey" | "fetchImpl">;
+export type NerfCancelOptions = JobCancelOptions;

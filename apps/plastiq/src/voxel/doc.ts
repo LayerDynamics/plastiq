@@ -3,6 +3,7 @@
 
 import type { VoxelDoc } from "../store/types.js";
 import { VoxelGrid, type VoxelMesh } from "./grid.js";
+import { sdfFromDoc } from "./sdf.js";
 
 /** Snapshot a grid into a persistable VoxelDoc (occupied cells stored as linear indices). */
 export function gridToDoc(grid: VoxelGrid, name?: string): VoxelDoc {
@@ -28,9 +29,23 @@ export function docToGrid(doc: VoxelDoc): VoxelGrid {
   return grid;
 }
 
-/** The surface mesh of a voxel document — the input to the existing mesh→B-rep reconstruct path. */
+/** The surface mesh of a voxel document — the input to the existing mesh→B-rep reconstruct path.
+ *
+ * §16 swap point: a v2 document (one that carries a signed-distance field) is meshed with the
+ * marching-cubes mesher (smooth, interpolated iso-surface — materially better input for the
+ * reconstruct/NURBS-fit route); a legacy occupancy-only document keeps the exact 6-neighbour
+ * cube-face mesh (VoxelGrid.toMesh), so the pre-sculpt display and its pinned tests are unchanged. */
 export function voxelDocToMesh(doc: VoxelDoc): VoxelMesh {
+  if (doc.sdf) return sdfFromDoc(doc).toMesh();
   return docToGrid(doc).toMesh();
+}
+
+/** Ensure a document carries a signed-distance field (v2), migrating a legacy occupancy doc if
+ * needed. Deterministic: a v2 doc is returned unchanged; a v1 doc gains an `sdf` derived from its
+ * occupancy (the schema-version migration path) plus a synced occupancy shadow. */
+export function ensureSdfDoc(doc: VoxelDoc): VoxelDoc {
+  if (doc.sdf) return doc;
+  return sdfFromDoc(doc).toDoc(doc.name);
 }
 
 /** Default sculpt grid: 32³ cells at 2 mm (SI metres) → a 64 mm working cube, matching the

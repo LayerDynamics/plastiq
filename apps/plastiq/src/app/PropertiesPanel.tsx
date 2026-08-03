@@ -5,9 +5,10 @@
 
 import { useEffect, useState } from "react";
 import { useCadStore } from "../store/store.js";
-import { PLACEMENT_TYPE } from "../store/types.js";
+import { PLACEMENT_TYPE, type EditorFeature } from "../store/types.js";
 import { findPlacement, placementFromFeature } from "../viewport/placement.js";
 import { toDisplayValue, fromDisplayValue, unitSuffix } from "../store/featureUnits.js";
+import { evalExpr } from "../store/paramExpr.js";
 
 const M_PER_MM = 0.001;
 const DEG_PER_RAD = 180 / Math.PI;
@@ -50,6 +51,97 @@ function NumberField({
   );
 }
 
+/** One numeric feature parameter plus its optional global expression binding. */
+function FeatureParamField({
+  feature,
+  paramKey,
+  literal,
+}: {
+  feature: EditorFeature;
+  paramKey: string;
+  literal: number;
+}): React.JSX.Element {
+  const params = useCadStore((s) => s.params);
+  const updateParams = useCadStore((s) => s.updateParams);
+  const setFeatureExpr = useCadStore((s) => s.setFeatureExpr);
+  const expression = feature.exprs?.[paramKey] ?? "";
+  const [draft, setDraft] = useState(expression);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setDraft(expression);
+    setError(null);
+  }, [expression]);
+
+  let effective = literal;
+  let standingError: string | null = null;
+  if (expression) {
+    try {
+      effective = evalExpr(expression, params);
+      if (!Number.isFinite(effective)) standingError = "expression is not finite";
+    } catch (ex) {
+      standingError = ex instanceof Error ? ex.message : "invalid expression";
+    }
+  }
+
+  const commitExpression = (): void => {
+    const next = draft.trim();
+    try {
+      if (next) {
+        const value = evalExpr(next, params);
+        if (!Number.isFinite(value)) throw new Error("expression is not finite");
+      }
+      setFeatureExpr(feature.id, paramKey, next || undefined);
+      setDraft(next);
+      setError(null);
+    } catch (ex) {
+      setError(ex instanceof Error ? ex.message : "invalid expression");
+    }
+  };
+
+  const suffix = unitSuffix(feature.type, paramKey);
+  return (
+    <div className="space-y-0.5" data-testid={`feature-param-${paramKey}`}>
+      <NumberField
+        label={suffix ? `${paramKey} (${suffix})` : paramKey}
+        value={toDisplayValue(feature.type, paramKey, effective)}
+        onCommit={(value) =>
+          updateParams(feature.id, {
+            [paramKey]: fromDisplayValue(feature.type, paramKey, value),
+          })
+        }
+      />
+      <label className="flex items-center justify-between gap-2 text-[10px] text-[#789]">
+        <span className="w-6">fx</span>
+        <input
+          data-testid={`feature-expr-${paramKey}`}
+          aria-label={`${paramKey} expression`}
+          value={draft}
+          placeholder="literal"
+          onChange={(event) => setDraft(event.currentTarget.value)}
+          onBlur={commitExpression}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") event.currentTarget.blur();
+            else if (event.key === "Escape") {
+              setDraft(expression);
+              setError(null);
+            }
+          }}
+          className="w-full rounded border border-[#2a3444] bg-[#0e1219] px-1.5 py-0.5 text-right font-mono text-[10px] text-[#9fc] outline-none focus:border-[#4ea1ff]"
+        />
+      </label>
+      {(error ?? standingError) && (
+        <p
+          data-testid={`feature-expr-error-${paramKey}`}
+          className="text-right text-[10px] text-[#fc9]"
+        >
+          {error ?? standingError}
+        </p>
+      )}
+    </div>
+  );
+}
+
 function formatNum(v: number): string {
   return Number.isFinite(v) ? String(Number(v.toFixed(6))) : "0";
 }
@@ -83,6 +175,342 @@ function PlacementEditor(): React.JSX.Element {
   );
 }
 
+// --- Sweep path editor (R13 / C1) ------------------------------------------------
+// Makes the registry status "edit Properties → Path" true: a typed spine of
+// polyline points (or mixed line/arc segments) in mm, plus attach-from-selection
+// for parametric pathEdges. Rebuild reads data.path / data.pathEdges.
+
+type Point3 = [number, number, number];
+type SpineSegment = { kind: "line"; to: Point3 } | { kind: "arc"; through: Point3; to: Point3 };
+type SpinePath =
+  | { kind: "polyline"; points: Point3[] }
+  | { kind: "path"; start: Point3; segments: SpineSegment[] };
+
+function isPoint3(v: unknown): v is Point3 {
+  return (
+    Array.isArray(v) &&
+    v.length === 3 &&
+    typeof v[0] === "number" &&
+    typeof v[1] === "number" &&
+    typeof v[2] === "number"
+  );
+}
+
+function parseSpinePath(raw: unknown): SpinePath | null {
+  if (!raw || typeof raw !== "object") return null;
+  const o = raw as Record<string, unknown>;
+  if (o["kind"] === "polyline" && Array.isArray(o["points"])) {
+    const points = (o["points"] as unknown[]).filter(isPoint3) as Point3[];
+    if (points.length >= 2)
+      return { kind: "polyline", points: points.map((p) => [...p] as Point3) };
+  }
+  if (o["kind"] === "path" && isPoint3(o["start"]) && Array.isArray(o["segments"])) {
+    const segments: SpineSegment[] = [];
+    for (const s of o["segments"] as unknown[]) {
+      if (!s || typeof s !== "object") continue;
+      const seg = s as Record<string, unknown>;
+      if (seg["kind"] === "line" && isPoint3(seg["to"])) {
+        segments.push({ kind: "line", to: [...seg["to"]] as Point3 });
+      } else if (seg["kind"] === "arc" && isPoint3(seg["through"]) && isPoint3(seg["to"])) {
+        segments.push({
+          kind: "arc",
+          through: [...seg["through"]] as Point3,
+          to: [...seg["to"]] as Point3,
+        });
+      }
+    }
+    return { kind: "path", start: [...o["start"]] as Point3, segments };
+  }
+  return null;
+}
+
+function defaultPolylinePath(): SpinePath {
+  return {
+    kind: "polyline",
+    points: [
+      [0, 0, 0],
+      [0, 0, 0.04],
+    ],
+  };
+}
+
+/** Editable world-space sweep spine (polyline or line/arc segments), SI→mm UI. */
+function SweepPathEditor({
+  featureId,
+  data,
+  setFeatureData,
+  picks,
+  selectionRefs,
+}: {
+  featureId: string;
+  data: Record<string, unknown>;
+  setFeatureData: (id: string, data: Record<string, unknown>) => void;
+  picks: readonly { kind: string; id: number }[];
+  selectionRefs: { edges: Record<number, unknown> };
+}): React.JSX.Element {
+  const pathEdges = Array.isArray(data["pathEdges"]) ? (data["pathEdges"] as unknown[]) : [];
+  const path = parseSpinePath(data["path"]);
+  const edgePickCount = picks.filter((p) => p.kind === "edge").length;
+
+  const writePath = (next: SpinePath): void => {
+    // Typed path and picked-edge spine are mutually exclusive: writing a typed
+    // path clears pathEdges so rebuild uses data.path (rebuild prefers pathEdges).
+    setFeatureData(featureId, { path: next, pathEdges: undefined });
+  };
+
+  const attachPathEdges = (): void => {
+    const refs = picks
+      .filter((p) => p.kind === "edge")
+      .map((p) => selectionRefs.edges[p.id])
+      .filter(Boolean);
+    if (refs.length === 0) return;
+    setFeatureData(featureId, { pathEdges: refs, path: undefined });
+  };
+
+  const ensurePolyline = (): SpinePath & { kind: "polyline" } => {
+    if (path?.kind === "polyline") return path;
+    return defaultPolylinePath() as SpinePath & { kind: "polyline" };
+  };
+
+  const setPoint = (index: number, axis: 0 | 1 | 2, mm: number): void => {
+    const poly = ensurePolyline();
+    const points = poly.points.map((p) => [...p] as Point3);
+    const cur = points[index] ?? ([0, 0, 0] as Point3);
+    cur[axis] = mm * M_PER_MM;
+    points[index] = cur;
+    writePath({ kind: "polyline", points });
+  };
+
+  const addPoint = (): void => {
+    const poly = ensurePolyline();
+    const last = poly.points[poly.points.length - 1] ?? ([0, 0, 0] as Point3);
+    writePath({
+      kind: "polyline",
+      points: [...poly.points, [last[0], last[1], last[2] + 0.01] as Point3],
+    });
+  };
+
+  const removePoint = (index: number): void => {
+    const poly = ensurePolyline();
+    if (poly.points.length <= 2) return; // spine needs ≥2 points
+    writePath({ kind: "polyline", points: poly.points.filter((_, i) => i !== index) });
+  };
+
+  const setSegmentPoint = (
+    segIndex: number,
+    field: "to" | "through",
+    axis: 0 | 1 | 2,
+    mm: number,
+  ): void => {
+    if (!path || path.kind !== "path") return;
+    const segments = path.segments.map((s) => {
+      if (s.kind === "line") return { kind: "line" as const, to: [...s.to] as Point3 };
+      return { kind: "arc" as const, through: [...s.through] as Point3, to: [...s.to] as Point3 };
+    });
+    const seg = segments[segIndex];
+    if (!seg) return;
+    if (field === "through" && seg.kind === "arc") {
+      seg.through[axis] = mm * M_PER_MM;
+    } else if (field === "to") {
+      seg.to[axis] = mm * M_PER_MM;
+    }
+    writePath({ kind: "path", start: [...path.start] as Point3, segments });
+  };
+
+  const setStartAxis = (axis: 0 | 1 | 2, mm: number): void => {
+    if (!path || path.kind !== "path") return;
+    const start = [...path.start] as Point3;
+    start[axis] = mm * M_PER_MM;
+    writePath({ kind: "path", start, segments: path.segments });
+  };
+
+  const polyPoints: Point3[] =
+    path?.kind === "polyline"
+      ? path.points
+      : pathEdges.length === 0
+        ? (defaultPolylinePath() as { kind: "polyline"; points: Point3[] }).points
+        : [];
+
+  return (
+    <div className="space-y-1 border-t border-[#1a2230] pt-2" data-testid="feature-path-editor">
+      <div className="text-[10px] uppercase tracking-wide text-[#567]">Path</div>
+      {pathEdges.length > 0 && (
+        <p className="text-[10px] text-[#9ab]" data-testid="feature-path-edges">
+          {pathEdges.length} picked edge(s) — re-resolved each rebuild
+        </p>
+      )}
+      <div className="flex flex-wrap gap-1">
+        <button
+          type="button"
+          data-testid="feature-attach-path-edges"
+          disabled={edgePickCount === 0}
+          onClick={attachPathEdges}
+          className="rounded border border-[#3a5a7a] bg-[#14253a] px-1.5 py-0.5 text-[10px] text-[#bfe] disabled:opacity-40"
+        >
+          Attach selected edges{edgePickCount > 0 ? ` (${edgePickCount})` : ""}
+        </button>
+        {pathEdges.length > 0 && (
+          <button
+            type="button"
+            data-testid="feature-clear-path-edges"
+            onClick={() => writePath(defaultPolylinePath())}
+            className="rounded border border-[#3a5a7a] bg-[#14253a] px-1.5 py-0.5 text-[10px] text-[#bfe]"
+          >
+            Switch to typed path
+          </button>
+        )}
+      </div>
+      {pathEdges.length === 0 && path?.kind === "path" && (
+        <div className="space-y-1" data-testid="feature-path-segments">
+          <div className="text-[10px] text-[#789]">Start (mm)</div>
+          <div className="grid grid-cols-3 gap-1">
+            {([0, 1, 2] as const).map((axis) => (
+              <NumberField
+                key={`start-${axis}`}
+                label={["X", "Y", "Z"][axis]!}
+                value={path.start[axis]! / M_PER_MM}
+                onCommit={(v) => setStartAxis(axis, v)}
+              />
+            ))}
+          </div>
+          {path.segments.map((seg, i) => (
+            <div
+              key={i}
+              className="space-y-0.5 rounded border border-[#1a2230] p-1"
+              data-testid={`feature-path-seg-${i}`}
+            >
+              <div className="text-[10px] text-[#789]">
+                {seg.kind === "line" ? "Line →" : "Arc →"} (mm)
+              </div>
+              {seg.kind === "arc" && (
+                <div className="grid grid-cols-3 gap-1">
+                  {([0, 1, 2] as const).map((axis) => (
+                    <NumberField
+                      key={`through-${i}-${axis}`}
+                      label={["X", "Y", "Z"][axis]!}
+                      value={seg.through[axis]! / M_PER_MM}
+                      onCommit={(v) => setSegmentPoint(i, "through", axis, v)}
+                    />
+                  ))}
+                </div>
+              )}
+              <div className="grid grid-cols-3 gap-1">
+                {([0, 1, 2] as const).map((axis) => (
+                  <NumberField
+                    key={`to-${i}-${axis}`}
+                    label={["X", "Y", "Z"][axis]!}
+                    value={seg.to[axis]! / M_PER_MM}
+                    onCommit={(v) => setSegmentPoint(i, "to", axis, v)}
+                  />
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+      {pathEdges.length === 0 && path?.kind !== "path" && (
+        <div className="space-y-1" data-testid="feature-path-points">
+          {polyPoints.map((pt, i) => (
+            <div
+              key={i}
+              className="flex items-center gap-1"
+              data-testid={`feature-path-point-${i}`}
+            >
+              <span className="w-4 shrink-0 text-[10px] text-[#567]">{i + 1}</span>
+              <div className="grid flex-1 grid-cols-3 gap-1">
+                {([0, 1, 2] as const).map((axis) => (
+                  <NumberField
+                    key={`${i}-${axis}`}
+                    label={["X", "Y", "Z"][axis]!}
+                    value={pt[axis]! / M_PER_MM}
+                    onCommit={(v) => setPoint(i, axis, v)}
+                  />
+                ))}
+              </div>
+              <button
+                type="button"
+                data-testid={`feature-path-remove-${i}`}
+                disabled={polyPoints.length <= 2}
+                onClick={() => removePoint(i)}
+                className="rounded border border-[#3a2a2a] px-1 text-[10px] text-[#c99] disabled:opacity-30"
+                title="Remove point"
+              >
+                ×
+              </button>
+            </div>
+          ))}
+          <button
+            type="button"
+            data-testid="feature-path-add-point"
+            onClick={addPoint}
+            className="rounded border border-[#3a5a7a] bg-[#14253a] px-1.5 py-0.5 text-[10px] text-[#bfe]"
+          >
+            + Point
+          </button>
+          <p className="text-[10px] text-[#567]">spine points in mm (world)</p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Editable helical spine on a sweep feature (data.helix → helix() + sweepAlongWire). */
+function SweepHelixEditor({
+  featureId,
+  data,
+  setFeatureData,
+}: {
+  featureId: string;
+  data: Record<string, unknown>;
+  setFeatureData: (id: string, data: Record<string, unknown>) => void;
+}): React.JSX.Element {
+  const raw = (data["helix"] ?? {}) as Record<string, unknown>;
+  const radiusMm = (Number(raw["radius"]) || 0) / M_PER_MM;
+  const pitchMm = (Number(raw["pitch"]) || 0) / M_PER_MM;
+  const turns = Number(raw["turns"]) || 0;
+  const handedness = raw["handedness"] === "left" ? "left" : "right";
+  const taperDeg =
+    typeof raw["taperAngle"] === "number" ? (raw["taperAngle"] as number) * DEG_PER_RAD : 0;
+
+  const write = (patch: Record<string, unknown>): void => {
+    setFeatureData(featureId, {
+      helix: { ...raw, ...patch },
+      // Helix and path/pathEdges are mutually exclusive spines.
+      path: undefined,
+      pathEdges: undefined,
+    });
+  };
+
+  return (
+    <div className="space-y-1 border-t border-[#1a2230] pt-2" data-testid="feature-helix-editor">
+      <div className="text-[10px] uppercase tracking-wide text-[#567]">Helix</div>
+      <NumberField label="r" value={radiusMm} onCommit={(v) => write({ radius: v * M_PER_MM })} />
+      <NumberField label="p" value={pitchMm} onCommit={(v) => write({ pitch: v * M_PER_MM })} />
+      <NumberField label="n" value={turns} onCommit={(v) => write({ turns: v })} />
+      <label className="flex items-center justify-between gap-2 text-xs text-[#9ab]">
+        <span className="text-[#789]">hand</span>
+        <select
+          data-testid="feature-helix-handedness"
+          value={handedness}
+          onChange={(e) =>
+            write({ handedness: e.currentTarget.value === "left" ? "left" : "right" })
+          }
+          className="rounded border border-[#2a3444] bg-[#0e1219] px-1.5 py-0.5 text-[#cfe] outline-none focus:border-[#4ea1ff]"
+        >
+          <option value="right">right</option>
+          <option value="left">left</option>
+        </select>
+      </label>
+      <NumberField
+        label="α"
+        value={taperDeg}
+        onCommit={(v) => write({ taperAngle: v / DEG_PER_RAD })}
+      />
+      <p className="text-[10px] text-[#567]">radius/pitch mm · turns · taper °</p>
+    </div>
+  );
+}
+
 /** Feature `data` editors: op, shell dir, sweep opts, boolean op, loft ruled, deps, refs (C10). */
 function FeatureDataFields({
   featureId,
@@ -111,22 +539,26 @@ function FeatureDataFields({
   const isPrimitive =
     type === "cylinder" || type === "sphere" || type === "cone" || type === "torus";
   const showOp =
-    type === "extrude" || type === "revolve" || type === "loft" || type === "sweep" || isPrimitive;
-  /** The ops this feature type actually supports.
+    type === "extrude" ||
+    type === "rib" ||
+    type === "revolve" ||
+    type === "loft" ||
+    type === "sweep" ||
+    isPrimitive;
+  /** The ops a data.op feature supports.
    *
-   * The profile features only ever join or replace. A primitive is also a
-   * ready-made boolean TOOL — cutting one is a bore, which is the whole reason
-   * the round primitives matter — so it offers the subtractive ops too. Listing
-   * them per-type rather than globally keeps the select from offering extrude an
-   * op the evaluator would ignore. */
-  const opChoices = isPrimitive
-    ? (["join", "cut", "intersect", "new"] as const)
-    : (["join", "new"] as const);
+   * Since R9 the profile features (extrude/revolve/loft/sweep) execute `cut` and
+   * `intersect` too — the evaluator routes them all through the same
+   * `combinePrimitive` op contract as the round primitives — so every op-carrying
+   * feature offers the full set (previously profiles offered only join/new, which
+   * silently reinterpreted a `cut` as a join, P3). */
+  const opChoices = ["join", "cut", "intersect", "new"] as const;
   const showShellDir = type === "shell";
   const showBooleanOp = type === "boolean";
   const showLoftRuled = type === "loft";
   const showDeps =
     type === "extrude" ||
+    type === "rib" ||
     type === "cut" ||
     type === "revolve" ||
     type === "sweep" ||
@@ -139,12 +571,18 @@ function FeatureDataFields({
     type === "shell" ||
     type === "draft";
   const showSweepOpts = type === "sweep";
+  // Helical spine (data.helix) uses its own editor; polyline/pathEdges use Path.
+  const hasHelix = type === "sweep" && d["helix"] != null && typeof d["helix"] === "object";
+  const showSweepPath = type === "sweep" && !hasHelix;
+  const showSweepHelix = hasHelix;
   const showChamferFace = type === "chamfer";
   if (
     !showOp &&
     !showShellDir &&
     !showCounts &&
     !showSweepOpts &&
+    !showSweepPath &&
+    !showSweepHelix &&
     !showBooleanOp &&
     !showLoftRuled &&
     !showDeps &&
@@ -265,7 +703,9 @@ function FeatureDataFields({
             data-testid="feature-loft-ruled"
             type="checkbox"
             checked={ruled}
-            onChange={(e) => setFeatureData(featureId, { ruled: e.currentTarget.checked || undefined })}
+            onChange={(e) =>
+              setFeatureData(featureId, { ruled: e.currentTarget.checked || undefined })
+            }
           />
         </label>
       )}
@@ -337,6 +777,18 @@ function FeatureDataFields({
           </label>
         </>
       )}
+      {showSweepPath && (
+        <SweepPathEditor
+          featureId={featureId}
+          data={d}
+          setFeatureData={setFeatureData}
+          picks={picks}
+          selectionRefs={selectionRefs}
+        />
+      )}
+      {showSweepHelix && (
+        <SweepHelixEditor featureId={featureId} data={d} setFeatureData={setFeatureData} />
+      )}
       {showCounts && (
         <div className="space-y-1" data-testid="feature-refs-editor">
           <p className="text-[10px] text-[#567]" data-testid="feature-ref-counts">
@@ -390,7 +842,8 @@ function FeatureDataFields({
           </button>
           {needsChamferFace && !hasChamferFace && (
             <p className="text-[10px] text-[#fc9]" data-testid="feature-chamfer-face-warn">
-              distance2 is set but no data.face — rebuild uses symmetric chamfer until a face is attached
+              distance2 is set but no data.face — rebuild uses symmetric chamfer until a face is
+              attached
             </p>
           )}
         </div>
@@ -402,7 +855,6 @@ function FeatureDataFields({
 function FeatureEditor(): React.JSX.Element | null {
   const selectedFeatureId = useCadStore((s) => s.selectedFeatureId);
   const features = useCadStore((s) => s.features);
-  const updateParams = useCadStore((s) => s.updateParams);
 
   const feature = features.find((f) => f.id === selectedFeatureId);
   if (!feature || feature.type === PLACEMENT_TYPE) return null;
@@ -411,11 +863,11 @@ function FeatureEditor(): React.JSX.Element | null {
   if ((feature.type === "extrude" || feature.type === "cut") && params["back"] == null) {
     params["back"] = 0;
   }
-  if (feature.type === "fillet" && params["radius2"] == null && params["radius"] != null) {
-    // Leave radius2 absent until user adds it — inject 0 only when already variable?
-  }
+  // C8: surface optional second distance so the user can author variable fillet /
+  // two-distance chamfer without re-creating the feature. Editing only commits
+  // when the user changes a field (updateParams), so equal radius/radius2 stays constant.
   if (feature.type === "fillet" && params["radius"] != null && !("radius2" in params)) {
-    params["radius2"] = params["radius"]; // editable second radius (variable fillet)
+    params["radius2"] = params["radius"];
   }
   if (feature.type === "chamfer" && params["distance"] != null && !("distance2" in params)) {
     params["distance2"] = params["distance"];
@@ -433,15 +885,7 @@ function FeatureEditor(): React.JSX.Element | null {
       ) : (
         <div className="space-y-1">
           {entries.map(([key, val]) => {
-            const suffix = unitSuffix(feature.type, key);
-            return (
-              <NumberField
-                key={key}
-                label={suffix ? `${key} (${suffix})` : key}
-                value={toDisplayValue(feature.type, key, val)}
-                onCommit={(v) => updateParams(feature.id, { [key]: fromDisplayValue(feature.type, key, v) })}
-              />
-            );
+            return <FeatureParamField key={key} feature={feature} paramKey={key} literal={val} />;
           })}
           <p className="pt-1 text-[10px] text-[#567]">lengths in mm, angles in °</p>
         </div>

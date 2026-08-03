@@ -9,13 +9,13 @@
 //   • writeRecovery REPORTS its outcome (RecoveryWriteResult) instead of
 //     swallowing failures — the caller surfaces quota exhaustion on the status
 //     line. The write itself stays best-effort: it never throws into editing.
-//   • Large import payloads (an importStep feature's verbatim STEP text) are
+//   • Large import payloads (verbatim STEP/IGES text) are
 //     NOT re-serialized into every snapshot. Each payload is stored once,
 //     content-addressed by hash, in the recovery payload store
 //     (recoveryPayloads.ts); the snapshot carries a tiny
-//     `data.stepRef = { hash, bytes }` in its place. readRecovery returns that
+//     `data.stepRef`/`data.igesRef = { hash, bytes }` in its place. readRecovery returns that
 //     compact form; hydrateRecovery re-inflates it before the document is
-//     loaded, so a recovered document rebuilds IDENTICALLY (the STEP text is
+//     loaded, so a recovered document rebuilds IDENTICALLY (the source text is
 //     the import feature's source of truth). If a payload is missing, the ref
 //     is left in place and the rebuild fails loudly for that feature
 //     (worker/rebuild.ts) — geometry is never fabricated.
@@ -46,7 +46,7 @@ export type RecoveryWriteResult =
   | { ok: true }
   | { ok: false; reason: "quota" | "error"; message: string };
 
-/** A compacted import payload reference (`data.stepRef`) inside a snapshot:
+/** A compacted import payload reference (`data.stepRef` or `data.igesRef`) inside a snapshot:
  * the content hash addressing the payload store, plus the payload's length so
  * hydration can sanity-check what it fetches. */
 export interface StepPayloadRef {
@@ -135,30 +135,50 @@ function mapFeatures(
   });
 }
 
+type ImportPayloadKeys = { text: "step" | "iges"; ref: "stepRef" | "igesRef" };
+
+function importPayloadKeys(feature: EditorFeature): ImportPayloadKeys | null {
+  if (feature.type === "importStep") return { text: "step", ref: "stepRef" };
+  if (feature.type === "importIges") return { text: "iges", ref: "igesRef" };
+  return null;
+}
+
 /** Every inline import payload at/above `minBytes`, across nested subtrees. */
-function collectLargeSteps(
+function collectLargeImports(
   features: EditorFeature[],
   minBytes: number,
   out: string[] = [],
 ): string[] {
   for (const f of features) {
-    const step = f.data?.["step"];
-    if (f.type === "importStep" && typeof step === "string" && step.length >= minBytes) {
-      out.push(step);
+    const keys = importPayloadKeys(f);
+    const text = keys ? f.data?.[keys.text] : undefined;
+    if (typeof text === "string" && text.length >= minBytes) {
+      out.push(text);
     }
     const tools = f.data?.["toolFeatures"];
-    if (Array.isArray(tools)) collectLargeSteps(tools as EditorFeature[], minBytes, out);
+    if (Array.isArray(tools)) collectLargeImports(tools as EditorFeature[], minBytes, out);
   }
   return out;
 }
 
-/** Every unhydrated payload ref (a `stepRef` with no inline `step`) in the doc. */
-function collectStepRefs(features: EditorFeature[], out: StepPayloadRef[] = []): StepPayloadRef[] {
+interface ImportPayloadRef {
+  ref: StepPayloadRef;
+  keys: ImportPayloadKeys;
+}
+
+/** Every unhydrated STEP/IGES payload reference in the document. */
+function collectImportRefs(
+  features: EditorFeature[],
+  out: ImportPayloadRef[] = [],
+): ImportPayloadRef[] {
   for (const f of features) {
-    const ref = f.data?.["stepRef"];
-    if (isStepPayloadRef(ref) && typeof f.data?.["step"] !== "string") out.push(ref);
+    const keys = importPayloadKeys(f);
+    const ref = keys ? f.data?.[keys.ref] : undefined;
+    if (keys && isStepPayloadRef(ref) && typeof f.data?.[keys.text] !== "string") {
+      out.push({ ref, keys });
+    }
     const tools = f.data?.["toolFeatures"];
-    if (Array.isArray(tools)) collectStepRefs(tools as EditorFeature[], out);
+    if (Array.isArray(tools)) collectImportRefs(tools as EditorFeature[], out);
   }
   return out;
 }
@@ -171,18 +191,20 @@ async function compactDoc(
 ): Promise<{ doc: CadDocument; payloads: Map<string, string> }> {
   const payloads = new Map<string, string>();
   const refByText = new Map<string, StepPayloadRef>();
-  for (const text of collectLargeSteps(doc.features, minBytes)) {
+  for (const text of collectLargeImports(doc.features, minBytes)) {
     if (refByText.has(text)) continue;
     const hash = await memoHash(text);
     refByText.set(text, { hash, bytes: text.length });
     payloads.set(hash, text);
   }
   const features = mapFeatures(doc.features, (f) => {
-    const step = f.data?.["step"];
-    const ref = typeof step === "string" ? refByText.get(step) : undefined;
+    const keys = importPayloadKeys(f);
+    if (!keys) return f;
+    const text = f.data?.[keys.text];
+    const ref = typeof text === "string" ? refByText.get(text) : undefined;
     if (!ref) return f;
-    const data: Record<string, unknown> = { ...f.data, stepRef: ref };
-    delete data["step"];
+    const data: Record<string, unknown> = { ...f.data, [keys.ref]: ref };
+    delete data[keys.text];
     return { ...f, data };
   });
   return { doc: { ...doc, features }, payloads };
@@ -246,7 +268,7 @@ export function writeRecovery(
 ): Promise<RecoveryWriteResult> {
   const minBytes = opts?.compactMinBytes ?? COMPACT_MIN_BYTES;
   try {
-    if (collectLargeSteps(snap.doc.features, minBytes).length === 0) {
+    if (collectLargeImports(snap.doc.features, minBytes).length === 0) {
       return Promise.resolve(persistSnapshot(snap));
     }
     return writeCompacted(snap, minBytes);
@@ -256,7 +278,7 @@ export function writeRecovery(
 }
 
 /** Read the recovery snapshot, or null if none / corrupt. May contain
- * compacted `stepRef` payload references — pass it through hydrateRecovery
+ * compacted STEP/IGES payload references — pass it through hydrateRecovery
  * before loading the document. */
 export function readRecovery(): RecoverySnapshot | null {
   try {
@@ -271,8 +293,8 @@ export function readRecovery(): RecoverySnapshot | null {
 }
 
 /**
- * Re-inflate a snapshot's compacted import payloads (`data.stepRef` → inline
- * `data.step`) from the payload store, so the recovered document rebuilds
+ * Re-inflate a snapshot's compacted STEP/IGES import payloads from the payload
+ * store, so the recovered document rebuilds
  * identically to the one that was snapshotted. Never throws: a missing or
  * unavailable payload leaves its ref in place, and the rebuild fails loudly
  * for that feature (worker/rebuild.ts) — geometry is never fabricated.
@@ -280,7 +302,7 @@ export function readRecovery(): RecoverySnapshot | null {
 export async function hydrateRecovery(snap: RecoverySnapshot): Promise<RecoverySnapshot> {
   try {
     const texts = new Map<string, string>();
-    for (const ref of collectStepRefs(snap.doc.features)) {
+    for (const { ref } of collectImportRefs(snap.doc.features)) {
       if (texts.has(ref.hash)) continue;
       try {
         const text = await getRecoveryPayload(ref.hash);
@@ -292,12 +314,14 @@ export async function hydrateRecovery(snap: RecoverySnapshot): Promise<RecoveryS
     }
     if (texts.size === 0) return snap;
     const features = mapFeatures(snap.doc.features, (f) => {
-      const ref = f.data?.["stepRef"];
+      const keys = importPayloadKeys(f);
+      if (!keys) return f;
+      const ref = f.data?.[keys.ref];
       if (!isStepPayloadRef(ref)) return f;
       const text = texts.get(ref.hash);
       if (typeof text !== "string") return f;
-      const data: Record<string, unknown> = { ...f.data, step: text };
-      delete data["stepRef"];
+      const data: Record<string, unknown> = { ...f.data, [keys.text]: text };
+      delete data[keys.ref];
       return { ...f, data };
     });
     return { ...snap, doc: { ...snap.doc, features } };

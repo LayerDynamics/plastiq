@@ -51,15 +51,11 @@ function formatZodError(error: ZodError): string {
  * that failed any step (atomic).
  */
 export async function buildPart(input: unknown, deps: BuildPartDeps): Promise<BuildPartResult> {
-  const parsed = authoringDocumentSchema.safeParse(input);
-  if (!parsed.success) {
-    return { status: "error", message: "The document did not match the build_part schema.", errors: formatZodError(parsed.error) };
-  }
-
-  // Guard a common model mistake: features dumped under "assembly" (a real
-  // AssemblyModel carries components/mates, not features). rebuildDocument only
-  // evaluates doc.features, so these would SILENTLY vanish — fail loudly instead so
-  // the model moves them into the top-level features array.
+  // Guard a common model mistake BEFORE schema parse: features dumped under
+  // "assembly" (a real AssemblyModel carries components/mates, not features).
+  // rebuildDocument only evaluates doc.features, so these would SILENTLY vanish —
+  // fail loudly with a named message so the model moves them into "features".
+  // (Schema parse alone would only say "did not match schema", which hides the fix.)
   const strayFeatures = (input as { assembly?: { features?: unknown } }).assembly?.features;
   if (Array.isArray(strayFeatures) && strayFeatures.length > 0) {
     return {
@@ -67,6 +63,11 @@ export async function buildPart(input: unknown, deps: BuildPartDeps): Promise<Bu
       message: 'Features must go in the top-level "features" array, not "assembly".',
       errors: `${strayFeatures.length} feature(s) were under "assembly" and would be ignored — move them into "features" in build order. The document has only "features" and "params".`,
     };
+  }
+
+  const parsed = authoringDocumentSchema.safeParse(input);
+  if (!parsed.success) {
+    return { status: "error", message: "The document did not match the build_part schema.", errors: formatZodError(parsed.error) };
   }
 
   // Convert the ORIGINAL validated input (not the zod-parsed copy) so no fields are
