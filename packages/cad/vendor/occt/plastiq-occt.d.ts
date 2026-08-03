@@ -1033,6 +1033,12 @@ export declare class BRepBuilderAPI_Sewing extends Standard_Transient {
   delete(): void;
 }
 
+export declare class BRepBuilderAPI_MakeVertex extends BRepBuilderAPI_MakeShape {
+  constructor(P: gp_Pnt)
+  Vertex(): TopoDS_Vertex;
+  delete(): void;
+}
+
 export declare class BRep_Builder extends TopoDS_Builder {
   constructor();
   MakeFace_1(F: TopoDS_Face): void;
@@ -5742,6 +5748,7 @@ export type OpenCascadeInstance = {FS: typeof FS} & {
   BRepBuilderAPI_MakeSolid_7: typeof BRepBuilderAPI_MakeSolid_7;
   BRepBuilderAPI_Command: typeof BRepBuilderAPI_Command;
   BRepBuilderAPI_Sewing: typeof BRepBuilderAPI_Sewing;
+  BRepBuilderAPI_MakeVertex: typeof BRepBuilderAPI_MakeVertex;
   BRep_Builder: typeof BRep_Builder;
   BRep_Tool: typeof BRep_Tool;
   Geom_ElementarySurface: typeof Geom_ElementarySurface;

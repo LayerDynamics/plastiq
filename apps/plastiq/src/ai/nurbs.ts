@@ -86,7 +86,7 @@ export function freeformDocFromSurfaces(
       data: {
         kind: "custom",
         surface: nurbs,
-        op: i === 0 ? "new" : "new",
+        op: "new",
       },
     };
   });

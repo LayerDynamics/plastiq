@@ -98,6 +98,9 @@ mainBuild:
     - symbol: BRepBuilderAPI_MakeEdge
     - symbol: BRepBuilderAPI_MakeWire
     - symbol: BRepBuilderAPI_MakeFace
+    # Freeform STEP fitting-tolerance gate: source samples become vertices and
+    # BRepExtrema measures them against the re-imported B-spline face.
+    - symbol: BRepBuilderAPI_MakeVertex
     - symbol: BRepBuilderAPI_Copy
     - symbol: GC_MakeArcOfCircle
     - symbol: GC_MakeSegment

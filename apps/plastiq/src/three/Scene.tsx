@@ -21,6 +21,7 @@ import {
   type Quat,
 } from "../viewport/cameraOrientation.js";
 import { FeatureEditGizmo } from "./gizmos/featureEdit.gizmo.js";
+import { FreeformControlNetGizmo } from "./gizmos/freeformControlNet.gizmo.js";
 import { OffsetGizmo } from "./gizmos/offset.gizmo.js";
 import { RightClickDropdownGizmo } from "./gizmos/rightClickDropdown.gizmo.js";
 import { SketchCamera } from "./SketchCamera.js";
@@ -33,7 +34,13 @@ import { SketchScene } from "../sketch/SketchScene.js";
 import { setProjectableEdgePolylines } from "../sketch/projectableEdges.js";
 import type { DatumPlane } from "@plastiq/cad";
 import { GRID_CENTER, GRID_CELL } from "./colors.js";
-import { buildPart, buildMeshBody, disposePart, type BuiltPart, type BuiltMeshBody } from "../viewport/buildMesh.js";
+import {
+  buildPart,
+  buildMeshBody,
+  disposePart,
+  type BuiltPart,
+  type BuiltMeshBody,
+} from "../viewport/buildMesh.js";
 import { buildPointCloud, type BuiltPointCloud } from "../viewport/buildPointCloud.js";
 import { applyPlacement, findPlacement, placementFromFeature } from "../viewport/placement.js";
 import { useCadStore } from "../store/store.js";
@@ -279,7 +286,10 @@ export function Scene({
   useEffect(() => {
     if (!part) return;
     const apply = (): void =>
-      applyPlacement(part.group, placementFromFeature(findPlacement(useCadStore.getState().features)));
+      applyPlacement(
+        part.group,
+        placementFromFeature(findPlacement(useCadStore.getState().features)),
+      );
     apply();
     return useCadStore.subscribe((s, prev) => {
       if (s.features !== prev.features) apply();
@@ -378,7 +388,11 @@ export function Scene({
             </group>
           ))}
         </group>
-        <MeshEditing bodies={meshBodies ?? []} builtBodies={builtBodies} onBodiesChange={onMeshBodiesChange} />
+        <MeshEditing
+          bodies={meshBodies ?? []}
+          builtBodies={builtBodies}
+          onBodiesChange={onMeshBodiesChange}
+        />
         {/* Right-click here surfaces the mesh→CAD actions (Reconstruct / Fit NURBS). The menu is
             doc-mode-filtered (contextOptions.isActionVisible) so it shows ONLY those, not the
             parametric create/sketch actions. No B-rep part, so pick-under-cursor is null. */}
@@ -450,6 +464,7 @@ export function Scene({
       <ObjectCenterGizmo />
       <SectionAnalysisGizmo part={part} />
       <FeatureEditGizmo part={part} />
+      <FreeformControlNetGizmo />
       <OffsetGizmo />
       <TransformGizmo part={part} />
       {/* Right-click context menu: reads the same part for pick-under-cursor;

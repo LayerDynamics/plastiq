@@ -10,8 +10,8 @@ The full prebuilt `opencascade.js` wasm is ~48 MB raw / **~13.7 MB gzip** — it
 exposes thousands of OCCT classes, almost none of which the kernel calls. This
 trimmed build binds **only the OCCT symbols `@plastiq/cad` actually uses** (see
 `occt.build.yml`); LTO + `--gc-sections` dead-strips everything unreachable from
-those bindings at link time. The 2026-08-03 artifact is **19,475,729 bytes raw /
-5,958,654 bytes gzip** — the shipped browser payload remains about 56% smaller
+those bindings at link time. The 2026-08-03 artifact is **19,476,078 bytes raw /
+5,959,776 bytes gzip** — the shipped browser payload remains about 56% smaller
 than the full prebuilt gzip.
 
 Nothing is removed from the project: the full `opencascade.js` npm package stays

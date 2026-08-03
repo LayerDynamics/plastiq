@@ -9,6 +9,16 @@ import { PLACEMENT_TYPE, type EditorFeature } from "../store/types.js";
 import { findPlacement, placementFromFeature } from "../viewport/placement.js";
 import { toDisplayValue, fromDisplayValue, unitSuffix } from "../store/featureUnits.js";
 import { evalExpr } from "../store/paramExpr.js";
+import {
+  domain as freeformDomain,
+  elevateDegreeU,
+  elevateDegreeV,
+  insertKnotU,
+  insertKnotV,
+  mirrorControlNet,
+  type NurbsSurface,
+} from "@plastiq/cad";
+import { editableSurfaceFromFeature } from "../freeform/controlNetEdit.js";
 
 const M_PER_MM = 0.001;
 const DEG_PER_RAD = 180 / Math.PI;
@@ -586,6 +596,7 @@ function FeatureDataFields({
   const showPatchContinuity = type === "patch";
   const showExtendSurface = type === "extendSurface";
   const showThickenBothSides = type === "thicken";
+  const showFreeformControlNet = type === "freeform";
   if (
     !showOp &&
     !showShellDir &&
@@ -600,7 +611,8 @@ function FeatureDataFields({
     !showTrimKeep &&
     !showPatchContinuity &&
     !showExtendSurface &&
-    !showThickenBothSides
+    !showThickenBothSides &&
+    !showFreeformControlNet
   ) {
     return null;
   }
@@ -693,9 +705,98 @@ function FeatureDataFields({
   const edgePickCount = picks.filter((p) => p.kind === "edge").length;
   const facePickCount = picks.filter((p) => p.kind === "face").length;
 
+  const editFreeform = (edit: (surface: NurbsSurface) => NurbsSurface): void => {
+    if (!feature) return;
+    const surface = editableSurfaceFromFeature(feature);
+    if (!surface) return;
+    setFeatureData(featureId, { kind: "custom", surface: edit(surface) });
+  };
+
   return (
     <div data-testid="feature-data" className="mt-2 space-y-1 border-t border-[#1a2230] pt-2">
       <div className="text-[10px] uppercase tracking-wide text-[#567]">Data</div>
+      {showFreeformControlNet && (
+        <div className="space-y-1.5" data-testid="freeform-control-net-tools">
+          <p
+            data-testid="freeform-control-net-help"
+            className="text-[10px] leading-relaxed text-[#d8a76c]"
+          >
+            Control net is active in the viewport. Select an orange pole, then drag the 3D handle or
+            its Z control; the surface previews live and commits on release.
+          </p>
+          <div className="grid grid-cols-2 gap-1">
+            <button
+              type="button"
+              data-testid="freeform-elevate-u"
+              onClick={() => editFreeform((surface) => elevateDegreeU(surface))}
+              className="rounded border border-[#51402c] bg-[#211a13] px-1 py-0.5 text-[10px] text-[#ffd7a0]"
+            >
+              Elevate U
+            </button>
+            <button
+              type="button"
+              data-testid="freeform-elevate-v"
+              onClick={() => editFreeform((surface) => elevateDegreeV(surface))}
+              className="rounded border border-[#51402c] bg-[#211a13] px-1 py-0.5 text-[10px] text-[#ffd7a0]"
+            >
+              Elevate V
+            </button>
+            <button
+              type="button"
+              data-testid="freeform-insert-u"
+              onClick={() =>
+                editFreeform((surface) => {
+                  const { u0, u1 } = freeformDomain(surface);
+                  return insertKnotU(surface, (u0 + u1) / 2);
+                })
+              }
+              className="rounded border border-[#51402c] bg-[#211a13] px-1 py-0.5 text-[10px] text-[#ffd7a0]"
+            >
+              Insert U knot
+            </button>
+            <button
+              type="button"
+              data-testid="freeform-insert-v"
+              onClick={() =>
+                editFreeform((surface) => {
+                  const { v0, v1 } = freeformDomain(surface);
+                  return insertKnotV(surface, (v0 + v1) / 2);
+                })
+              }
+              className="rounded border border-[#51402c] bg-[#211a13] px-1 py-0.5 text-[10px] text-[#ffd7a0]"
+            >
+              Insert V knot
+            </button>
+          </div>
+          <div className="flex gap-1">
+            {(["X", "Y", "Z"] as const).map((axis, index) => (
+              <button
+                key={axis}
+                type="button"
+                data-testid={`freeform-mirror-${axis.toLowerCase()}`}
+                onClick={() =>
+                  editFreeform((surface) => {
+                    const origin: [number, number, number] = [
+                      feature?.params?.["ox"] ?? 0,
+                      feature?.params?.["oy"] ?? 0,
+                      feature?.params?.["oz"] ?? 0,
+                    ];
+                    const normal: [number, number, number] = [
+                      index === 0 ? 1 : 0,
+                      index === 1 ? 1 : 0,
+                      index === 2 ? 1 : 0,
+                    ];
+                    return mirrorControlNet(surface, origin, normal);
+                  })
+                }
+                className="flex-1 rounded border border-[#51402c] bg-[#211a13] px-1 py-0.5 text-[10px] text-[#ffd7a0]"
+              >
+                Mirror {axis}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
       {showOp && (
         <label className="flex items-center justify-between gap-2 text-xs text-[#9ab]">
           <span className="text-[#789]">op</span>

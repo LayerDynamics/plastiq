@@ -97,9 +97,8 @@ import {
   type TessellateOptions,
   type OwnedShapeHistory,
   type BooleanResult,
-  // Freeform (§15): pure-TS NURBS → sample grid → surfaceFromPoints face Solid.
-  evaluate as evaluateFreeform,
-  domain as freeformDomain,
+  // Freeform (§15): pure-TS NURBS → tolerance-bounded B-rep face commit.
+  freeformToFace,
   makeNurbsSurface,
   validateSurface,
   planeSurface,
@@ -2180,10 +2179,8 @@ function evaluateDocument(oc: Occt, doc: CadDocument, isolate: boolean): Isolate
       case "freeform": {
         // §15 freeform NURBS surface body. Feature data stores a NurbsSurface
         // JSON control net (or a plane/cylinder/sphere kind + params that
-        // regenerates one). Rebuild samples the pure-TS surface onto a
-        // rectangular point grid and commits via surfaceFromPoints → face
-        // Solid so the existing tessellateTagged viewport path lights up.
-        // Full Geom_BSplineSurface pole commit (Lane A(b)) is not required yet.
+        // regenerates one). Rebuild commits the same pure-TS surface through the
+        // shared, fitting-tolerance-bounded freeformToFace path.
         const surf = resolveFreeformSurface(f);
         const resU = Math.max(2, Math.floor(opt(f, "resU", 12)));
         const resV = Math.max(2, Math.floor(opt(f, "resV", 12)));
@@ -2323,27 +2320,14 @@ function resolveFreeformSurface(f: EditorFeature): NurbsSurface {
 }
 
 /**
- * Sample a pure-TS freeform surface onto a rectangular point grid and fit an
- * OCCT B-spline face via surfaceFromPoints — the temporary solid path until a
- * full Geom_BSplineSurface pole commit lands.
+ * Commit a pure-TS freeform surface through the shared B-rep fitting path.
  */
 function freeformSurfaceToFace(oc: Occt, surf: NurbsSurface, resU: number, resV: number): Solid {
-  const { u0, u1, v0, v1 } = freeformDomain(surf);
-  const nu = Math.max(2, resU);
-  const nv = Math.max(2, resV);
-  const grid: Vec3[][] = [];
-  for (let i = 0; i < nu; i++) {
-    const u = u0 + ((u1 - u0) * i) / (nu - 1);
-    const row: Vec3[] = [];
-    for (let j = 0; j < nv; j++) {
-      const v = v0 + ((v1 - v0) * j) / (nv - 1);
-      row.push(evaluateFreeform(surf, u, v));
-    }
-    grid.push(row);
-  }
-  const degU = Math.max(1, Math.min(surf.degU, nu - 1));
-  const degV = Math.max(1, Math.min(surf.degV, nv - 1));
-  return surfaceFromPoints(oc, grid, { degU, degV });
+  return freeformToFace(oc, surf, {
+    samplesU: Math.max(2, resU),
+    samplesV: Math.max(2, resV),
+    tolerance: 1e-6,
+  });
 }
 
 /**

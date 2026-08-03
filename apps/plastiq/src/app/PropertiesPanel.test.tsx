@@ -8,6 +8,7 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { PropertiesPanel } from "./PropertiesPanel.js";
 import { useCadStore } from "../store/store.js";
 import { defaultDocument } from "../store/seed.js";
+import { planeSurface } from "@plastiq/cad";
 
 beforeEach(() => {
   useCadStore.getState().loadDocument(defaultDocument());
@@ -545,5 +546,36 @@ describe("round primitive properties", () => {
     render(<PropertiesPanel />);
     fireEvent.click(screen.getByTestId("feature-thicken-both-sides"));
     expect(useCadStore.getState().features[0]!.data?.["bothSides"]).toBe(true);
+  });
+
+  it("productizes freeform degree, knot, and symmetry operations", () => {
+    const surface = planeSurface([0, 0, 0], [1, 0, 0], [0, 1, 0], 0.04, 0.03);
+    useCadStore.getState().loadDocument({
+      features: [
+        {
+          id: "ff1",
+          type: "freeform",
+          params: { uSize: 0.04, vSize: 0.03, ox: 0, oy: 0, oz: 0 },
+          data: { kind: "plane", uDir: [1, 0, 0], vDir: [0, 1, 0], surface },
+        },
+      ],
+      params: {},
+    });
+    useCadStore.setState({ selectedFeatureId: "ff1" });
+    render(<PropertiesPanel />);
+
+    fireEvent.click(screen.getByTestId("freeform-elevate-u"));
+    let edited = useCadStore.getState().features[0]!.data?.["surface"] as typeof surface;
+    expect(useCadStore.getState().features[0]!.data?.["kind"]).toBe("custom");
+    expect(edited.degU).toBe(2);
+
+    const beforeKnots = edited.knotsU.length;
+    fireEvent.click(screen.getByTestId("freeform-insert-u"));
+    edited = useCadStore.getState().features[0]!.data?.["surface"] as typeof surface;
+    expect(edited.knotsU.length).toBeGreaterThan(beforeKnots);
+
+    fireEvent.click(screen.getByTestId("freeform-mirror-x"));
+    edited = useCadStore.getState().features[0]!.data?.["surface"] as typeof surface;
+    expect(Math.max(...edited.controlNet.flat().map((point) => point[0]))).toBeCloseTo(0, 12);
   });
 });

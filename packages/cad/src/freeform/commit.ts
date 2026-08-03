@@ -2,9 +2,11 @@
 //
 // Evaluates a dense point grid on the pure-TS NURBS surface (de Boor), then
 // hands it to the kernel's surfaceFromPoints (GeomAPI_PointsToBSplineSurface →
-// MakeFace). That is the client-side twin of services/nurbs STEP assembly, using
-// symbols already bound in this wasm — no new embind trim required for the
-// sample-and-fit route.
+// MakeFace). The NURBS service can construct its returned spline definition
+// directly through native Python OCCT; the browser binding cannot currently do
+// that because the generated knot-array constructor ABI is unresolved. The
+// browser therefore uses this measured sample-and-fit route and enforces the
+// requested tolerance after STEP transfer in the real-kernel acceptance test.
 //
 // Rational surfaces (cylinder/sphere generators) are committed as a dense
 // sampling of their exact geometry, so the B-rep face is a high-fidelity fit
@@ -31,7 +33,11 @@ export interface FreeformCommitOptions {
  * Commit a freeform NURBS surface to a B-rep face Solid via dense de-Boor
  * sampling + `surfaceFromPoints`. Caller owns the returned Solid.
  */
-export function freeformToFace(oc: Occt, surface: NurbsSurface, opts?: FreeformCommitOptions): Solid {
+export function freeformToFace(
+  oc: Occt,
+  surface: NurbsSurface,
+  opts?: FreeformCommitOptions,
+): Solid {
   const nU = opts?.samplesU ?? 16;
   const nV = opts?.samplesV ?? 16;
   if (!Number.isFinite(nU) || !Number.isFinite(nV) || nU < 2 || nV < 2) {

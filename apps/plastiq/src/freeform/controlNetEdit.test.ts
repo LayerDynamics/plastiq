@@ -3,7 +3,11 @@
 
 import { describe, expect, it } from "vitest";
 import { evaluate, planeSurface, tessellateFreeform } from "@plastiq/cad";
-import { dragControlPoint, featureDataAfterControlDrag } from "./controlNetEdit.js";
+import {
+  dragControlPoint,
+  editableSurfaceFromFeature,
+  featureDataAfterControlDrag,
+} from "./controlNetEdit.js";
 
 describe("control-net drag (§15 Lane A(c))", () => {
   it("dragControlPoint moves a pole and re-tessellates without a worker", () => {
@@ -25,6 +29,30 @@ describe("control-net drag (§15 Lane A(c))", () => {
     expect(surf.controlNet[0]![0]![2]).toBeCloseTo(0.005, 12);
     // Original data.surface not mutated.
     expect(s.controlNet[0]![0]![2]).toBeCloseTo(0, 12);
+  });
+
+  it("freezes a primitive into a custom net so rebuild cannot discard the drag", () => {
+    const s = planeSurface([0, 0, 0], [1, 0, 0], [0, 1, 0], 0.02, 0.02);
+    const next = featureDataAfterControlDrag(
+      { kind: "plane", surface: s },
+      1,
+      1,
+      [0.02, 0.02, 0.006],
+    );
+    expect(next["kind"]).toBe("custom");
+    const surf = next["surface"] as { controlNet: number[][][] };
+    expect(surf.controlNet[1]![1]![2]).toBeCloseTo(0.006, 12);
+  });
+
+  it("regenerates the visible primitive net from its current parameters", () => {
+    const original = planeSurface([0, 0, 0], [1, 0, 0], [0, 1, 0], 0.02, 0.02);
+    const surface = editableSurfaceFromFeature({
+      id: "f1",
+      type: "freeform",
+      params: { uSize: 0.05, vSize: 0.03, ox: 0, oy: 0, oz: 0 },
+      data: { kind: "plane", uDir: [1, 0, 0], vDir: [0, 1, 0], surface: original },
+    });
+    expect(surface?.controlNet[1]![1]).toEqual([0.05, 0.03, 0]);
   });
 
   it("featureDataAfterControlDrag fails loudly without a surface", () => {

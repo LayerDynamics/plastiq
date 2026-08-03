@@ -29,6 +29,7 @@ describe("trimmed-wasm bindings the kernel requires", () => {
     expect(typeof oc.BRepFeat_MakeDPrism_1).toBe("function");
     expect(typeof oc.LocOpe_LinearForm_2).toBe("function");
     expect(typeof oc.BRepExtrema_DistShapeShape_1).toBe("function");
+    expect(typeof oc.BRepBuilderAPI_MakeVertex).toBe("function");
 
     // Construct and perform the exact-distance class: typeof alone does not
     // detect an omitted embind base/argument type.

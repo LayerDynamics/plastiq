@@ -13,7 +13,12 @@ import { useProjectsStore } from "../persistence/projectsStore.js";
 import { buildProvider, keyResolverFor } from "./providers/registry.js";
 import { isFirstRun, toProviderSettings, type AiSettings } from "./settings.js";
 import { runGeneration } from "./runGeneration.js";
-import { cancelReconstruct, commitStepDocument, reconstructMesh, stepToImportDocument } from "./reconstruct.js";
+import {
+  cancelReconstruct,
+  commitStepDocument,
+  reconstructMesh,
+  stepToImportDocument,
+} from "./reconstruct.js";
 import { liveBuildProbe } from "./agentTurn.js";
 import {
   cancelFit,
@@ -45,7 +50,12 @@ import {
   type ProviderEndpoint,
 } from "./errorHints.js";
 import { fileToBase64, fileToText } from "./fileRead.js";
-import { detectOllama, ollamaNotDetectedMessage, OLLAMA_DEFAULT_V1, type OllamaModelChoice } from "./ollamaDetect.js";
+import {
+  detectOllama,
+  ollamaNotDetectedMessage,
+  OLLAMA_DEFAULT_V1,
+  type OllamaModelChoice,
+} from "./ollamaDetect.js";
 import { pairImagesToFrames, type NamedImage } from "./framePairing.js";
 import { exportMeshGlb } from "../mesh/exportGlb.js";
 import { buildMeshGenDeps, meshGenConfigured, DEFAULT_IMAGE_PROVIDER_ID } from "./meshGenDeps.js";
@@ -74,7 +84,8 @@ async function fileToGenImage(file: File): Promise<GenImage> {
   const bytes = new Uint8Array(buf);
   let binary = "";
   const CHUNK = 0x8000;
-  for (let i = 0; i < bytes.length; i += CHUNK) binary += String.fromCharCode(...bytes.subarray(i, i + CHUNK));
+  for (let i = 0; i < bytes.length; i += CHUNK)
+    binary += String.fromCharCode(...bytes.subarray(i, i + CHUNK));
   return { mediaType: file.type || "image/png", data: btoa(binary) };
 }
 
@@ -128,7 +139,9 @@ export function formatPlanGraph(plan: PlanGraph): string {
 function hydrateTranscript(messages: ChatMessage[]): Line[] {
   const visible = messages.filter((m) => m.role === "user" || m.role === "assistant");
   if (visible.length === 0) return [];
-  const lines: Line[] = [{ kind: "status", text: "— earlier messages in this project —", prior: true }];
+  const lines: Line[] = [
+    { kind: "status", text: "— earlier messages in this project —", prior: true },
+  ];
   for (const m of visible) {
     const text = messageText(m.content);
     lines.push({ kind: "text", text: m.role === "user" ? `> ${text}` : text, prior: true });
@@ -233,7 +246,9 @@ function FirstRunChooser(): React.JSX.Element {
         )}
         {detect === "reachable" && models.length === 0 && (
           <div data-testid="ai-ollama-empty" className="space-y-1 text-[#fb9]">
-            <p>Ollama is running but no models are installed — pull one, e.g. `ollama pull qwen2.5`.</p>
+            <p>
+              Ollama is running but no models are installed — pull one, e.g. `ollama pull qwen2.5`.
+            </p>
             <button
               type="button"
               data-testid="ai-ollama-retry"
@@ -298,6 +313,7 @@ function FirstRunChooser(): React.JSX.Element {
  * time (shared busy/status/error state). */
 function MeshConvertSection(): React.JSX.Element {
   const [busy, setBusy] = useState(false);
+  const [keepNurbsEditable, setKeepNurbsEditable] = useState(true);
   const [status, setStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
@@ -421,6 +437,7 @@ function MeshConvertSection(): React.JSX.Element {
           probe: liveBuildProbe(),
         },
         {
+          keepEditable: keepNurbsEditable,
           signal: controller.signal,
           onState: (s) => setStatus(s),
           onJob: (id) => {
@@ -447,7 +464,7 @@ function MeshConvertSection(): React.JSX.Element {
       jobIdRef.current = null;
       jobKindRef.current = null;
     }
-  }, [busy]);
+  }, [busy, keepNurbsEditable]);
 
   /** Cancel: abort client-side polling immediately, then best-effort DELETE the server-side job
    * (M4b) — without it the service keeps reconstructing/fitting for nobody. A failed DELETE
@@ -474,7 +491,10 @@ function MeshConvertSection(): React.JSX.Element {
 
   return (
     <div data-testid="mesh-convert" className="space-y-2 text-xs text-[#9ab]">
-      <p>This is a generated mesh. Convert it to an editable B-rep CAD part (STEP) via the reconstruction service.</p>
+      <p>
+        This is a generated mesh. Convert it to an editable B-rep CAD part (STEP) via the
+        reconstruction service.
+      </p>
       <div className="flex items-center gap-2">
         <button
           type="button"
@@ -485,17 +505,29 @@ function MeshConvertSection(): React.JSX.Element {
         >
           {busy ? "Converting…" : "Convert to CAD (STEP)"}
         </button>
-        {/* SPEC-12 FR-8: the smooth/organic route — NURBS surface fitting instead of the
-            analytic reconstruction; same STEP → importStep landing. */}
-        <button
-          type="button"
-          data-testid="mesh-nurbs-run"
-          onClick={() => void fitSmooth()}
-          disabled={busy}
-          className="rounded border border-[#3a5a7a] bg-[#14253a] px-2 py-1 text-[#bfe] hover:bg-[#1a2f48] disabled:opacity-40"
-        >
-          Fit smooth CAD (NURBS)
-        </button>
+        <div className="flex flex-col gap-1">
+          {/* SPEC-12 FR-8 + §15 Lane B: smooth fitting can land as editable
+              control nets (default) or as the service's opaque STEP result. */}
+          <button
+            type="button"
+            data-testid="mesh-nurbs-run"
+            onClick={() => void fitSmooth()}
+            disabled={busy}
+            className="rounded border border-[#3a5a7a] bg-[#14253a] px-2 py-1 text-[#bfe] hover:bg-[#1a2f48] disabled:opacity-40"
+          >
+            Fit smooth CAD (NURBS)
+          </button>
+          <label className="flex items-center gap-1 text-[10px] text-[#9fc]">
+            <input
+              type="checkbox"
+              data-testid="mesh-nurbs-keep-editable"
+              checked={keepNurbsEditable}
+              disabled={busy}
+              onChange={(event) => setKeepNurbsEditable(event.currentTarget.checked)}
+            />
+            Keep editable control net
+          </label>
+        </div>
         {busy && (
           <button
             type="button"
@@ -629,7 +661,11 @@ function NerfCaptureSection(): React.JSX.Element {
         return;
       }
       // Keep each file's NAME alongside its base64 payload for filename-based frame pairing (11-M3).
-      setImages(await Promise.all(Array.from(files).map(async (f) => ({ name: f.name, data: await fileToBase64(f) }))));
+      setImages(
+        await Promise.all(
+          Array.from(files).map(async (f) => ({ name: f.name, data: await fileToBase64(f) })),
+        ),
+      );
     },
     [busy],
   );
@@ -734,7 +770,10 @@ function NerfCaptureSection(): React.JSX.Element {
   }, []);
 
   return (
-    <div data-testid="nerf-capture" className="flex flex-col gap-1 rounded border border-[#1b2230] bg-black/20 p-2">
+    <div
+      data-testid="nerf-capture"
+      className="flex flex-col gap-1 rounded border border-[#1b2230] bg-black/20 p-2"
+    >
       <div className="text-[10px] text-[#9ab]">Capture from photos (NeRF → mesh → CAD)</div>
       <div className="flex flex-wrap items-center gap-2 text-[10px] text-[#9ab]">
         <label className="cursor-pointer rounded border border-[#2a3444] bg-[#10141c] px-2 py-1 hover:bg-[#16202c]">
@@ -785,8 +824,14 @@ function NerfCaptureSection(): React.JSX.Element {
           </button>
         )}
       </div>
-      <div data-testid="nerf-knobs" className="flex flex-wrap items-center gap-2 text-[10px] text-[#9ab]">
-        <div data-testid="nerf-method" className="flex overflow-hidden rounded border border-[#2a3444]">
+      <div
+        data-testid="nerf-knobs"
+        className="flex flex-wrap items-center gap-2 text-[10px] text-[#9ab]"
+      >
+        <div
+          data-testid="nerf-method"
+          className="flex overflow-hidden rounded border border-[#2a3444]"
+        >
           <button
             type="button"
             data-testid="nerf-method-neus"
@@ -836,7 +881,10 @@ function NerfCaptureSection(): React.JSX.Element {
             ))}
           </select>
         </label>
-        <label className="flex items-center gap-1" title="Position encoding — NeRF (density) only; the NeuS SDF trunk has none">
+        <label
+          className="flex items-center gap-1"
+          title="Position encoding — NeRF (density) only; the NeuS SDF trunk has none"
+        >
           encoding
           <select
             data-testid="nerf-encoding"
@@ -849,7 +897,10 @@ function NerfCaptureSection(): React.JSX.Element {
             <option value="hashgrid">hashgrid</option>
           </select>
         </label>
-        <label className="flex items-center gap-1" title="Fine PDF (importance) samples per ray — 0 keeps the coarse-only default">
+        <label
+          className="flex items-center gap-1"
+          title="Fine PDF (importance) samples per ray — 0 keeps the coarse-only default"
+        >
           fine samples
           <input
             data-testid="nerf-importance"
@@ -919,7 +970,9 @@ function PhotoSolveSection(): React.JSX.Element {
         return;
       }
       setImages(
-        await Promise.all(Array.from(files).map(async (f) => ({ name: f.name, data: await fileToBase64(f) }))),
+        await Promise.all(
+          Array.from(files).map(async (f) => ({ name: f.name, data: await fileToBase64(f) })),
+        ),
       );
     },
     [busy],
@@ -1078,10 +1131,16 @@ function PhotoSolveSection(): React.JSX.Element {
   }, [result, images, busy]);
 
   return (
-    <div data-testid="photo-solve" className="flex flex-col gap-1 rounded border border-[#1b2230] bg-black/20 p-2">
-      <div className="text-[10px] text-[#9ab]">Photogrammetry (photos → poses + point cloud → CAD)</div>
+    <div
+      data-testid="photo-solve"
+      className="flex flex-col gap-1 rounded border border-[#1b2230] bg-black/20 p-2"
+    >
+      <div className="text-[10px] text-[#9ab]">
+        Photogrammetry (photos → poses + point cloud → CAD)
+      </div>
       <div className="text-[10px] text-[#789]">
-        Pick 20–60 overlapping photos of one object (≥60% overlap between neighbours, even lighting).
+        Pick 20–60 overlapping photos of one object (≥60% overlap between neighbours, even
+        lighting).
       </div>
       <div className="flex flex-wrap items-center gap-2 text-[10px] text-[#9ab]">
         <label className="cursor-pointer rounded border border-[#2a3444] bg-[#10141c] px-2 py-1 hover:bg-[#16202c]">
@@ -1096,7 +1155,10 @@ function PhotoSolveSection(): React.JSX.Element {
           />
           {images.length > 0 ? `Replace photos (${images.length})` : "Choose photos"}
         </label>
-        <label className="flex items-center gap-1" title="Run dense MVS (a dense oriented cloud → mesh); off = poses only">
+        <label
+          className="flex items-center gap-1"
+          title="Run dense MVS (a dense oriented cloud → mesh); off = poses only"
+        >
           <input
             data-testid="photo-dense"
             type="checkbox"
@@ -1236,7 +1298,9 @@ function CaptureScanSection(): React.JSX.Element {
     // 16 points), the browser-memory ceiling, and /capture's oriented-cloud requirement. The
     // parsers already guarantee Nx3 finite values and parallel normals.
     if (cloud.points.length < MIN_POINTS) {
-      setError(`Too few points (${cloud.points.length}); the service needs at least ${MIN_POINTS}.`);
+      setError(
+        `Too few points (${cloud.points.length}); the service needs at least ${MIN_POINTS}.`,
+      );
       return;
     }
     if (cloud.points.length > MAX_CAPTURE_POINTS) {
@@ -1244,7 +1308,9 @@ function CaptureScanSection(): React.JSX.Element {
       return;
     }
     if (mode === "capture" && !cloud.normals) {
-      setError("This file has no normals — Capture needs an oriented cloud (x y z nx ny nz). Switch to Complete, or export normals.");
+      setError(
+        "This file has no normals — Capture needs an oriented cloud (x y z nx ny nz). Switch to Complete, or export normals.",
+      );
       return;
     }
 
@@ -1268,7 +1334,9 @@ function CaptureScanSection(): React.JSX.Element {
     }
     setStatus("submitting…");
     try {
-      const deps = { persist: (doc: MeshDoc) => useProjectsStore.getState().createMeshProject(doc) };
+      const deps = {
+        persist: (doc: MeshDoc) => useProjectsStore.getState().createMeshProject(doc),
+      };
       const opts = {
         ...(baseURL ? { baseURL } : {}),
         signal: controller.signal,
@@ -1330,7 +1398,10 @@ function CaptureScanSection(): React.JSX.Element {
   }, []);
 
   return (
-    <div data-testid="capture-scan" className="flex flex-col gap-1 rounded border border-[#1b2230] bg-black/20 p-2">
+    <div
+      data-testid="capture-scan"
+      className="flex flex-col gap-1 rounded border border-[#1b2230] bg-black/20 p-2"
+    >
       <div className="text-[10px] text-[#9ab]">Scan to mesh (point cloud → mesh → CAD)</div>
       <div className="flex flex-wrap items-center gap-2 text-[10px] text-[#9ab]">
         <label className="cursor-pointer rounded border border-[#2a3444] bg-[#10141c] px-2 py-1 hover:bg-[#16202c]">
@@ -1349,7 +1420,10 @@ function CaptureScanSection(): React.JSX.Element {
             {fileName} ({cloud.points.length} pts{cloud.normals ? ", normals" : ""})
           </span>
         )}
-        <div data-testid="capture-mode" className="flex overflow-hidden rounded border border-[#2a3444]">
+        <div
+          data-testid="capture-mode"
+          className="flex overflow-hidden rounded border border-[#2a3444]"
+        >
           <button
             type="button"
             data-testid="capture-mode-capture"
@@ -1376,7 +1450,13 @@ function CaptureScanSection(): React.JSX.Element {
           disabled={busy || !cloud}
           className="rounded border border-[#3a5a7a] bg-[#14253a] px-2 py-1 text-[#bfe] hover:bg-[#1a2f48] disabled:opacity-40"
         >
-          {busy ? (mode === "capture" ? "Capturing…" : "Completing…") : mode === "capture" ? "Build mesh" : "Complete scan"}
+          {busy
+            ? mode === "capture"
+              ? "Capturing…"
+              : "Completing…"
+            : mode === "capture"
+              ? "Build mesh"
+              : "Complete scan"}
         </button>
         {busy && (
           <button
@@ -1450,9 +1530,9 @@ function CreativeKeyField(): React.JSX.Element {
         </button>
       </div>
       <p className="mt-1">
-        Used only for AI mesh generation (organic shapes the parametric kernel can’t author).
-        A direct browser call needs fal CORS; otherwise route through a proxy. The key stays in
-        your browser and is sent only to the configured endpoint.
+        Used only for AI mesh generation (organic shapes the parametric kernel can’t author). A
+        direct browser call needs fal CORS; otherwise route through a proxy. The key stays in your
+        browser and is sent only to the configured endpoint.
       </p>
     </details>
   );
@@ -1491,7 +1571,9 @@ export function GenerationPanel(): React.JSX.Element {
   // 6-L1-ui. Defaults to the persisted setting (or the catalog default); a run-scoped override
   // threaded through turnDeps.settings — NOT a save (that would change the persisted default and
   // defeat the per-job semantics). Mirrors meshProviderId's un-synced initial-value pattern.
-  const [imageProviderId, setImageProviderId] = useState(settings?.imageProviderId ?? DEFAULT_IMAGE_PROVIDER_ID);
+  const [imageProviderId, setImageProviderId] = useState(
+    settings?.imageProviderId ?? DEFAULT_IMAGE_PROVIDER_ID,
+  );
   const abortRef = useRef<AbortController | null>(null);
   /** Monotonic id source for attachments (Date.now/Math.random are banned in some
    * contexts; a counter is deterministic and unique within a session). */
@@ -1520,190 +1602,233 @@ export function GenerationPanel(): React.JSX.Element {
     setFailedRun(null);
   }, [conversationProjectId]);
 
-  const run = useCallback(async (retryOf?: RunRequest): Promise<void> => {
-    const current = useAiStore.getState().settings;
-    if (!current || running) return;
-    const req: RunRequest = retryOf ?? {
-      text: prompt.trim(),
-      attached: attachment,
-      route: attachRoute,
-      meshProvider: meshProviderId,
-      imageProvider: imageProviderId,
-    };
-    const { text, attached } = req;
-    if (!text && !attached) return;
+  const run = useCallback(
+    async (retryOf?: RunRequest): Promise<void> => {
+      const current = useAiStore.getState().settings;
+      if (!current || running) return;
+      const req: RunRequest = retryOf ?? {
+        text: prompt.trim(),
+        attached: attachment,
+        route: attachRoute,
+        meshProvider: meshProviderId,
+        imageProvider: imageProviderId,
+      };
+      const { text, attached } = req;
+      if (!text && !attached) return;
 
-    if (!buildSeam()) {
-      append({ kind: "error", text: "The geometry viewport isn’t ready yet — try again in a moment.", isError: true });
-      return;
-    }
-
-    const controller = new AbortController();
-    const meter = new UsageMeter();
-    createdMeshIdRef.current = null;
-
-    // Shared agent-turn deps (build_part/inspect + create_mesh) — the SAME wiring the
-    // command palette uses, so both entry points stay in lockstep. The attached image (if
-    // any) is the img3d creative input, resolved by id (FR-10a). The model can always reach
-    // create_mesh — and runGeneration derives the creative-path guidance from that tool
-    // surface, so the prompt teaches what it offers; without a fal key/proxy the tool
-    // fails cleanly (meshGenConfigured hints).
-    const turnDeps: TurnToolsDeps = {
-      // Per-job image-gen model override (6-L1-ui): the user's pick this run wins over the
-      // persisted settings.imageProviderId, flowing through buildCreateMeshDeps → buildMeshGenDeps
-      // to the create_mesh text2img3d image stage. img3d ignores imageProvider, so this is inert there.
-      settings: { ...current, imageProviderId: req.imageProvider },
-      confirm: (info) => new Promise<boolean>((resolve) => setPaidConfirm({ info, resolve })),
-      recordPaidJob: () => {
-        meter.addPaidJob();
-        setUsage(meter.snapshot());
-      },
-      onMeshCreated: (id) => {
-        createdMeshIdRef.current = id;
-      },
-      // 9-M1: render the committed plan as a structured, untruncated view (the trace
-      // entry itself — kind "plan", full graph — is recorded by buildTurnTools).
-      onPlan: (plan) => append({ kind: "tool", text: formatPlanGraph(plan) }),
-      ...(attached
-        ? {
-            resolveImage: async (id: string) => {
-              if (id === attached.id) return attached.image;
-              throw new Error(`no attached image with id '${id}'`);
-            },
-          }
-        : {}),
-      signal: controller.signal,
-    };
-    const tools = buildTurnTools(turnDeps);
-    if (!tools) {
-      append({ kind: "error", text: "The geometry viewport isn’t ready yet — try again in a moment.", isError: true });
-      return;
-    }
-
-    // Key resolution goes through the decision-21 indirection: BYO key locally, or the
-    // hosted-proxy resolver when the settings are in the proxy state (registry decides).
-    const provider = buildProvider(toProviderSettings(current, keyResolverFor(current)));
-    const ai = useAiStore.getState();
-    const history = ai.conversation.messages;
-    const currentDoc = useCadStore.getState().toDocument();
-
-    // Route an attached image (FR-10a/FR-10b): a parametric vision reference, the creative
-    // image→3D path, or disabled when the model can't see and the user chose parametric.
-    let agentInput: string | ContentPart[] = text;
-    let directCreative: { mode: "img3d"; imageId: string; prompt?: string } | null = null;
-    if (attached) {
-      const plan = planAttachmentRoute({
-        route: req.route,
-        prompt: text,
-        image: attached.image,
-        imageId: attached.id,
-        supportsVision: provider.supportsVision,
-      });
-      if (plan.kind === "disabled") {
-        append({ kind: "error", text: plan.reason, isError: true });
-        return; // before setRunning — no run started
-      }
-      if (plan.kind === "parametric") agentInput = plan.userContent;
-      else directCreative = plan.createMeshInput;
-    }
-
-    abortRef.current = controller;
-    setRunning(true);
-    setFailedRun(null);
-    const routeTag = attached ? ` [${req.route === "creative" ? "→3D" : "vision"}: ${attached.name}]` : "";
-    append({ kind: "text", text: `> ${text || "(image)"}${routeTag}` });
-    void ai.appendMessage({ role: "user", content: text || "(image attached)" });
-    if (!retryOf) {
-      setPrompt("");
-      setAttachment(null);
-    }
-
-    // Provider failures reach us as `[provider error]`/`[error]` text relays (agentRunner)
-    // or a thrown Error; translate the common classes to actionable lines (raw kept as the
-    // collapsed detail) and remember the request so the user can Retry it verbatim.
-    const endpoint: ProviderEndpoint = providerEndpoint(current);
-    let failed = false;
-    const appendFailure = (raw: string): void => {
-      failed = true;
-      const hint = translateProviderError(raw, endpoint);
-      append(
-        hint
-          ? { kind: "error", text: hint.friendly, detail: hint.raw, isError: true }
-          : { kind: "error", text: raw, isError: true },
-      );
-    };
-
-    let assistantText = "";
-    try {
-      if (directCreative) {
-        // Creative image→3D runs the create_mesh pipeline directly (no LLM needed): the
-        // attached image + the user-selected 3D-gen provider, gated by the paid confirm.
-        append({ kind: "tool", text: `→ create_mesh(img3d via ${req.meshProvider})` });
-        void ai.appendTrace({ kind: "tool-call", name: "create_mesh", detail: `img3d via ${req.meshProvider}` });
-        const r = await createMesh({ ...directCreative, providerId: req.meshProvider }, buildCreateMeshDeps(turnDeps));
-        if (r.status === "error") failed = true;
-        append({ kind: r.status === "error" ? "error" : "status", text: r.message, isError: r.status === "error" });
-        void ai.appendTrace({ kind: "tool-result", name: "create_mesh", detail: r.message, isError: r.status === "error" });
-      } else {
-        await runGeneration({
-          provider,
-          input: agentInput,
-          history,
-          currentDoc,
-          tools,
-          signal: controller.signal,
-          onEvent: (e) => {
-            if (e.type === "text") {
-              // agentRunner relays provider failures as `[provider error] …` / `[error] …`
-              // text events; route those through the translation layer instead of the
-              // assistant transcript (and keep them out of the persisted assistant turn).
-              const marker = /^\n?\[(?:provider )?error\] (.*)$/s.exec(e.text);
-              if (marker?.[1] != null) {
-                appendFailure(marker[1]);
-                return;
-              }
-              assistantText += e.text;
-              append({ kind: "text", text: e.text });
-            } else if (e.type === "tool-call") {
-              const detail = JSON.stringify(e.args).slice(0, 200);
-              append({ kind: "tool", text: `→ ${e.name}(${detail})` });
-              void ai.appendTrace({ kind: "tool-call", name: e.name, detail });
-            } else if (e.type === "tool-result") {
-              append({ kind: "tool", text: `← ${e.name}: ${e.result.slice(0, 200)}`, isError: e.isError });
-              void ai.appendTrace({ kind: "tool-result", name: e.name, detail: e.result.slice(0, 200), isError: e.isError });
-            } else if (e.type === "usage") {
-              meter.addTokens({ inputTokens: e.inputTokens, outputTokens: e.outputTokens });
-              setUsage(meter.snapshot());
-            } else if (e.type === "status") {
-              if (e.finish === "error") failed = true;
-              append({ kind: "status", text: `[${e.finish} · ${e.steps} step${e.steps === 1 ? "" : "s"}]` });
-            }
-          },
+      if (!buildSeam()) {
+        append({
+          kind: "error",
+          text: "The geometry viewport isn’t ready yet — try again in a moment.",
+          isError: true,
         });
-        if (assistantText.trim()) void ai.appendMessage({ role: "assistant", content: assistantText });
+        return;
       }
-      // If create_mesh produced a mesh document this run, open it now (AFTER the loop)
-      // so the panel switches to the convert-to-CAD view without yanking a live run.
-      const newMeshId = createdMeshIdRef.current;
+
+      const controller = new AbortController();
+      const meter = new UsageMeter();
       createdMeshIdRef.current = null;
-      if (newMeshId) {
-        append({ kind: "status", text: "Opening the generated mesh — convert it to CAD below." });
-        await useProjectsStore.getState().open(newMeshId);
+
+      // Shared agent-turn deps (build_part/inspect + create_mesh) — the SAME wiring the
+      // command palette uses, so both entry points stay in lockstep. The attached image (if
+      // any) is the img3d creative input, resolved by id (FR-10a). The model can always reach
+      // create_mesh — and runGeneration derives the creative-path guidance from that tool
+      // surface, so the prompt teaches what it offers; without a fal key/proxy the tool
+      // fails cleanly (meshGenConfigured hints).
+      const turnDeps: TurnToolsDeps = {
+        // Per-job image-gen model override (6-L1-ui): the user's pick this run wins over the
+        // persisted settings.imageProviderId, flowing through buildCreateMeshDeps → buildMeshGenDeps
+        // to the create_mesh text2img3d image stage. img3d ignores imageProvider, so this is inert there.
+        settings: { ...current, imageProviderId: req.imageProvider },
+        confirm: (info) => new Promise<boolean>((resolve) => setPaidConfirm({ info, resolve })),
+        recordPaidJob: () => {
+          meter.addPaidJob();
+          setUsage(meter.snapshot());
+        },
+        onMeshCreated: (id) => {
+          createdMeshIdRef.current = id;
+        },
+        // 9-M1: render the committed plan as a structured, untruncated view (the trace
+        // entry itself — kind "plan", full graph — is recorded by buildTurnTools).
+        onPlan: (plan) => append({ kind: "tool", text: formatPlanGraph(plan) }),
+        ...(attached
+          ? {
+              resolveImage: async (id: string) => {
+                if (id === attached.id) return attached.image;
+                throw new Error(`no attached image with id '${id}'`);
+              },
+            }
+          : {}),
+        signal: controller.signal,
+      };
+      const tools = buildTurnTools(turnDeps);
+      if (!tools) {
+        append({
+          kind: "error",
+          text: "The geometry viewport isn’t ready yet — try again in a moment.",
+          isError: true,
+        });
+        return;
       }
-    } catch (e) {
-      appendFailure(e instanceof Error ? e.message : String(e));
-    } finally {
-      setRunning(false);
-      abortRef.current = null;
-      // A failed run is retryable verbatim; a success clears any earlier failure.
-      setFailedRun(failed ? req : null);
-      // Fold this run's usage into the session total (6-L2). Only meaningful runs count — a
-      // run that spent no tokens and no paid jobs (e.g. an instant connection failure) is not a
-      // "turn". Folded exactly once per run (the per-run meter's final snapshot).
-      const runSnap = meter.snapshot();
-      if (runSnap.totalTokens > 0 || runSnap.paidJobs > 0) useAiStore.getState().recordRunUsage(runSnap);
-    }
-  }, [prompt, running, append, attachment, attachRoute, meshProviderId, imageProviderId]);
+
+      // Key resolution goes through the decision-21 indirection: BYO key locally, or the
+      // hosted-proxy resolver when the settings are in the proxy state (registry decides).
+      const provider = buildProvider(toProviderSettings(current, keyResolverFor(current)));
+      const ai = useAiStore.getState();
+      const history = ai.conversation.messages;
+      const currentDoc = useCadStore.getState().toDocument();
+
+      // Route an attached image (FR-10a/FR-10b): a parametric vision reference, the creative
+      // image→3D path, or disabled when the model can't see and the user chose parametric.
+      let agentInput: string | ContentPart[] = text;
+      let directCreative: { mode: "img3d"; imageId: string; prompt?: string } | null = null;
+      if (attached) {
+        const plan = planAttachmentRoute({
+          route: req.route,
+          prompt: text,
+          image: attached.image,
+          imageId: attached.id,
+          supportsVision: provider.supportsVision,
+        });
+        if (plan.kind === "disabled") {
+          append({ kind: "error", text: plan.reason, isError: true });
+          return; // before setRunning — no run started
+        }
+        if (plan.kind === "parametric") agentInput = plan.userContent;
+        else directCreative = plan.createMeshInput;
+      }
+
+      abortRef.current = controller;
+      setRunning(true);
+      setFailedRun(null);
+      const routeTag = attached
+        ? ` [${req.route === "creative" ? "→3D" : "vision"}: ${attached.name}]`
+        : "";
+      append({ kind: "text", text: `> ${text || "(image)"}${routeTag}` });
+      void ai.appendMessage({ role: "user", content: text || "(image attached)" });
+      if (!retryOf) {
+        setPrompt("");
+        setAttachment(null);
+      }
+
+      // Provider failures reach us as `[provider error]`/`[error]` text relays (agentRunner)
+      // or a thrown Error; translate the common classes to actionable lines (raw kept as the
+      // collapsed detail) and remember the request so the user can Retry it verbatim.
+      const endpoint: ProviderEndpoint = providerEndpoint(current);
+      let failed = false;
+      const appendFailure = (raw: string): void => {
+        failed = true;
+        const hint = translateProviderError(raw, endpoint);
+        append(
+          hint
+            ? { kind: "error", text: hint.friendly, detail: hint.raw, isError: true }
+            : { kind: "error", text: raw, isError: true },
+        );
+      };
+
+      let assistantText = "";
+      try {
+        if (directCreative) {
+          // Creative image→3D runs the create_mesh pipeline directly (no LLM needed): the
+          // attached image + the user-selected 3D-gen provider, gated by the paid confirm.
+          append({ kind: "tool", text: `→ create_mesh(img3d via ${req.meshProvider})` });
+          void ai.appendTrace({
+            kind: "tool-call",
+            name: "create_mesh",
+            detail: `img3d via ${req.meshProvider}`,
+          });
+          const r = await createMesh(
+            { ...directCreative, providerId: req.meshProvider },
+            buildCreateMeshDeps(turnDeps),
+          );
+          if (r.status === "error") failed = true;
+          append({
+            kind: r.status === "error" ? "error" : "status",
+            text: r.message,
+            isError: r.status === "error",
+          });
+          void ai.appendTrace({
+            kind: "tool-result",
+            name: "create_mesh",
+            detail: r.message,
+            isError: r.status === "error",
+          });
+        } else {
+          await runGeneration({
+            provider,
+            input: agentInput,
+            history,
+            currentDoc,
+            tools,
+            signal: controller.signal,
+            onEvent: (e) => {
+              if (e.type === "text") {
+                // agentRunner relays provider failures as `[provider error] …` / `[error] …`
+                // text events; route those through the translation layer instead of the
+                // assistant transcript (and keep them out of the persisted assistant turn).
+                const marker = /^\n?\[(?:provider )?error\] (.*)$/s.exec(e.text);
+                if (marker?.[1] != null) {
+                  appendFailure(marker[1]);
+                  return;
+                }
+                assistantText += e.text;
+                append({ kind: "text", text: e.text });
+              } else if (e.type === "tool-call") {
+                const detail = JSON.stringify(e.args).slice(0, 200);
+                append({ kind: "tool", text: `→ ${e.name}(${detail})` });
+                void ai.appendTrace({ kind: "tool-call", name: e.name, detail });
+              } else if (e.type === "tool-result") {
+                append({
+                  kind: "tool",
+                  text: `← ${e.name}: ${e.result.slice(0, 200)}`,
+                  isError: e.isError,
+                });
+                void ai.appendTrace({
+                  kind: "tool-result",
+                  name: e.name,
+                  detail: e.result.slice(0, 200),
+                  isError: e.isError,
+                });
+              } else if (e.type === "usage") {
+                meter.addTokens({ inputTokens: e.inputTokens, outputTokens: e.outputTokens });
+                setUsage(meter.snapshot());
+              } else if (e.type === "status") {
+                if (e.finish === "error") failed = true;
+                append({
+                  kind: "status",
+                  text: `[${e.finish} · ${e.steps} step${e.steps === 1 ? "" : "s"}]`,
+                });
+              }
+            },
+          });
+          if (assistantText.trim())
+            void ai.appendMessage({ role: "assistant", content: assistantText });
+        }
+        // If create_mesh produced a mesh document this run, open it now (AFTER the loop)
+        // so the panel switches to the convert-to-CAD view without yanking a live run.
+        const newMeshId = createdMeshIdRef.current;
+        createdMeshIdRef.current = null;
+        if (newMeshId) {
+          append({ kind: "status", text: "Opening the generated mesh — convert it to CAD below." });
+          await useProjectsStore.getState().open(newMeshId);
+        }
+      } catch (e) {
+        appendFailure(e instanceof Error ? e.message : String(e));
+      } finally {
+        setRunning(false);
+        abortRef.current = null;
+        // A failed run is retryable verbatim; a success clears any earlier failure.
+        setFailedRun(failed ? req : null);
+        // Fold this run's usage into the session total (6-L2). Only meaningful runs count — a
+        // run that spent no tokens and no paid jobs (e.g. an instant connection failure) is not a
+        // "turn". Folded exactly once per run (the per-run meter's final snapshot).
+        const runSnap = meter.snapshot();
+        if (runSnap.totalTokens > 0 || runSnap.paidJobs > 0)
+          useAiStore.getState().recordRunUsage(runSnap);
+      }
+    },
+    [prompt, running, append, attachment, attachRoute, meshProviderId, imageProviderId],
+  );
 
   const retry = useCallback((): void => {
     const req = failedRun;
@@ -1751,7 +1876,10 @@ export function GenerationPanel(): React.JSX.Element {
           />
           {/* Image attach + route (FR-10a/FR-10b): a parametric vision reference (needs a
               vision-capable model) or the creative image→3D path (picks a 3D-gen provider). */}
-          <div data-testid="attach-row" className="flex flex-wrap items-center gap-2 text-[10px] text-[#9ab]">
+          <div
+            data-testid="attach-row"
+            className="flex flex-wrap items-center gap-2 text-[10px] text-[#9ab]"
+          >
             <label className="cursor-pointer rounded border border-[#2a3444] bg-[#10141c] px-2 py-1 hover:bg-[#16202c]">
               <input
                 data-testid="attach-input"
@@ -1776,7 +1904,10 @@ export function GenerationPanel(): React.JSX.Element {
                 >
                   ✕
                 </button>
-                <div data-testid="attach-route" className="ml-1 flex overflow-hidden rounded border border-[#2a3444]">
+                <div
+                  data-testid="attach-route"
+                  className="ml-1 flex overflow-hidden rounded border border-[#2a3444]"
+                >
                   <button
                     type="button"
                     data-testid="attach-route-parametric"
@@ -1818,7 +1949,10 @@ export function GenerationPanel(): React.JSX.Element {
               (not gated on an attachment — text2img3d is text-only); only shown when there's a
               choice. The pick overrides settings.imageProviderId for this run only. */}
           {imageProviders.length > 1 && (
-            <div data-testid="image-gen-row" className="flex flex-wrap items-center gap-2 text-[10px] text-[#9ab]">
+            <div
+              data-testid="image-gen-row"
+              className="flex flex-wrap items-center gap-2 text-[10px] text-[#9ab]"
+            >
               <label
                 className="flex items-center gap-1"
                 title="Image model for the text→image stage of AI text→3D generation (create_mesh text2img3d)"
@@ -1878,7 +2012,10 @@ export function GenerationPanel(): React.JSX.Element {
                   </span>
                 )}
                 {sessionUsage.turns > 0 && (
-                  <span data-testid="generation-usage-session" className={`text-[#678] ${usage ? "ml-2" : ""}`}>
+                  <span
+                    data-testid="generation-usage-session"
+                    className={`text-[#678] ${usage ? "ml-2" : ""}`}
+                  >
                     session {sessionUsage.totalTokens} tok · {sessionUsage.turns} run
                     {sessionUsage.turns === 1 ? "" : "s"}
                     {sessionUsage.paidJobs > 0 ? ` · ${sessionUsage.paidJobs} paid` : ""}

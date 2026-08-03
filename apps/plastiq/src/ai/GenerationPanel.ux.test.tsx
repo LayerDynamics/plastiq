@@ -22,6 +22,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
 import { GenerationPanel } from "./GenerationPanel.js";
 import { useAiStore } from "./aiStore.js";
 import { useProjectsStore } from "../persistence/projectsStore.js";
+import { useCadStore } from "../store/store.js";
 import type { ChatMessage, ChatStreamRequest } from "./providers/types.js";
 import type { MeshDoc } from "../store/types.js";
 import type { BuildOutcome } from "../worker/bridge.js";
@@ -79,13 +80,21 @@ const nerfMocks = vi.hoisted(() => ({
   })),
   cancelJob: vi.fn(async () => {}),
 }));
-vi.mock("@plastiq/nerf", () => ({ trainNerf: nerfMocks.trainNerf, cancelJob: nerfMocks.cancelJob }));
+vi.mock("@plastiq/nerf", () => ({
+  trainNerf: nerfMocks.trainNerf,
+  cancelJob: nerfMocks.cancelJob,
+}));
 
 const realFetch = globalThis.fetch;
 
 beforeEach(() => {
   useAiStore.setState({
-    settings: { providerKey: "ollama", providerId: "openai-compatible", model: "qwen2.5", apiKeys: {} },
+    settings: {
+      providerKey: "ollama",
+      providerId: "openai-compatible",
+      model: "qwen2.5",
+      apiKeys: {},
+    },
     loaded: true,
     conversation: { messages: [], trace: [] },
     conversationProjectId: null,
@@ -125,7 +134,9 @@ describe("GenerationPanel — provider failures are translated and retryable", (
 
     await waitFor(() => {
       const transcript = screen.getByTestId("generation-transcript").textContent ?? "";
-      expect(transcript).toContain("Can't reach Ollama (local, no key) at http://localhost:11434/v1");
+      expect(transcript).toContain(
+        "Can't reach Ollama (local, no key) at http://localhost:11434/v1",
+      );
     });
     const transcript = screen.getByTestId("generation-transcript").textContent ?? "";
     expect(transcript).toContain("is it running?");
@@ -218,7 +229,10 @@ describe("GenerationPanel — transcript replay from the persisted conversation 
     // openConversation sets the loaded conversation + project id together; mirror that.
     act(() => {
       useAiStore.setState({
-        conversation: { messages: [{ role: "assistant", content: "welcome back to p2" }], trace: [] },
+        conversation: {
+          messages: [{ role: "assistant", content: "welcome back to p2" }],
+          trace: [],
+        },
         conversationProjectId: "p2",
       });
     });
@@ -241,7 +255,12 @@ describe("GenerationPanel — service health pre-checks block submission (GET /h
 
   it("mesh-convert: an unreachable reconstruction service shows the start hint and never submits", async () => {
     const fetchSpy = installDeadFetch();
-    const meshDoc: MeshDoc = { kind: "mesh", name: "gen", glb: "R0xC", source: { mode: "img3d", providerId: "fal:tripo" } };
+    const meshDoc: MeshDoc = {
+      kind: "mesh",
+      name: "gen",
+      glb: "R0xC",
+      source: { mode: "img3d", providerId: "fal:tripo" },
+    };
     useProjectsStore.setState({ activeMeshDoc: meshDoc });
     render(<GenerationPanel />);
 
@@ -265,18 +284,26 @@ describe("GenerationPanel — service health pre-checks block submission (GET /h
     const fetchSpy = installDeadFetch();
     render(<GenerationPanel />);
 
-    const transforms = new File([JSON.stringify({ frames: [{ file_path: "v0.png" }] })], "transforms.json", {
-      type: "application/json",
-    });
+    const transforms = new File(
+      [JSON.stringify({ frames: [{ file_path: "v0.png" }] })],
+      "transforms.json",
+      {
+        type: "application/json",
+      },
+    );
     await act(async () => {
-      fireEvent.change(screen.getByTestId("nerf-transforms-input"), { target: { files: [transforms] } });
+      fireEvent.change(screen.getByTestId("nerf-transforms-input"), {
+        target: { files: [transforms] },
+      });
     });
     await act(async () => {
       fireEvent.change(screen.getByTestId("nerf-images-input"), {
         target: { files: [new File([new Uint8Array([1, 2, 3])], "v0.png", { type: "image/png" })] },
       });
     });
-    await waitFor(() => expect((screen.getByTestId("nerf-capture-btn") as HTMLButtonElement).disabled).toBe(false));
+    await waitFor(() =>
+      expect((screen.getByTestId("nerf-capture-btn") as HTMLButtonElement).disabled).toBe(false),
+    );
 
     await act(async () => {
       fireEvent.click(screen.getByTestId("nerf-capture-btn"));
@@ -294,7 +321,12 @@ describe("GenerationPanel — service health pre-checks block submission (GET /h
 });
 
 describe("MeshConvertSection — converted status carries the recognition fingerprint (SPEC-8 8-M2)", () => {
-  const meshDoc: MeshDoc = { kind: "mesh", name: "gen", glb: "R0xC", source: { mode: "img3d", providerId: "fal:tripo" } };
+  const meshDoc: MeshDoc = {
+    kind: "mesh",
+    name: "gen",
+    glb: "R0xC",
+    source: { mode: "img3d", providerId: "fal:tripo" },
+  };
   const baseReport = {
     triangles_in: 12,
     triangles_used: 12,
@@ -314,7 +346,8 @@ describe("MeshConvertSection — converted status carries the recognition finger
       if (u.endsWith("/health")) return json({ status: "ok" });
       if (u.endsWith("/reconstruct")) return json({ id: "job-1", state: "queued" });
       if (u.endsWith("/status")) return json({ id: "job-1", state: "completed" });
-      if (u.endsWith("/result")) return json({ step: "ISO-10303-21;\nDATA;\nENDSEC;\nEND-ISO-10303-21;", report });
+      if (u.endsWith("/result"))
+        return json({ step: "ISO-10303-21;\nDATA;\nENDSEC;\nEND-ISO-10303-21;", report });
       throw new Error(`unexpected url ${u}`);
     }) as unknown as typeof fetch;
   };
@@ -330,9 +363,16 @@ describe("MeshConvertSection — converted status carries the recognition finger
   };
 
   it("appends the tangent-region fingerprint when the server reports it", async () => {
-    installReconstructFetch({ ...baseReport, surface_deviation: 0.0041, fidelity_tol: 0.01, tangent_regions: 3 });
+    installReconstructFetch({
+      ...baseReport,
+      surface_deviation: 0.0041,
+      fidelity_tol: 0.01,
+      tangent_regions: 3,
+    });
     const status = await convert();
-    expect(status).toBe("converted to CAD — 6 faces, solid, fidelity good (Δ0.0041), 3 tangent regions");
+    expect(status).toBe(
+      "converted to CAD — 6 faces, solid, fidelity good (Δ0.0041), 3 tangent regions",
+    );
   });
 
   it("omits the fingerprint for an older server (tangent_regions absent)", async () => {
@@ -344,7 +384,12 @@ describe("MeshConvertSection — converted status carries the recognition finger
 });
 
 describe("MeshConvertSection — Fit smooth CAD (NURBS) alongside Convert to CAD (SPEC-12 FR-8)", () => {
-  const meshDoc: MeshDoc = { kind: "mesh", name: "blob", glb: "R0xC", source: { mode: "img3d", providerId: "fal:tripo" } };
+  const meshDoc: MeshDoc = {
+    kind: "mesh",
+    name: "blob",
+    glb: "R0xC",
+    source: { mode: "img3d", providerId: "fal:tripo" },
+  };
   const baseReport = {
     patches: 1,
     fitted_patches: 1,
@@ -365,7 +410,10 @@ describe("MeshConvertSection — Fit smooth CAD (NURBS) alongside Convert to CAD
 
   /** Script the full NURBS fit conversation (health → /fit → status → result) so the REAL
    * @plastiq/nurbs client runs the fit to completion (the reconstruct precedent above). */
-  const installNurbsFetch = (report: Record<string, unknown>): void => {
+  const installNurbsFetch = (
+    report: Record<string, unknown>,
+    surfaces: Record<string, unknown>[] = [],
+  ): void => {
     const json = (body: unknown): unknown => ({ ok: true, status: 200, json: async () => body });
     globalThis.fetch = (async (url: string | URL | Request) => {
       const u = String(url);
@@ -373,7 +421,11 @@ describe("MeshConvertSection — Fit smooth CAD (NURBS) alongside Convert to CAD
       if (u.endsWith("/fit")) return json({ id: "job-1", state: "queued" });
       if (u.endsWith("/status")) return json({ id: "job-1", state: "completed" });
       if (u.endsWith("/result"))
-        return json({ step: "ISO-10303-21;\nDATA;\nENDSEC;\nEND-ISO-10303-21;", surfaces: [], report });
+        return json({
+          step: "ISO-10303-21;\nDATA;\nENDSEC;\nEND-ISO-10303-21;",
+          surfaces: { surfaces },
+          report,
+        });
       throw new Error(`unexpected url ${u}`);
     }) as unknown as typeof fetch;
   };
@@ -394,6 +446,7 @@ describe("MeshConvertSection — Fit smooth CAD (NURBS) alongside Convert to CAD
     expect(screen.getByTestId("mesh-convert-run")).toBeTruthy();
     const btn = screen.getByTestId("mesh-nurbs-run") as HTMLButtonElement;
     expect(btn.textContent).toContain("Fit smooth CAD (NURBS)");
+    expect((screen.getByTestId("mesh-nurbs-keep-editable") as HTMLInputElement).checked).toBe(true);
   });
 
   it("a completed open-mode fit loads the STEP doc and labels the shell honestly (isSolid=false)", async () => {
@@ -406,8 +459,45 @@ describe("MeshConvertSection — Fit smooth CAD (NURBS) alongside Convert to CAD
     expect(useProjectsStore.getState().currentName).toBe("blob");
   });
 
+  it("lands service poles as a freeform feature when keep-editable is checked", async () => {
+    installNurbsFetch(baseReport, [
+      {
+        poles: [
+          [
+            [0, 0, 0],
+            [0, 0.03, 0],
+          ],
+          [
+            [0.04, 0, 0],
+            [0.04, 0.03, 0],
+          ],
+        ],
+        weights: [],
+        u_knots: [0, 1],
+        v_knots: [0, 1],
+        u_mults: [2, 2],
+        v_mults: [2, 2],
+        u_degree: 1,
+        v_degree: 1,
+        u_periodic: false,
+        v_periodic: false,
+      },
+    ]);
+    await fit();
+    const feature = useCadStore.getState().features[0]!;
+    expect(feature.type).toBe("freeform");
+    expect(feature.data?.["kind"]).toBe("custom");
+  });
+
   it("surfaces faceted fallback patches in the result message (facetedPatches > 0)", async () => {
-    installNurbsFetch({ ...baseReport, patches: 6, fitted_patches: 4, faceted_patches: 2, is_solid: true, mode: "closed" });
+    installNurbsFetch({
+      ...baseReport,
+      patches: 6,
+      fitted_patches: 4,
+      faceted_patches: 2,
+      is_solid: true,
+      mode: "closed",
+    });
     const status = await fit();
     expect(status).toContain("2 of 6 faceted (fallback)");
     expect(status).not.toContain("not a solid");
@@ -464,7 +554,8 @@ describe("MeshConvertSection — Cancel aborts polling AND DELETEs the server jo
         });
         return { ok: true, status: 204, json: async () => ({}) };
       }
-      if (u.endsWith("/health")) return { ok: true, status: 200, json: async () => ({ status: "ok" }) };
+      if (u.endsWith("/health"))
+        return { ok: true, status: 200, json: async () => ({ status: "ok" }) };
       if (u.endsWith(opts.submitPath)) {
         submitted = true;
         return { ok: true, status: 200, json: async () => ({ id: opts.jobId, state: "queued" }) };
@@ -494,7 +585,10 @@ describe("MeshConvertSection — Cancel aborts polling AND DELETEs the server jo
       },
       loaded: true,
     });
-    const { deletes, submitted } = installHangingJob({ submitPath: "/reconstruct", jobId: "job-recon-42" });
+    const { deletes, submitted } = installHangingJob({
+      submitPath: "/reconstruct",
+      jobId: "job-recon-42",
+    });
     useProjectsStore.setState({ activeMeshDoc: meshDoc, status: "" });
     render(<GenerationPanel />);
 
