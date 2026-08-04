@@ -106,6 +106,17 @@ test("select-then-constrain shows dimension glyphs for hDistance", async ({ page
   });
 
   await page.getByTestId("tool-select").click();
+  // In-place sketching deliberately preserves the user's free-orbit camera. Put
+  // the plane normal-to through the real user-facing control before numerically
+  // inverting screen→plane coordinates; otherwise an edge-on starting view can
+  // make the projection singular even though selection itself is healthy.
+  await page.getByTestId("sketch-look-at").click();
+  await page.evaluate(
+    () =>
+      new Promise<void>((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+      ),
+  );
   const at = await aimAt(page, box, target);
   await page.mouse.click(at.x, at.y);
   await expect(page.getByTestId("dim-hDistance")).toBeEnabled();

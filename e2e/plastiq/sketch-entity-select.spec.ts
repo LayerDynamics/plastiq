@@ -20,26 +20,29 @@ type Store = {
   tool: string;
   selection: string[];
   cursor: UV | null;
-  model: { points: { id: string; u: number; v: number }[]; entities: { id: string; kind: string; a?: string; b?: string }[] };
+  model: {
+    points: { id: string; u: number; v: number }[];
+    entities: { id: string; kind: string; a?: string; b?: string }[];
+  };
 };
 
-const read = <T,>(page: Page, f: (s: Store) => T): Promise<T> =>
-  page.evaluate(
-    (src) => {
-      const s = (globalThis as { __sketchStore?: { getState(): Store } }).__sketchStore!.getState();
-      return (new Function("s", `return (${src})(s)`) as (x: Store) => T)(s);
-    },
-    f.toString(),
-  );
+const read = <T>(page: Page, f: (s: Store) => T): Promise<T> =>
+  page.evaluate((src) => {
+    const s = (globalThis as { __sketchStore?: { getState(): Store } }).__sketchStore!.getState();
+    return (new Function("s", `return (${src})(s)`) as (x: Store) => T)(s);
+  }, f.toString());
 
 const setTool = (page: Page, t: string): Promise<void> =>
   page.evaluate(
-    (tool) => (globalThis as { __sketchStore?: { getState(): Store } }).__sketchStore!.getState().setTool(tool),
+    (tool) =>
+      (globalThis as { __sketchStore?: { getState(): Store } })
+        .__sketchStore!.getState()
+        .setTool(tool),
     t,
   );
 
-/** Convergence target for {@link aimAt}: ~1 screen pixel in plane metres. */
-const AIM_TOL = 6e-4;
+/** Convergence target for {@link aimAt}: at most ~2 screen pixels in plane metres. */
+const AIM_TOL = 1e-3;
 
 /** Plane coordinate under a screen point, as the app itself reports it. */
 async function uvAt(page: Page, x: number, y: number): Promise<UV | null> {
@@ -93,11 +96,15 @@ async function aimAt(
   const origin = toScreen(target);
   let at = origin;
   let landed = (await uvAt(page, at.x, at.y))!;
-  // AIM_TOL is one screen pixel's worth of plane distance at the sketch zoom:
-  // Playwright moves the pointer in whole pixels, so no amount of refining gets
-  // below it. It is far inside hitTest's ~1.75 mm pick radius, which is what the
-  // click actually needs to satisfy.
-  for (let i = 0; i < 6 && Math.hypot(landed[0] - target[0], landed[1] - target[1]) > AIM_TOL; i++) {
+  // AIM_TOL is at most two screen pixels' worth of plane distance across the
+  // supported viewport sizes. Playwright's integer-pixel pointer quantisation
+  // makes a tighter bound unstable. This remains well inside hitTest's ~1.75 mm
+  // pick radius, which is what the click actually needs to satisfy.
+  for (
+    let i = 0;
+    i < 10 && Math.hypot(landed[0] - target[0], landed[1] - target[1]) > AIM_TOL;
+    i++
+  ) {
     // Correct in SCREEN space by the linear image of the plane-space error.
     const corrected = toScreen([2 * target[0] - landed[0], 2 * target[1] - landed[1]]);
     at = { x: at.x + (corrected.x - origin.x), y: at.y + (corrected.y - origin.y) };
@@ -110,7 +117,9 @@ async function aimAt(
   return at;
 }
 
-async function enterSketch(page: Page): Promise<{ x: number; y: number; width: number; height: number }> {
+async function enterSketch(
+  page: Page,
+): Promise<{ x: number; y: number; width: number; height: number }> {
   await page.goto("/");
   await expect(page.getByTestId("status")).toHaveText("ready", { timeout: 240_000 });
   await page.getByTestId("enter-sketch").click();
@@ -118,15 +127,22 @@ async function enterSketch(page: Page): Promise<{ x: number; y: number; width: n
   const box = (await page.locator("#viewport-root canvas").boundingBox())!;
   // The plane must be pickable before anything is calibrated against it.
   await expect
-    .poll(async () => (await uvAt(page, box.x + box.width * 0.5, box.y + box.height * 0.5)) !== null, {
-      timeout: 30_000,
-    })
+    .poll(
+      async () => (await uvAt(page, box.x + box.width * 0.5, box.y + box.height * 0.5)) !== null,
+      {
+        timeout: 30_000,
+      },
+    )
     .toBe(true);
   return box;
 }
 
 /** Draw one line segment by dragging, and return its two endpoints in plane coords. */
-async function drawLine(page: Page, from: { x: number; y: number }, to: { x: number; y: number }): Promise<UV[]> {
+async function drawLine(
+  page: Page,
+  from: { x: number; y: number },
+  to: { x: number; y: number },
+): Promise<UV[]> {
   await setTool(page, "line");
   await page.mouse.move(from.x, from.y);
   await page.mouse.down();

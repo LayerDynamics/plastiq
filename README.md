@@ -102,6 +102,19 @@ Plastiq is not a one-shot mesh editor. Parts are an **ordered feature tree** tha
 - Orbit / pan / zoom; **fit to view**
 - **Ring context menu** (right-click) — selection-aware actions for create, modify, sketch constraints, mates, sim, danger
 
+**Text Commands**
+
+The docked bottom application shell mirrors Fusion's Text Commands workflow. Show or hide it from the persistent footer button or `Ctrl+Alt+C`. It is a real second control surface over the editor—not an operating-system shell:
+
+- Run any enabled action by id (`cylinder`, `undo`, `fit-view`, …), with the same selection/context gates as the ribbon and ring menu
+- Inspect the live document, feature timeline, parameters, selection, rebuild errors, and warnings
+- Author global parameters with CAD units (`parameter set wall 2.5mm`), rename/select/suppress features, and switch workspaces
+- Probe all five configured self-hosted service `/health` endpoints with `services`
+- Chain statements with `;`; use case-insensitive unique abbreviations, Tab completion, Up/Down history, and Escape-to-clear
+- Follow real asynchronous geometry and service status in the transcript; resize, clear, copy, collapse, or reopen the dock
+
+Type `help` in the shell for the complete command catalog. Command history and visibility are persisted locally.
+
 ---
 
 ### Constrained 2D sketching

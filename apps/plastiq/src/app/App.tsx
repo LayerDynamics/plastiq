@@ -1,7 +1,6 @@
-// CAD Studio app shell (SPEC-5 FR-4): the editor layout — top toolbar, left
-// feature-tree panel, center viewport, right properties panel, bottom status
-// bar. Panels are real layout regions; their live content is filled in by later
-// milestones (viewport = M0.5/three.js, feature tree = M2, properties = M2).
+// Plastiq application shell (SPEC-5 FR-4): top toolbar, feature timeline, live
+// 3D viewport, properties, and the bottom Text Commands/status dock. The outer
+// grid owns vertical sizing so an open command palette reduces only the viewport.
 
 import { useEffect, useRef, useState } from "react";
 import { TopBar } from "../ribbon/TopBar.js";
