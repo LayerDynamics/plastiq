@@ -10,7 +10,7 @@ import type { Occt } from "../oc/init.js";
 import type { Vec3 } from "../math/index.js";
 import type { DatumPlane } from "../env/plane.js";
 import { worldPointToPlane } from "../env/plane.js";
-import { Solid } from "../solid/solid.js";
+import type { Solid } from "../solid/solid.js";
 import { shapeEnums } from "../mesh/normals.js";
 import { sectionCurves } from "./split.js";
 

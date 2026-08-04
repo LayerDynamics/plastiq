@@ -18,6 +18,9 @@ import type { AssemblyModel } from "../assembly/model.js";
 import { voxelDocToMesh } from "../voxel/doc.js";
 import { voxelMeshToGlbBase64 } from "../voxel/glb.js";
 import { exportMeshGlb } from "../mesh/exportGlb.js";
+import { bakeMeshBodyToSdfDoc } from "../mesh/editMesh.js";
+import { meshBodyBounds, type MeshBody } from "../mesh/meshBody.js";
+import * as THREE from "three";
 import type { EdgeRef, FaceRef, NurbsSurface, VertexRef } from "@plastiq/cad";
 import {
   planeSurface,
@@ -1612,6 +1615,76 @@ function brushIcon(brush: string): string {
   }
 }
 
+type CadViewportSurface = {
+  mesh: THREE.Mesh<THREE.BufferGeometry>;
+};
+
+/** The currently rendered OCCT tessellation, baked to world-space triangle soup.
+ * This is the CAD→sculpt bridge's production input; using the rendered geometry
+ * guarantees the sculpt begins from the same rolled-forward body the user sees. */
+function currentCadMeshBody(): MeshBody | null {
+  const part = (
+    globalThis as {
+      __plastiqViewport?: { builtPart?: CadViewportSurface | null };
+    }
+  ).__plastiqViewport?.builtPart;
+  if (!part) return null;
+  const geometry = part.mesh.geometry;
+  const position = geometry.getAttribute("position");
+  if (!position || position.count < 3) return null;
+  part.mesh.updateWorldMatrix(true, false);
+  const point = new THREE.Vector3();
+  const positions = new Float32Array(position.count * 3);
+  for (let i = 0; i < position.count; i++) {
+    point.fromBufferAttribute(position, i).applyMatrix4(part.mesh.matrixWorld);
+    point.toArray(positions, i * 3);
+  }
+  const index = geometry.getIndex();
+  const indices = index
+    ? Uint32Array.from(index.array as ArrayLike<number>)
+    : Uint32Array.from({ length: position.count }, (_, i) => i);
+  return { positions, indices };
+}
+
+function canSculptCurrentCadBody(): boolean {
+  const part = (
+    globalThis as {
+      __plastiqViewport?: { builtPart?: CadViewportSurface | null };
+    }
+  ).__plastiqViewport?.builtPart;
+  return (
+    !voxelMode() &&
+    !meshMode() &&
+    cad().features.length > 0 &&
+    (part?.mesh.geometry.getAttribute("position")?.count ?? 0) >= 3
+  );
+}
+
+function sculptCurrentCadBody(): void {
+  const body = currentCadMeshBody();
+  const bounds = body ? meshBodyBounds(body) : null;
+  if (!body || !bounds) {
+    cad().setStatus("Sculpt current body: wait for a valid rendered CAD body");
+    return;
+  }
+  const extent = Math.max(
+    bounds.max[0] - bounds.min[0],
+    bounds.max[1] - bounds.min[1],
+    bounds.max[2] - bounds.min[2],
+  );
+  if (!(extent > 0)) {
+    cad().setStatus("Sculpt current body: rendered body has zero size");
+    return;
+  }
+  const voxelSize = Math.min(0.005, Math.max(0.0005, extent / 36));
+  const name = `${useProjectsStore.getState().currentName || "Part"} sculpt`;
+  const doc = bakeMeshBodyToSdfDoc(body, { voxelSize, margin: 3, name });
+  useProjectsStore.getState().newVoxelProject();
+  vox().open(doc);
+  useProjectsStore.setState({ currentName: name, status: "CAD body baked into sculpt" });
+  cad().setStatus(`sculpting current CAD body at ${(voxelSize * 1000).toFixed(2)} mm resolution`);
+}
+
 /** Stage the open sculpt's SURFACE mesh as a mesh document — the exact `MeshDoc`
  * shape the AI panel's MeshConvertSection consumes — so "Convert to CAD (STEP)"
  * runs the SAME mesh→B-rep reconstruct path a generated mesh uses (ADR-0010).
@@ -1639,6 +1712,13 @@ function stageVoxelForConvert(): void {
 }
 
 const VOXEL_ACTIONS: ActionDef[] = [
+  {
+    id: "voxel-from-cad",
+    label: () => "Sculpt current body",
+    icon: "◈",
+    enabled: () => canSculptCurrentCadBody(),
+    run: () => sculptCurrentCadBody(),
+  },
   {
     id: "voxel-new",
     label: () => "New Sculpt",
@@ -1700,6 +1780,53 @@ const VOXEL_ACTIONS: ActionDef[] = [
   },
 ];
 
+type MeshEditCommand = "inflateSelection" | "smoothSelection" | "remesh" | "decimate";
+
+function runMeshEdit(command: MeshEditCommand): void {
+  const edit = (
+    globalThis as {
+      __plastiqMeshEdit?: Partial<Record<MeshEditCommand, () => void>>;
+    }
+  ).__plastiqMeshEdit;
+  const operation = edit?.[command];
+  if (!operation) {
+    cad().setStatus("mesh editor is not ready");
+    return;
+  }
+  operation();
+}
+
+const MESH_SCULPT_ACTIONS: ActionDef[] = [
+  {
+    id: "mesh-inflate",
+    label: () => "Inflate selection",
+    icon: "◎",
+    enabled: () => meshMode() && cad().picks.length > 0,
+    run: () => runMeshEdit("inflateSelection"),
+  },
+  {
+    id: "mesh-smooth",
+    label: () => "Smooth mesh",
+    icon: "〰",
+    enabled: () => meshMode(),
+    run: () => runMeshEdit("smoothSelection"),
+  },
+  {
+    id: "mesh-remesh",
+    label: () => "Remesh uniformly",
+    icon: "▧",
+    enabled: () => meshMode(),
+    run: () => runMeshEdit("remesh"),
+  },
+  {
+    id: "mesh-decimate",
+    label: () => "Decimate 50%",
+    icon: "▽",
+    enabled: () => meshMode(),
+    run: () => runMeshEdit("decimate"),
+  },
+];
+
 /** True when a generated MESH document is open. In that mode the live document is a
  * triangle mesh, not a B-rep CadDocument, so B-rep feature operations and the parametric
  * STEP/IGES/glTF export are no-ops — SPEC-6 FR-18 requires the UI to reflect that rather
@@ -1732,6 +1859,10 @@ const MESH_SAFE_IDS: ReadonlySet<string> = new Set([
   "selmode-body",
   "ml-reconstruct-brep",
   "ml-fit-nurbs",
+  "mesh-inflate",
+  "mesh-smooth",
+  "mesh-remesh",
+  "mesh-decimate",
 ]);
 
 /** Actions that remain meaningful while a voxel sculpt is open: the mesh-safe
@@ -1739,6 +1870,7 @@ const MESH_SAFE_IDS: ReadonlySet<string> = new Set([
 const VOXEL_SAFE_IDS: ReadonlySet<string> = new Set([
   ...MESH_SAFE_IDS,
   "voxel-new",
+  "voxel-from-cad",
   "voxel-add",
   "voxel-erase",
   "voxel-brush-draw",
@@ -1792,10 +1924,12 @@ function gateForDocMode(a: ActionDef): ActionDef {
  * each gated so operations that don't apply to the open document KIND are unavailable
  * (disabled, never hidden or silently no-oping — FR-18). */
 export const ACTIONS: Record<string, ActionDef> = Object.fromEntries(
-  [...Object.values(CONTEXT_DEFS), ...RIBBON_ONLY, ...VOXEL_ACTIONS].map((a) => {
-    const gated = gateForDocMode(a);
-    return [gated.id, gated];
-  }),
+  [...Object.values(CONTEXT_DEFS), ...RIBBON_ONLY, ...VOXEL_ACTIONS, ...MESH_SCULPT_ACTIONS].map(
+    (a) => {
+      const gated = gateForDocMode(a);
+      return [gated.id, gated];
+    },
+  ),
 );
 
 /** Run an action by id against a resolved target, honouring `enabled`. */

@@ -19,7 +19,7 @@ export default defineConfig({
   // In CI also emit an HTML report (uploaded as a CI artifact on failure).
   reporter: process.env.CI ? [["list"], ["html", { open: "never" }]] : "list",
   use: {
-    baseURL: "http://localhost:4177",
+    baseURL: "http://127.0.0.1:4177",
     launchOptions: { args: ["--no-sandbox"] },
     // Seed the "welcome screen already dismissed" flag so the first-run how-to
     // overlay never covers the editor during tests (the welcome.spec overrides this
@@ -31,8 +31,12 @@ export default defineConfig({
   },
   projects: [{ name: "plastiq", use: { ...devices["Desktop Chrome"] } }],
   webServer: {
-    command: "pnpm --filter @plastiq/app exec vite --port 4177 --strictPort",
-    url: "http://localhost:4177",
+    // Run the installed binary directly. Routing through a package-manager
+    // version switch can require registry/signature access before Vite starts,
+    // making an otherwise hermetic browser suite fail while offline.
+    command: "../../node_modules/.bin/vite --host 127.0.0.1 --port 4177 --strictPort",
+    cwd: "apps/plastiq",
+    url: "http://127.0.0.1:4177",
     reuseExistingServer: !process.env.CI,
     timeout: 180_000,
   },

@@ -28,7 +28,7 @@
 
 import type { Occt } from "../oc/init.js";
 import { type Vec3, add, scale } from "../math/index.js";
-import { Solid } from "../solid/solid.js";
+import type { Solid } from "../solid/solid.js";
 import { makeCylinder, makeCone } from "../solid/primitives.js";
 import { subtract, unionAll } from "./boolean.js";
 
@@ -179,9 +179,7 @@ export function hole(oc: Occt, base: Solid, spec: HoleSpec): Solid {
       const tanHalf = Math.tan((spec.countersinkAngle as number) / 2);
       const delta = (rCs - r) / tanHalf; // depth below the face where the cone meets the bore
       const topR = rCs + backoff * tanHalf; // widened rim at the backed-off start
-      pieces.push(
-        track(makeCone(oc, topR, r, backoff + delta, { origin: mouth, axis: dir })),
-      );
+      pieces.push(track(makeCone(oc, topR, r, backoff + delta, { origin: mouth, axis: dir })));
     }
 
     // A drill-point tip: a cone at the blind bottom, from the full bore radius down

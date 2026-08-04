@@ -13,8 +13,10 @@ import ReactThreeTestRenderer from "@react-three/test-renderer";
 import { VoxelSculpt } from "./VoxelSculpt.js";
 import { useVoxelStore } from "../voxel/voxelStore.js";
 import { VoxelGrid } from "../voxel/grid.js";
-import { gridToDoc } from "../voxel/doc.js";
+import { gridToDoc, voxelDocToMesh } from "../voxel/doc.js";
+import { SdfGrid } from "../voxel/sdf.js";
 import type { VoxelDoc } from "../store/types.js";
+import type { Mesh } from "three";
 
 /** A 4×4×4 grid of 1 m cells centred on the origin, one voxel in the middle column
  * at [2,2,2] — a straight −Z ray through NDC (0,0) hits its top face. */
@@ -30,13 +32,27 @@ const cellIdx = (doc: VoxelDoc, x: number, y: number, z: number): number =>
 /** Give the jsdom canvas a real size so pointer coords → NDC are computable. */
 function sizeCanvas(canvas: HTMLElement): void {
   canvas.getBoundingClientRect = () =>
-    ({ left: 0, top: 0, right: 100, bottom: 100, width: 100, height: 100, x: 0, y: 0, toJSON: () => ({}) }) as DOMRect;
+    ({
+      left: 0,
+      top: 0,
+      right: 100,
+      bottom: 100,
+      width: 100,
+      height: 100,
+      x: 0,
+      y: 0,
+      toJSON: () => ({}),
+    }) as DOMRect;
 }
 
 const down = (el: HTMLElement, x: number, y: number, init: PointerEventInit = {}): void =>
-  void el.dispatchEvent(new MouseEvent("pointerdown", { clientX: x, clientY: y, button: 0, bubbles: true, ...init }));
+  void el.dispatchEvent(
+    new MouseEvent("pointerdown", { clientX: x, clientY: y, button: 0, bubbles: true, ...init }),
+  );
 const up = (el: HTMLElement, x: number, y: number): void =>
-  void el.dispatchEvent(new MouseEvent("pointerup", { clientX: x, clientY: y, button: 0, bubbles: true }));
+  void el.dispatchEvent(
+    new MouseEvent("pointerup", { clientX: x, clientY: y, button: 0, bubbles: true }),
+  );
 
 afterEach(() => useVoxelStore.getState().close());
 
@@ -55,6 +71,17 @@ describe("VoxelSculpt (R3F scene graph)", () => {
     const names = group.instance.children.map((c) => c.name);
     expect(names).toContain("voxel-surface");
     expect(names).toContain("voxel-bounds");
+    await r.unmount();
+  });
+
+  it("renders the authoritative marching-cubes surface for a v2 SDF sculpt", async () => {
+    const doc = SdfGrid.sphere([8, 8, 8], 1, [-4, -4, -4], [0, 0, 0], 2.5).toDoc("sphere");
+    const expected = voxelDocToMesh(doc);
+    useVoxelStore.getState().open(doc);
+    const r = await ReactThreeTestRenderer.create(<VoxelSculpt />);
+    const surface = r.scene.findByProps({ name: "voxel-surface" }).instance as Mesh;
+    expect(surface.geometry.index?.count).toBe(expected.indices.length);
+    expect(surface.geometry.getAttribute("position").count).toBe(expected.vertices.length / 3);
     await r.unmount();
   });
 });
@@ -104,7 +131,9 @@ describe("VoxelSculpt — pointer sculpting through the real ray→cell path", (
     useVoxelStore.getState().setCell([0, 0, 0], true);
     expect(useVoxelStore.getState().doc!.cells).toHaveLength(2);
 
-    document.body.dispatchEvent(new KeyboardEvent("keydown", { key: "z", metaKey: true, bubbles: true }));
+    document.body.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "z", metaKey: true, bubbles: true }),
+    );
     expect(useVoxelStore.getState().doc!.cells).toHaveLength(1); // undone
 
     document.body.dispatchEvent(
@@ -114,7 +143,9 @@ describe("VoxelSculpt — pointer sculpting through the real ray→cell path", (
     await r.unmount();
 
     // Unmounted (mode exited) → the listener is gone; ⌘Z no longer touches the sculpt.
-    document.body.dispatchEvent(new KeyboardEvent("keydown", { key: "z", metaKey: true, bubbles: true }));
+    document.body.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "z", metaKey: true, bubbles: true }),
+    );
     expect(useVoxelStore.getState().doc!.cells).toHaveLength(2);
   });
 });

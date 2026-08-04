@@ -73,11 +73,7 @@ function discretizeEdge(oc: Occt, edge: TopoDS_Edge, deflection: number): number
  * Tessellate `solid` into a tagged mesh. The solid is meshed in place (OCCT
  * caches the triangulation on the shape); only plain-JS arrays are returned.
  */
-export function tessellateTagged(
-  oc: Occt,
-  solid: Solid,
-  opts?: TessellateOptions,
-): TaggedMesh {
+export function tessellateTagged(oc: Occt, solid: Solid, opts?: TessellateOptions): TaggedMesh {
   const deflection = opts?.linearDeflection ?? DEFAULT_DEFLECTION;
   const angular = opts?.angularDeflection ?? DEFAULT_ANGULAR;
   const shape: TopoDS_Shape = solid.shape;
@@ -106,7 +102,9 @@ export function tessellateTagged(
       // triangulate at this deflection, so this is rare — count it on the returned
       // mesh (droppedFaces) so callers can surface the partial result instead of
       // treating the shorter mesh as complete. The console.warn is a dev aid only.
-      console.warn(`tessellateTagged: face ${faceId} has no triangulation (deflection ${deflection}) — omitted from the mesh`);
+      console.warn(
+        `tessellateTagged: face ${faceId} has no triangulation (deflection ${deflection}) — omitted from the mesh`,
+      );
       droppedFaces++;
       handle.delete();
       loc.delete();
@@ -202,7 +200,7 @@ export function tessellateTagged(
   try {
     mayHaveFreeEdges = shapeMayHaveFreeEdges(oc, solid);
   } catch {
-    mayHaveFreeEdges = false;
+    // Unit fakes may omit ShapeType; the initialized false value is the safe fallback.
   }
   const edges: TaggedEdge[] = [];
   let droppedEdges = 0;

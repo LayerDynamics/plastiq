@@ -14,6 +14,7 @@ import { useCadStore } from "./store/store.js";
 import { useSketchStore } from "./sketch/sketchStore.js";
 import { useProjectsStore } from "./persistence/projectsStore.js";
 import { useAiStore } from "./ai/aiStore.js";
+import { useVoxelStore } from "./voxel/voxelStore.js";
 import { installAiTestSeam } from "./ai/testSeam.js";
 import { defaultDocument } from "./store/seed.js";
 import "./index.css";
@@ -55,6 +56,7 @@ function boot(rootEl: HTMLElement): void {
   (globalThis as { __cadStore?: typeof useCadStore }).__cadStore = useCadStore;
   (globalThis as { __projectsStore?: typeof useProjectsStore }).__projectsStore = useProjectsStore;
   (globalThis as { __aiStore?: typeof useAiStore }).__aiStore = useAiStore;
+  (globalThis as { __voxelStore?: typeof useVoxelStore }).__voxelStore = useVoxelStore;
   // Model-free AI tool seam (__plastiqAi) for the deterministic pipeline E2E (R2.6/R5.2).
   installAiTestSeam();
 

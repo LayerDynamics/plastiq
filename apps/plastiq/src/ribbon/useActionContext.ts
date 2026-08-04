@@ -6,6 +6,7 @@
 import { useCadStore } from "../store/store.js";
 import { useSketchStore } from "../sketch/sketchStore.js";
 import { useProjectsStore } from "../persistence/projectsStore.js";
+import { useVoxelStore } from "../voxel/voxelStore.js";
 import { resolveContextTarget, type ContextTarget } from "../three/contextmenu/contextSelection.js";
 
 export function useActionContext(): ContextTarget {
@@ -28,6 +29,14 @@ export function useActionContext(): ContextTarget {
   const sketchModel = useSketchStore((s) => s.model);
   const activeMeshDoc = useProjectsStore((s) => s.activeMeshDoc);
   const activePointCloudDoc = useProjectsStore((s) => s.activePointCloudDoc);
+  // Voxel actions intentionally read their dedicated store in the shared action
+  // registry. Subscribe here so the parent that renders ActionButton re-evaluates
+  // enabled/active state after New Sculpt, tool changes, and history edits; a
+  // SculptStatus child subscription alone cannot re-render sibling buttons.
+  useVoxelStore((s) => s.doc);
+  useVoxelStore((s) => s.tool);
+  useVoxelStore((s) => s.past.length);
+  useVoxelStore((s) => s.future.length);
 
   return resolveContextTarget({
     cad: {

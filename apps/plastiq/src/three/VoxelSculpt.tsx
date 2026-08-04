@@ -2,12 +2,9 @@
 // voxel branch the way Part.tsx is mounted for a B-rep part. Renders the open
 // VoxelDoc and owns the sculpt interaction:
 //
-//   • RENDER — the grid's exposed-face SURFACE MESH (VoxelGrid.toMesh), one
-//     BufferGeometry + one draw call. Chosen over instanced cubes because it is the
-//     exact same tested geometry the Convert-to-CAD/GLB handoff exports (voxel/doc.ts),
-//     faces are unshared so computeVertexNormals yields crisp per-face voxel shading,
-//     and at the 64³ worst case (~25k exposed quads) it is trivially light. A dashed
-//     work-volume box + the standard grid complete the stage.
+//   • RENDER — voxelDocToMesh, the SAME surface the Convert-to-CAD/GLB handoff
+//     exports. Legacy occupancy documents retain their exposed cube faces; v2 SDF
+//     documents render the smooth marching-cubes surface that the brushes edit.
 //   • TOOLS — LEFT-click sculpts with the active tool:
 //       - add/erase: single-cell occupancy (Alt inverts); empty-space Add uses the
 //         ground work plane (rayWorkPlaneCell).
@@ -34,7 +31,7 @@ import {
   type SculptTarget,
   type VoxelTool,
 } from "../voxel/voxelStore.js";
-import { docToGrid } from "../voxel/doc.js";
+import { voxelDocToMesh } from "../voxel/doc.js";
 import type { VoxelDoc } from "../store/types.js";
 import type { V3 } from "../voxel/grid.js";
 
@@ -45,7 +42,10 @@ const BRUSH_PREVIEW = 0x6ec8ff;
 const BOUNDS_COLOR = 0x3a4a6a;
 
 /** World-space centre of a grid cell. */
-function cellCenter(doc: VoxelDoc, cell: readonly [number, number, number]): [number, number, number] {
+function cellCenter(
+  doc: VoxelDoc,
+  cell: readonly [number, number, number],
+): [number, number, number] {
   const s = doc.voxelSize;
   return [
     doc.origin[0] + (cell[0] + 0.5) * s,
@@ -87,10 +87,11 @@ export function VoxelSculpt(): React.JSX.Element | null {
   /** Cell-tool hover target, or a brush world-centre for the radius sphere preview. */
   const [hover, setHover] = useState<(SculptTarget & { brushCenter?: V3 }) | null>(null);
 
-  // Surface mesh of the occupancy grid — rebuilt per document edit, disposed on swap.
+  // Authoritative sculpt surface — legacy cube faces or v2 marching cubes. Rebuilt
+  // per document edit and shared exactly with conversion/export.
   const geometry = useMemo(() => {
     if (!doc) return null;
-    const m = docToGrid(doc).toMesh();
+    const m = voxelDocToMesh(doc);
     const g = new THREE.BufferGeometry();
     g.setAttribute("position", new THREE.BufferAttribute(new Float32Array(m.vertices), 3));
     g.setIndex(new THREE.BufferAttribute(new Uint32Array(m.indices), 1));
@@ -139,7 +140,10 @@ export function VoxelSculpt(): React.JSX.Element | null {
       const rc = new THREE.Raycaster();
       rc.setFromCamera(ndc, camera);
       const { origin, direction } = rc.ray;
-      return { origin: [origin.x, origin.y, origin.z], dir: [direction.x, direction.y, direction.z] };
+      return {
+        origin: [origin.x, origin.y, origin.z],
+        dir: [direction.x, direction.y, direction.z],
+      };
     };
 
     /** Apply one stroke sample; returns whether an edit landed. */
@@ -169,6 +173,16 @@ export function VoxelSculpt(): React.JSX.Element | null {
             type: stroke.tool,
             radius: s.brushRadius,
             strength: s.brushStrength,
+            mirror: s.mirrorAxes.flatMap((enabled, axis) =>
+              enabled
+                ? [
+                    {
+                      axis: axis as 0 | 1 | 2,
+                      coord: s.doc!.origin[axis]! + (s.doc!.dims[axis]! * s.doc!.voxelSize) / 2,
+                    },
+                  ]
+                : [],
+            ),
             ...(delta ? { delta } : {}),
           },
           { history: stroke.first },
@@ -178,7 +192,9 @@ export function VoxelSculpt(): React.JSX.Element | null {
         stroke.first = false;
         useCadStore
           .getState()
-          .setStatus(`sculpt · ${stroke.tool} · ${useVoxelStore.getState().doc?.cells.length ?? 0} voxels`);
+          .setStatus(
+            `sculpt · ${stroke.tool} · ${useVoxelStore.getState().doc?.cells.length ?? 0} voxels`,
+          );
         return true;
       }
 
@@ -192,7 +208,9 @@ export function VoxelSculpt(): React.JSX.Element | null {
       stroke.painted.add(key);
       s.setCell(target.cell, target.kind === "add", { history: stroke.first });
       stroke.first = false;
-      useCadStore.getState().setStatus(`sculpt · ${useVoxelStore.getState().doc?.cells.length ?? 0} voxels`);
+      useCadStore
+        .getState()
+        .setStatus(`sculpt · ${useVoxelStore.getState().doc?.cells.length ?? 0} voxels`);
       return true;
     };
 
@@ -273,7 +291,8 @@ export function VoxelSculpt(): React.JSX.Element | null {
     const onKey = (e: KeyboardEvent): void => {
       if (!useVoxelStore.getState().doc) return;
       const t = e.target as HTMLElement | null;
-      const typing = t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable);
+      const typing =
+        t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable);
       if (typing) return;
       const z = (e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "z";
       const y = e.ctrlKey && e.key.toLowerCase() === "y";
@@ -320,7 +339,12 @@ export function VoxelSculpt(): React.JSX.Element | null {
       {brushPreview && isBrushTool(activeTool) && (
         <mesh name="voxel-brush-preview" position={brushPreview}>
           <sphereGeometry args={[brushRadius, 16, 12]} />
-          <meshStandardMaterial color={BRUSH_PREVIEW} transparent opacity={0.25} depthWrite={false} />
+          <meshStandardMaterial
+            color={BRUSH_PREVIEW}
+            transparent
+            opacity={0.25}
+            depthWrite={false}
+          />
         </mesh>
       )}
     </group>

@@ -15,7 +15,7 @@
 // commit produces a valid face of the expected area for a plane.
 
 import type { Occt } from "../oc/init.js";
-import { Solid } from "../solid/solid.js";
+import type { Solid } from "../solid/solid.js";
 import { surfaceFromPoints } from "../action/surface.js";
 import { evaluate } from "./deBoor.js";
 import { domain, type NurbsSurface, type Vec3 } from "./nurbsSurface.js";

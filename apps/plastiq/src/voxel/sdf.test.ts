@@ -26,8 +26,14 @@ function boundaryEdges(indices: number[]): number {
 function boxMesh(s: number): { positions: Float32Array; indices: Uint32Array } {
   const h = s / 2;
   const v = [
-    [-h, -h, -h], [h, -h, -h], [h, h, -h], [-h, h, -h],
-    [-h, -h, h], [h, -h, h], [h, h, h], [-h, h, h],
+    [-h, -h, -h],
+    [h, -h, -h],
+    [h, h, -h],
+    [-h, h, -h],
+    [-h, -h, h],
+    [h, -h, h],
+    [h, h, h],
+    [-h, h, h],
   ];
   const positions = new Float32Array(v.flat());
   // faces (CCW outward)
@@ -56,13 +62,17 @@ describe("SdfGrid.sphere → marching cubes", () => {
     const normals = mesh.normals!;
     let agree = 0;
     for (let i = 0; i < mesh.vertices.length; i += 3) {
-      const d = normals[i]! * mesh.vertices[i]! + normals[i + 1]! * mesh.vertices[i + 1]! + normals[i + 2]! * mesh.vertices[i + 2]!;
+      const d =
+        normals[i]! * mesh.vertices[i]! +
+        normals[i + 1]! * mesh.vertices[i + 1]! +
+        normals[i + 2]! * mesh.vertices[i + 2]!;
       if (d > 0) agree++;
     }
     expect(agree / nv).toBeGreaterThan(0.9);
     // vertices track the sphere radius
     let sum = 0;
-    for (let i = 0; i < mesh.vertices.length; i += 3) sum += Math.hypot(mesh.vertices[i]!, mesh.vertices[i + 1]!, mesh.vertices[i + 2]!);
+    for (let i = 0; i < mesh.vertices.length; i += 3)
+      sum += Math.hypot(mesh.vertices[i]!, mesh.vertices[i + 1]!, mesh.vertices[i + 2]!);
     expect(sum / nv).toBeGreaterThan(0.08);
     expect(sum / nv).toBeLessThan(0.12);
   });
@@ -118,8 +128,8 @@ describe("SdfGrid.fromMesh (CAD→sculpt bake) → MC box round-trip", () => {
     expect(mesh.indices.length / 3).toBeGreaterThan(50);
     expect(boundaryEdges(mesh.indices)).toBe(0);
     // Bounding box of the reconstructed surface ≈ the original box (within ~1.5 voxels).
-    let min = [Infinity, Infinity, Infinity];
-    let max = [-Infinity, -Infinity, -Infinity];
+    const min = [Infinity, Infinity, Infinity];
+    const max = [-Infinity, -Infinity, -Infinity];
     for (let i = 0; i < mesh.vertices.length; i += 3) {
       for (let a = 0; a < 3; a++) {
         min[a] = Math.min(min[a]!, mesh.vertices[i + a]!);

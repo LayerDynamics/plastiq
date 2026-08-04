@@ -17,12 +17,7 @@ import {
   type NurbsSurface,
   type Vec3,
 } from "./index.js";
-import {
-  cylinderSurface,
-  mirrorControlNet,
-  planeSurface,
-  sphereSurface,
-} from "./generators.js";
+import { cylinderSurface, mirrorControlNet, planeSurface, sphereSurface } from "./generators.js";
 
 const US = [0.0, 0.11, 0.25, 0.4, 0.5, 0.63, 0.75, 0.9, 1.0];
 const VS = [0.0, 0.17, 0.33, 0.5, 0.71, 0.86, 1.0];
@@ -70,7 +65,7 @@ describe("generators — planeSurface", () => {
   const vDir: Vec3 = [0, 3, 0];
   const uSize = 5;
   const vSize = 7;
-  const s = planeSurface(origin, uDir, vDir, uSize, vSize);
+  const s: NurbsSurface = planeSurface(origin, uDir, vDir, uSize, vSize);
 
   it("is a well-formed degree-1 non-rational patch", () => {
     expect(() => validateSurface(s)).not.toThrow();

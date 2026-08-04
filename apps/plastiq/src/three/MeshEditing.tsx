@@ -10,10 +10,14 @@ import { applyMeshHighlight } from "../viewport/meshHighlight.js";
 import {
   cloneMeshSelection,
   completeMeshFacePicks,
+  displaceMeshVertices,
   encodeMeshPick,
+  isotropicRemesh,
   meshFaces,
   meshSegments,
   meshSelectionVertices,
+  quadricDecimate,
+  smoothMeshCotangent,
   transformMeshSelection,
 } from "../mesh/editMesh.js";
 
@@ -25,6 +29,10 @@ interface Candidate {
 
 interface MeshEditGlobal {
   cloneSelection?: () => void;
+  inflateSelection?: () => void;
+  smoothSelection?: () => void;
+  remesh?: () => void;
+  decimate?: () => void;
 }
 
 const CLICK_TOL_PX = 4;
@@ -32,7 +40,11 @@ const NEAR_TOL_PX = 14;
 const CLONE_OFFSET: [number, number, number] = [0.01, 0.01, 0];
 const pickKey = (pick: Pick): string => `${pick.kind}:${pick.id}`;
 
-function meshCandidates(bodies: readonly MeshBody[], built: readonly BuiltMeshBody[], mode: SelectionMode): Candidate[] {
+function meshCandidates(
+  bodies: readonly MeshBody[],
+  built: readonly BuiltMeshBody[],
+  mode: SelectionMode,
+): Candidate[] {
   const out: Candidate[] = [];
   const v = new THREE.Vector3();
   bodies.forEach((body, bodyIndex) => {
@@ -44,7 +56,9 @@ function meshCandidates(bodies: readonly MeshBody[], built: readonly BuiltMeshBo
         out.push({
           kind: "vertex",
           id: encodeMeshPick(bodyIndex, i),
-          world: new THREE.Vector3().fromBufferAttribute(pos, i).applyMatrix4(rendered.vertexPoints.matrixWorld),
+          world: new THREE.Vector3()
+            .fromBufferAttribute(pos, i)
+            .applyMatrix4(rendered.vertexPoints.matrixWorld),
         });
       }
       return;
@@ -72,7 +86,11 @@ function meshCandidates(bodies: readonly MeshBody[], built: readonly BuiltMeshBo
           const a = vertex * 3;
           c.add(new THREE.Vector3(body.positions[a], body.positions[a + 1], body.positions[a + 2]));
         }
-        out.push({ kind: "face", id: encodeMeshPick(bodyIndex, i), world: c.multiplyScalar(1 / 3) });
+        out.push({
+          kind: "face",
+          id: encodeMeshPick(bodyIndex, i),
+          world: c.multiplyScalar(1 / 3),
+        });
       });
       return;
     }
@@ -82,7 +100,11 @@ function meshCandidates(bodies: readonly MeshBody[], built: readonly BuiltMeshBo
       const c = new THREE.Vector3();
       for (let i = 0; i < pos.count; i++) c.add(v.fromBufferAttribute(pos, i));
       c.multiplyScalar(1 / pos.count);
-      out.push({ kind: "body", id: encodeMeshPick(bodyIndex, 0), world: c.applyMatrix4(rendered.mesh.matrixWorld) });
+      out.push({
+        kind: "body",
+        id: encodeMeshPick(bodyIndex, 0),
+        world: c.applyMatrix4(rendered.mesh.matrixWorld),
+      });
     }
   });
   return out;
@@ -98,7 +120,9 @@ function selectedCenter(bodies: readonly MeshBody[], picks: readonly Pick[]): TH
     if (!body) continue;
     for (const vertex of verts) {
       const i = vertex * 3;
-      center.add(new THREE.Vector3(body.positions[i], body.positions[i + 1], body.positions[i + 2]));
+      center.add(
+        new THREE.Vector3(body.positions[i], body.positions[i + 1], body.positions[i + 2]),
+      );
       count++;
     }
   }
@@ -148,7 +172,8 @@ export function MeshEditing({
     }
     autoFaceKeysRef.current = completeKeys;
     const same =
-      current.length === next.length && current.every((pick, index) => pickKey(pick) === pickKey(next[index]!));
+      current.length === next.length &&
+      current.every((pick, index) => pickKey(pick) === pickKey(next[index]!));
     if (!same) store.setPicks(next);
     return !same;
   };
@@ -186,7 +211,10 @@ export function MeshEditing({
     const raycaster = new THREE.Raycaster();
     const ndcFrom = (cx: number, cy: number): THREE.Vector2 => {
       const r = el.getBoundingClientRect();
-      return new THREE.Vector2(((cx - r.left) / r.width) * 2 - 1, -(((cy - r.top) / r.height) * 2 - 1));
+      return new THREE.Vector2(
+        ((cx - r.left) / r.width) * 2 - 1,
+        -(((cy - r.top) / r.height) * 2 - 1),
+      );
     };
     const nearest = (mode: SelectionMode, ndc: THREE.Vector2): Pick | null => {
       const w = el.clientWidth || 1;
@@ -207,14 +235,20 @@ export function MeshEditing({
     };
     const rayBody = (ndc: THREE.Vector2): Pick | null => {
       raycaster.setFromCamera(ndc, camera);
-      const hits = raycaster.intersectObjects(builtRef.current.map((b) => b.mesh), false);
+      const hits = raycaster.intersectObjects(
+        builtRef.current.map((b) => b.mesh),
+        false,
+      );
       const hit = hits[0]?.object;
       const body = hit ? builtRef.current.findIndex((b) => b.mesh === hit) : -1;
       return body >= 0 ? { kind: "body", id: encodeMeshPick(body, 0) } : null;
     };
     const rayFace = (ndc: THREE.Vector2): Pick | null => {
       raycaster.setFromCamera(ndc, camera);
-      const hits = raycaster.intersectObjects(builtRef.current.map((b) => b.mesh), false);
+      const hits = raycaster.intersectObjects(
+        builtRef.current.map((b) => b.mesh),
+        false,
+      );
       const hit = hits[0];
       if (!hit || hit.faceIndex == null) return null;
       const body = builtRef.current.findIndex((b) => b.mesh === hit.object);
@@ -296,10 +330,84 @@ export function MeshEditing({
     };
     const vp = ((globalThis as { __plastiqMeshEdit?: MeshEditGlobal }).__plastiqMeshEdit ??= {});
     vp.cloneSelection = cloneSelection;
+    vp.inflateSelection = () => {
+      const current = bodiesRef.current;
+      const selected = meshSelectionVertices(current, useCadStore.getState().picks);
+      if (selected.size === 0) return;
+      const next = current.map((body, bodyIndex) => {
+        const vertices = selected.get(bodyIndex);
+        if (!vertices || vertices.size === 0) return body;
+        const center = new THREE.Vector3();
+        const point = new THREE.Vector3();
+        for (const vertex of vertices) {
+          center.add(point.fromArray(body.positions, vertex * 3));
+        }
+        center.multiplyScalar(1 / vertices.size);
+        let radius = 0;
+        for (const vertex of vertices) {
+          point.fromArray(body.positions, vertex * 3);
+          radius = Math.max(radius, point.distanceTo(center));
+        }
+        radius = Math.max(radius * 1.5, 0.002);
+        return displaceMeshVertices(body, {
+          center: [center.x, center.y, center.z],
+          radius,
+          strength: radius * 0.15,
+        });
+      });
+      bodiesRef.current = next;
+      onBodiesChange(next, true);
+      useCadStore.getState().setStatus("mesh selection inflated");
+    };
+    vp.smoothSelection = () => {
+      const current = bodiesRef.current;
+      const selected = meshSelectionVertices(current, useCadStore.getState().picks);
+      const next = current.map((body, bodyIndex) =>
+        smoothMeshCotangent(body, {
+          iterations: 2,
+          lambda: 0.35,
+          ...(selected.get(bodyIndex)?.size
+            ? { selection: selected.get(bodyIndex)! }
+            : selected.size === 0
+              ? {}
+              : { selection: [] }),
+        }),
+      );
+      bodiesRef.current = next;
+      onBodiesChange(next, true);
+      useCadStore.getState().setStatus("mesh smoothed");
+    };
+    vp.remesh = () => {
+      const next = bodiesRef.current.map((body) => {
+        const box = new THREE.Box3();
+        const point = new THREE.Vector3();
+        for (let i = 0; i < body.positions.length; i += 3) {
+          box.expandByPoint(point.fromArray(body.positions, i));
+        }
+        const extent = box.getSize(new THREE.Vector3()).length();
+        return isotropicRemesh(body, {
+          targetEdgeLength: Math.max(extent / 35, 1e-5),
+          iterations: 2,
+        });
+      });
+      bodiesRef.current = next;
+      onBodiesChange(next, true);
+      useCadStore.getState().setStatus("mesh remeshed uniformly");
+    };
+    vp.decimate = () => {
+      const next = bodiesRef.current.map((body) => quadricDecimate(body, { targetRatio: 0.5 }));
+      bodiesRef.current = next;
+      onBodiesChange(next, true);
+      useCadStore.getState().setStatus("mesh decimated to 50%");
+    };
     window.addEventListener("keydown", onKey);
     return () => {
       window.removeEventListener("keydown", onKey);
       delete vp.cloneSelection;
+      delete vp.inflateSelection;
+      delete vp.smoothSelection;
+      delete vp.remesh;
+      delete vp.decimate;
     };
   }, [onBodiesChange]);
 
@@ -317,10 +425,16 @@ export function MeshEditing({
       onObjectChange={() => {
         if (!draggingRef.current) return;
         anchor.updateMatrixWorld(true);
-        const deltaMatrix = anchor.matrixWorld.clone().multiply(lastMatrix.current.clone().invert());
+        const deltaMatrix = anchor.matrixWorld
+          .clone()
+          .multiply(lastMatrix.current.clone().invert());
         if (deltaMatrix.equals(new THREE.Matrix4())) return;
         lastMatrix.current.copy(anchor.matrixWorld);
-        const next = transformMeshSelection(bodiesRef.current, useCadStore.getState().picks, deltaMatrix.elements);
+        const next = transformMeshSelection(
+          bodiesRef.current,
+          useCadStore.getState().picks,
+          deltaMatrix.elements,
+        );
         bodiesRef.current = next;
         onBodiesChange(next);
       }}

@@ -10,6 +10,7 @@
 
 import "fake-indexeddb/auto";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import * as THREE from "three";
 import { useCadStore } from "../store/store.js";
 import { useProjectsStore } from "../persistence/projectsStore.js";
 import { useVoxelStore } from "../voxel/voxelStore.js";
@@ -59,8 +60,15 @@ function makeTarget(over: Partial<ContextTarget> = {}): ContextTarget {
 
 afterEach(() => {
   useVoxelStore.getState().close();
-  useProjectsStore.setState({ activeMeshDoc: null, currentId: null, currentName: "Untitled", status: "" });
+  useProjectsStore.setState({
+    activeMeshDoc: null,
+    currentId: null,
+    currentName: "Untitled",
+    status: "",
+  });
   useCadStore.getState().reset();
+  delete (globalThis as { __plastiqViewport?: unknown }).__plastiqViewport;
+  delete (globalThis as { __plastiqMeshEdit?: unknown }).__plastiqMeshEdit;
   vi.restoreAllMocks();
 });
 
@@ -116,15 +124,49 @@ describe("registry — voxelMode() gates B-rep ops disabled-not-hidden (FR-18)",
 
   it("the voxel tool set is disabled while a MESH document is open (allowlist symmetry)", () => {
     useProjectsStore.setState({
-      activeMeshDoc: { kind: "mesh", glb: "Z2xURg==", source: { mode: "text3d", providerId: "fal:tripo" } },
+      activeMeshDoc: {
+        kind: "mesh",
+        glb: "Z2xURg==",
+        source: { mode: "text3d", providerId: "fal:tripo" },
+      },
     });
-    for (const id of ["voxel-new", "voxel-add", "voxel-erase", "voxel-convert-cad", "voxel-export-glb"]) {
+    for (const id of [
+      "voxel-new",
+      "voxel-add",
+      "voxel-erase",
+      "voxel-convert-cad",
+      "voxel-export-glb",
+    ]) {
       expect(ACTIONS[id]!.enabled(makeTarget()), id).toBe(false);
     }
   });
 });
 
 describe("registry — the voxel tool set", () => {
+  it("bakes the rendered CAD body into an SDF sculpt through the visible bridge", () => {
+    const geometry = new THREE.BoxGeometry(0.04, 0.03, 0.02);
+    const mesh = new THREE.Mesh(geometry);
+    mesh.updateMatrixWorld(true);
+    (
+      globalThis as {
+        __plastiqViewport?: { builtPart: { mesh: THREE.Mesh<THREE.BufferGeometry> } };
+      }
+    ).__plastiqViewport = { builtPart: { mesh } };
+    useCadStore.setState({
+      features: [{ id: "f1", type: "box", params: { sx: 0.04, sy: 0.03, sz: 0.02 } }],
+    });
+
+    expect(ACTIONS["voxel-from-cad"]!.enabled(makeTarget())).toBe(true);
+    runAction("voxel-from-cad", makeTarget());
+
+    const doc = useVoxelStore.getState().doc!;
+    expect(doc.version).toBe(2);
+    expect(doc.sdf?.field.length).toBe(doc.dims[0] * doc.dims[1] * doc.dims[2]);
+    expect(doc.cells.length).toBeGreaterThan(0);
+    expect(useCadStore.getState().workspace).toBe("sculpt");
+    geometry.dispose();
+  });
+
   it("voxel-new starts a fresh untitled sculpt in the Sculpt workspace", () => {
     runAction("voxel-new", makeTarget());
     expect(useVoxelStore.getState().doc).not.toBeNull();
@@ -170,6 +212,37 @@ describe("registry — the voxel tool set", () => {
     useVoxelStore.getState().close();
     runAction("undo", t);
     expect(useCadStore.getState().features).toHaveLength(0);
+  });
+});
+
+describe("registry — mesh sculpt product actions", () => {
+  it("dispatches inflate, smooth, remesh, and decimate to the live mesh editor", () => {
+    const commands = {
+      inflateSelection: vi.fn(),
+      smoothSelection: vi.fn(),
+      remesh: vi.fn(),
+      decimate: vi.fn(),
+    };
+    (globalThis as { __plastiqMeshEdit?: typeof commands }).__plastiqMeshEdit = commands;
+    useProjectsStore.setState({
+      activeMeshDoc: {
+        kind: "mesh",
+        glb: "Z2xURg==",
+        source: { mode: "voxel", providerId: "voxel-sculpt" },
+      },
+    });
+    useCadStore.setState({ picks: [{ kind: "vertex", id: 0 }] });
+
+    for (const [id, command] of [
+      ["mesh-inflate", "inflateSelection"],
+      ["mesh-smooth", "smoothSelection"],
+      ["mesh-remesh", "remesh"],
+      ["mesh-decimate", "decimate"],
+    ] as const) {
+      expect(ACTIONS[id]!.enabled(makeTarget())).toBe(true);
+      runAction(id, makeTarget());
+      expect(commands[command]).toHaveBeenCalledOnce();
+    }
   });
 });
 

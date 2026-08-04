@@ -4,6 +4,10 @@
     {
       "origin": "http://localhost:4177",
       "localStorage": [{ "name": "plastiq.welcomeHidden", "value": "1" }]
+    },
+    {
+      "origin": "http://127.0.0.1:4177",
+      "localStorage": [{ "name": "plastiq.welcomeHidden", "value": "1" }]
     }
   ]
 }

@@ -2269,6 +2269,7 @@ function parseNurbsSurfaceJson(raw: unknown, featureId: string): NurbsSurface {
       `feature '${featureId}' (freeform): invalid surface — ${
         err instanceof Error ? err.message : String(err)
       }`,
+      { cause: err },
     );
   }
   return surf;

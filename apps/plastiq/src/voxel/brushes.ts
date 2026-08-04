@@ -17,7 +17,8 @@
 
 import type { V3 } from "./grid.js";
 import type { VoxelDoc } from "../store/types.js";
-import { SdfGrid, sdfFromDoc } from "./sdf.js";
+import { sdfFromDoc } from "./sdf.js";
+import type { SdfGrid } from "./sdf.js";
 
 export type BrushType = "draw" | "clay" | "smooth" | "flatten" | "inflate" | "pinch" | "grab";
 
@@ -46,7 +47,7 @@ export interface BrushSpec {
   center: V3;
   /** Brush radius in metres. */
   radius: number;
-  /** Signed strength (negative subtracts, for draw/clay/inflate). */
+  /** Signed dimensionless strength multiplier (negative subtracts). */
   strength: number;
   /** Falloff profile from centre (default "smooth"). */
   falloff?: Falloff;
@@ -152,7 +153,10 @@ function applyOne(g: SdfGrid, spec: BrushSpec, snapshot: Float32Array): void {
             // Build up to a plane a little outside the surface (flat-topped deposit),
             // bounded to the brush disc.
             const height = spec.strength * s * 2;
-            const planeDist = dot(sub(p, [cx + n[0] * height, cy + n[1] * height, cz + n[2] * height]), n);
+            const planeDist = dot(
+              sub(p, [cx + n[0] * height, cy + n[1] * height, cz + n[2] * height]),
+              n,
+            );
             const bounded = Math.max(planeDist, d - r);
             const target = spec.strength >= 0 ? Math.min(f, bounded) : Math.max(f, -bounded);
             out = lerp(f, target, w);
@@ -242,11 +246,22 @@ function sampleField(g: SdfGrid, field: Float32Array, p: V3): number {
 }
 
 /** Mean of the 6-neighbourhood (in-bounds) field values at cell (x,y,z). */
-function neighbourhoodMean(g: SdfGrid, field: Float32Array, x: number, y: number, z: number): number {
+function neighbourhoodMean(
+  g: SdfGrid,
+  field: Float32Array,
+  x: number,
+  y: number,
+  z: number,
+): number {
   let sum = field[g.idx(x, y, z)]!;
   let count = 1;
   const off: ReadonlyArray<readonly [number, number, number]> = [
-    [1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1],
+    [1, 0, 0],
+    [-1, 0, 0],
+    [0, 1, 0],
+    [0, -1, 0],
+    [0, 0, 1],
+    [0, 0, -1],
   ];
   for (const [dx, dy, dz] of off) {
     const xx = x + dx;

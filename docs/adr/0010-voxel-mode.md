@@ -8,7 +8,7 @@
 `Expanse.md` flagged the `voxel-editor` repo as **NET-NEW but paradigm-mismatched** — a dense-voxel
 editor is orthogonal to Plastiq's parametric B-rep core — with the genuinely liftable parts being the
 **dense occupancy grid + 6-neighbor surface culling + screen-ray → cell pick** techniques (a few
-hundred lines, reimplementable in TS). A full voxel *product mode* is a new direction, low priority.
+hundred lines, reimplementable in TS). A full voxel _product mode_ is a new direction, low priority.
 
 ## Decision
 
@@ -31,7 +31,7 @@ the full three.js editing UI honestly as a follow-on.
 - **Built + tested:** the grid + cull + ray-pick + voxels→mesh algorithms (the actual Expanse finding),
   and the `VoxelDoc` type. Pure TS, deterministic.
 - **Deferred at the time (follow-on):** the full three.js voxel rendering + mouse-driven editing UI +
-  mode shell wiring — then judged a substantial UI surface for a low-priority *new product direction*.
+  mode shell wiring — then judged a substantial UI surface for a low-priority _new product direction_.
 
 ## Consequences
 
@@ -69,3 +69,15 @@ deferral. What shipped, all on the liftable core above:
   GLB, `voxel/glb.ts`; `source.mode:"voxel"`) into `activeMeshDoc`, so the EXISTING
   GenerationPanel `MeshConvertSection` → reconstruct (mesh→B-rep) path runs unmodified — exactly
   the `toMesh → MeshDoc → reconstruct` route this ADR designed.
+
+## Amendment — SDF sculpt engine and two-way CAD bridge (2026-08-03)
+
+Phase 4 supersedes the occupancy-only rendering and full-snapshot history described in the 2026-07-03 amendment while retaining legacy document compatibility:
+
+- **Versioned SDF documents:** v2 `VoxelDoc` carries a narrow-band signed-distance field plus a synchronized occupancy shadow. Legacy v1/absent-version documents migrate on first SDF edit.
+- **One authoritative surface:** `voxelDocToMesh` uses marching cubes for v2 and exposed cube faces for legacy documents. `VoxelSculpt`, GLB export, and Convert to CAD all consume that same function.
+- **Brush product:** Draw, Clay, Smooth, Flatten, Inflate, Pinch, and Grab are live canvas tools with editable radius, normalized signed strength, and X/Y/Z centre-plane mirroring.
+- **Sparse history:** sculpt strokes store changed field/cell runs, and drag samples fold into one undo entry; the store no longer retains 100 complete grids.
+- **Mesh product:** generated/staged mesh documents expose selection Inflate, cotangent Smooth, isotropic Remesh, and quadric Decimate, persisted back into their GLB document.
+- **Bridges both ways:** Sculpt current body transforms the rendered world-space OCCT tessellation into an adaptively resolved SDF; Convert to CAD sends the exact displayed marching-cubes GLB through reconstruct or editable NURBS and back into the feature timeline.
+- **Acceptance:** the strict no-mock browser gate performs a mirrored SDF stroke, mesh Smooth, live HTTP/pythonOCC reconstruction, STEP import in the OCCT worker, then applies a Scale timeline feature to the reconstructed body.

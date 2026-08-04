@@ -4,7 +4,7 @@
 // + ActionButtons) against the real store.
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 
 import { WorkspacePanel } from "./WorkspacePanel.js";
 import { useCadStore } from "../store/store.js";
@@ -27,6 +27,7 @@ describe("WorkspacePanel — smoke", () => {
   it("renders tool buttons from the flattened ribbon groups", () => {
     render(<WorkspacePanel />);
     expect(screen.getAllByRole("button").length).toBeGreaterThan(0);
+    expect(screen.getByTestId("act-scale")).toBeTruthy();
   });
 });
 
@@ -53,5 +54,35 @@ describe("WorkspacePanel — Sculpt workspace (ADR-0010)", () => {
     expect((screen.getByTestId("act-voxel-erase") as HTMLButtonElement).disabled).toBe(false);
     expect((screen.getByTestId("act-voxel-convert-cad") as HTMLButtonElement).disabled).toBe(false);
     expect((screen.getByTestId("act-voxel-export-glb") as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it("re-enables sculpt tools immediately when New Sculpt opens the voxel store", () => {
+    useCadStore.setState({ workspace: "sculpt" });
+    render(<WorkspacePanel />);
+    const draw = screen.getByTestId("act-voxel-brush-draw") as HTMLButtonElement;
+    expect(draw.disabled).toBe(true);
+
+    fireEvent.click(screen.getByTestId("act-voxel-new"));
+
+    expect(useVoxelStore.getState().doc).not.toBeNull();
+    expect(draw.disabled).toBe(false);
+  });
+
+  it("edits brush radius, strength, and symmetry from visible Sculpt controls", () => {
+    useVoxelStore.getState().open(defaultVoxelDoc("Controls"));
+    useCadStore.setState({ workspace: "sculpt" });
+    render(<WorkspacePanel />);
+
+    fireEvent.change(screen.getByTestId("sculpt-brush-radius"), { target: { value: "9" } });
+    fireEvent.change(screen.getByTestId("sculpt-brush-strength"), {
+      target: { value: "-1.5" },
+    });
+    fireEvent.click(screen.getByTestId("sculpt-mirror-x"));
+    fireEvent.click(screen.getByTestId("sculpt-mirror-z"));
+
+    const state = useVoxelStore.getState();
+    expect(state.brushRadius).toBeCloseTo(0.009);
+    expect(state.brushStrength).toBeCloseTo(-1.5);
+    expect(state.mirrorAxes).toEqual([true, false, true]);
   });
 });

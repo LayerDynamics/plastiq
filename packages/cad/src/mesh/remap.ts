@@ -24,8 +24,8 @@ import type { TopoDS_Face, TopoDS_Shape, TopTools_ListOfShape } from "opencascad
 
 import type { Occt } from "../oc/init.js";
 import type { Solid } from "../solid/solid.js";
-import { MESH_PURPOSE, faceCentroid, shapeEnums } from "./normals.js";
-import { faceSurfaceSignature, surfacesMatch } from "./surface.js";
+import { MESH_PURPOSE, shapeEnums } from "./normals.js";
+import { surfacesMatch } from "./surface.js";
 import type { FaceGroup, TaggedMesh } from "./tagged.js";
 
 /**

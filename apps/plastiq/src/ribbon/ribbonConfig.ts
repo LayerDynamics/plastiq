@@ -85,6 +85,7 @@ export const RIBBON: Record<Workspace, RibbonTab[]> = {
             a("pathPattern"),
             a("split"),
             a("booleanBody"),
+            a("scale"),
             a("transform"),
           ],
         },
@@ -96,6 +97,10 @@ export const RIBBON: Record<Workspace, RibbonTab[]> = {
         // editable B-rep — reconstruct or fit NURBS surfaces. Enabled only while a mesh
         // document is open (registry gateForDocMode + each action's `enabled`); greyed
         // in ordinary parametric mode, consistent with the FR-18 disabled-not-hidden rule.
+        {
+          title: "Mesh Sculpt",
+          items: [a("mesh-inflate"), a("mesh-smooth"), a("mesh-remesh"), a("mesh-decimate")],
+        },
         {
           title: "Mesh → CAD",
           items: [a("ml-reconstruct-brep"), a("ml-fit-nurbs")],
@@ -201,7 +206,10 @@ export const RIBBON: Record<Workspace, RibbonTab[]> = {
       id: "sculpt",
       title: "Sculpt",
       panels: [
-        { title: "Sculpt", items: [a("voxel-new"), a("voxel-add"), a("voxel-erase")] },
+        {
+          title: "Sculpt",
+          items: [a("voxel-new"), a("voxel-from-cad"), a("voxel-add"), a("voxel-erase")],
+        },
         {
           title: "Brushes",
           items: [

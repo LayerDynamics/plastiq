@@ -28,6 +28,9 @@ interface Group {
 function SculptStatus(): React.JSX.Element | null {
   const doc = useVoxelStore((s) => s.doc);
   const tool = useVoxelStore((s) => s.tool);
+  const brushRadius = useVoxelStore((s) => s.brushRadius);
+  const brushStrength = useVoxelStore((s) => s.brushStrength);
+  const mirrorAxes = useVoxelStore((s) => s.mirrorAxes);
   if (!doc) {
     return (
       <p data-testid="sculpt-status" className="px-2 py-1 text-[10px] text-[#789]">
@@ -36,10 +39,61 @@ function SculptStatus(): React.JSX.Element | null {
     );
   }
   return (
-    <p data-testid="sculpt-status" className="px-2 py-1 text-[10px] text-[#8aa]">
-      {doc.name ?? "Voxel sculpt"} · {doc.cells.length} voxel{doc.cells.length === 1 ? "" : "s"} ·{" "}
-      {doc.dims.join("×")} @ {(doc.voxelSize * 1000).toFixed(1)} mm · tool: {tool}
-    </p>
+    <div data-testid="sculpt-status" className="space-y-1 px-2 py-1 text-[10px] text-[#8aa]">
+      <p>
+        {doc.name ?? "Voxel sculpt"} · {doc.cells.length} voxel
+        {doc.cells.length === 1 ? "" : "s"} · {doc.dims.join("×")} @{" "}
+        {(doc.voxelSize * 1000).toFixed(1)} mm · tool: {tool}
+      </p>
+      <div data-testid="sculpt-brush-settings" className="grid grid-cols-2 gap-1">
+        <label className="flex items-center gap-1">
+          Radius
+          <input
+            data-testid="sculpt-brush-radius"
+            type="number"
+            min="0.1"
+            step="0.5"
+            value={Number((brushRadius * 1000).toFixed(3))}
+            onChange={(event) =>
+              useVoxelStore.getState().setBrushRadius(Number(event.currentTarget.value) / 1000)
+            }
+            className="min-w-0 flex-1 rounded border border-[#283344] bg-[#10141c] px-1"
+          />
+          mm
+        </label>
+        <label className="flex items-center gap-1">
+          Strength
+          <input
+            data-testid="sculpt-brush-strength"
+            type="number"
+            step="0.1"
+            value={Number(brushStrength.toFixed(3))}
+            onChange={(event) =>
+              useVoxelStore.getState().setBrushStrength(Number(event.currentTarget.value))
+            }
+            className="min-w-0 flex-1 rounded border border-[#283344] bg-[#10141c] px-1"
+          />
+        </label>
+      </div>
+      <div className="flex items-center gap-2" data-testid="sculpt-mirror-settings">
+        <span>Mirror</span>
+        {(["X", "Y", "Z"] as const).map((axis, index) => (
+          <label key={axis} className="flex items-center gap-0.5">
+            <input
+              data-testid={`sculpt-mirror-${axis.toLowerCase()}`}
+              type="checkbox"
+              checked={mirrorAxes[index]}
+              onChange={(event) =>
+                useVoxelStore
+                  .getState()
+                  .setMirrorAxis(index as 0 | 1 | 2, event.currentTarget.checked)
+              }
+            />
+            {axis}
+          </label>
+        ))}
+      </div>
+    </div>
   );
 }
 

@@ -9,7 +9,7 @@ import { initOcct, type Occt } from "../oc/init.js";
 import { mm } from "../unit/index.js";
 import type { Vec3 } from "../math/index.js";
 import { makeBox } from "../solid/primitives.js";
-import { Solid } from "../solid/solid.js";
+import type { Solid } from "../solid/solid.js";
 import { shapeEnums } from "../mesh/normals.js";
 import { hole } from "./hole.js";
 
@@ -210,10 +210,22 @@ describe("hole — validation (NAMED errors, before OCCT)", () => {
   it("rejects a zero or negative diameter", () => {
     const box = block();
     expect(() =>
-      hole(oc, box, { origin: TOP_CENTRE, axis: DOWN, diameter: 0, throughAll: true, kind: "simple" }),
+      hole(oc, box, {
+        origin: TOP_CENTRE,
+        axis: DOWN,
+        diameter: 0,
+        throughAll: true,
+        kind: "simple",
+      }),
     ).toThrow(/diameter/);
     expect(() =>
-      hole(oc, box, { origin: TOP_CENTRE, axis: DOWN, diameter: mm(-5), throughAll: true, kind: "simple" }),
+      hole(oc, box, {
+        origin: TOP_CENTRE,
+        axis: DOWN,
+        diameter: mm(-5),
+        throughAll: true,
+        kind: "simple",
+      }),
     ).toThrow(/diameter/);
     box.delete();
   });
@@ -233,11 +245,23 @@ describe("hole — validation (NAMED errors, before OCCT)", () => {
   it("rejects a non-unit axis", () => {
     const box = block();
     expect(() =>
-      hole(oc, box, { origin: TOP_CENTRE, axis: [0, 0, 2], diameter: BORE_D, throughAll: true, kind: "simple" }),
+      hole(oc, box, {
+        origin: TOP_CENTRE,
+        axis: [0, 0, 2],
+        diameter: BORE_D,
+        throughAll: true,
+        kind: "simple",
+      }),
     ).toThrow(/unit/);
     // A zero axis is non-unit too.
     expect(() =>
-      hole(oc, box, { origin: TOP_CENTRE, axis: [0, 0, 0], diameter: BORE_D, throughAll: true, kind: "simple" }),
+      hole(oc, box, {
+        origin: TOP_CENTRE,
+        axis: [0, 0, 0],
+        diameter: BORE_D,
+        throughAll: true,
+        kind: "simple",
+      }),
     ).toThrow(/unit/);
     box.delete();
   });

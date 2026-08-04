@@ -31,7 +31,10 @@ describe("TRI_TABLE integrity", () => {
     expect(TRI_TABLE).toHaveLength(256);
     for (const row of TRI_TABLE) {
       expect(row.length % 3).toBe(0);
-      for (const e of row) expect(e).toBeGreaterThanOrEqual(0), expect(e).toBeLessThan(12);
+      for (const e of row) {
+        expect(e).toBeGreaterThanOrEqual(0);
+        expect(e).toBeLessThan(12);
+      }
     }
   });
 

@@ -26,7 +26,9 @@ describe("R4 — remapPicks follows entities across a re-numbering rebuild", () 
     // Old: the top plane is face id 0. New build: the SAME top plane is now id 5
     // (a hole added ahead of it shifted the group order) — and id 0 is now a wall.
     const old: SelectionRefs = {
-      faces: { 0: { normal: [0, 0, 1], centroid: [0, 0, 1], surface: plane([0, 0, 1], [0, 0, 1]) } },
+      faces: {
+        0: { normal: [0, 0, 1], centroid: [0, 0, 1], surface: plane([0, 0, 1], [0, 0, 1]) },
+      },
       edges: {},
     };
     const neu: SelectionRefs = {
@@ -36,7 +38,8 @@ describe("R4 — remapPicks follows entities across a re-numbering rebuild", () 
       },
       edges: {},
     };
-    expect(remapPicks([{ kind: "face", id: 0 }], old, neu)).toEqual([{ kind: "face", id: 5 }]);
+    const picks: Pick[] = [{ kind: "face", id: 0 }];
+    expect(remapPicks(picks, old, neu)).toEqual([{ kind: "face", id: 5 }]);
   });
 
   it("follows a moved/resized curved face by surface KIND + closest centroid", () => {
@@ -62,7 +65,9 @@ describe("R4 — remapPicks follows entities across a re-numbering rebuild", () 
       edges: {},
     };
     const neu: SelectionRefs = {
-      faces: { 0: { normal: [0, 0, 1], centroid: [0, 0, 0], surface: plane([0, 0, 1], [0, 0, 0]) } },
+      faces: {
+        0: { normal: [0, 0, 1], centroid: [0, 0, 0], surface: plane([0, 0, 1], [0, 0, 0]) },
+      },
       edges: {},
     };
     // The only new face is a plane — no cylinder to match. Pick clears, never rebinds.
@@ -71,9 +76,15 @@ describe("R4 — remapPicks follows entities across a re-numbering rebuild", () 
 
   it("remaps an edge pick by its adjacent-surface pair", () => {
     const oldEdge = {
-      faceNormals: [[0, 0, 1], [1, 0, 0]] as [[number, number, number], [number, number, number]],
+      faceNormals: [
+        [0, 0, 1],
+        [1, 0, 0],
+      ] as [[number, number, number], [number, number, number]],
       midpoint: [0.5, 0, 0] as [number, number, number],
-      faceSurfaces: [plane([0, 0, 1], [0, 0, 0]), plane([1, 0, 0], [0, 0, 0])] as [SurfaceSignature, SurfaceSignature],
+      faceSurfaces: [plane([0, 0, 1], [0, 0, 0]), plane([1, 0, 0], [0, 0, 0])] as [
+        SurfaceSignature,
+        SurfaceSignature,
+      ],
     };
     const old: SelectionRefs = { faces: {}, edges: { 2: oldEdge } };
     const neu: SelectionRefs = { faces: {}, edges: { 9: oldEdge } };
@@ -83,7 +94,9 @@ describe("R4 — remapPicks follows entities across a re-numbering rebuild", () 
   it("drops a face pick that has no stored ref (cannot be validated)", () => {
     const old: SelectionRefs = { faces: {}, edges: {} };
     const neu: SelectionRefs = {
-      faces: { 0: { normal: [0, 0, 1], centroid: [0, 0, 0], surface: plane([0, 0, 1], [0, 0, 0]) } },
+      faces: {
+        0: { normal: [0, 0, 1], centroid: [0, 0, 0], surface: plane([0, 0, 1], [0, 0, 0]) },
+      },
       edges: {},
     };
     expect(remapPicks([{ kind: "face", id: 7 }], old, neu)).toEqual([]);

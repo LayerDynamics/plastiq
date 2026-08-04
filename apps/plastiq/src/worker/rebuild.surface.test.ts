@@ -14,6 +14,7 @@ import {
   type Occt,
 } from "@plastiq/cad";
 import type { CadDocument } from "../store/types.js";
+import type { TopAbs_ShapeEnum } from "opencascade.js";
 import { rebuildDocument } from "./rebuild.js";
 
 let oc: Occt;
@@ -27,8 +28,8 @@ function faceStep(dx: number, dy: number, dz: number): string {
   try {
     // embind types the enum object loosely — cast like rebuild.test.ts bodyCount.
     const S = oc.TopAbs_ShapeEnum as unknown as {
-      TopAbs_FACE: import("opencascade.js").TopAbs_ShapeEnum;
-      TopAbs_SHAPE: import("opencascade.js").TopAbs_ShapeEnum;
+      TopAbs_FACE: TopAbs_ShapeEnum;
+      TopAbs_SHAPE: TopAbs_ShapeEnum;
     };
     const exp = new oc.TopExp_Explorer_2(box.shape, S.TopAbs_FACE, S.TopAbs_SHAPE);
     const face = oc.TopoDS.Face_1(exp.Current());
@@ -209,8 +210,8 @@ describe("§14 untrim / extendSurface feature chains", () => {
   it("rebuilds untrim from imported sub-bounds to the full B-spline basis", () => {
     const full = surfaceFromPoints(oc, curvedGrid(), { degU: 2, degV: 2 });
     const S = oc.TopAbs_ShapeEnum as unknown as {
-      TopAbs_FACE: import("opencascade.js").TopAbs_ShapeEnum;
-      TopAbs_SHAPE: import("opencascade.js").TopAbs_ShapeEnum;
+      TopAbs_FACE: TopAbs_ShapeEnum;
+      TopAbs_SHAPE: TopAbs_ShapeEnum;
     };
     const exp = new oc.TopExp_Explorer_2(full.shape, S.TopAbs_FACE, S.TopAbs_SHAPE);
     const face = oc.TopoDS.Face_1(exp.Current());

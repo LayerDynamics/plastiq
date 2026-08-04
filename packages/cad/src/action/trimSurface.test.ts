@@ -4,7 +4,7 @@ import { beforeAll, describe, expect, it } from "vitest";
 import { initOcct, type Occt } from "../oc/init.js";
 import { mm } from "../unit/index.js";
 import { makeBox } from "../solid/primitives.js";
-import { planeXY, offsetPlane } from "../env/plane.js";
+import { offsetPlane, planeYZ } from "../env/plane.js";
 import { trimSurface } from "./surface.js";
 
 let oc: Occt;
@@ -17,11 +17,7 @@ describe("trimSurface (§14)", () => {
     const box = makeBox(oc, mm(40), mm(30), mm(20));
     const full = box.volume();
     // Mid-plane parallel to YZ through x = 20 mm.
-    const plane = {
-      origin: [mm(20), 0, 0] as [number, number, number],
-      normal: [1, 0, 0] as [number, number, number],
-      xAxis: [0, 1, 0] as [number, number, number],
-    };
+    const plane = offsetPlane(planeYZ(), mm(20));
     const kept = trimSurface(oc, box, plane, { keep: "positive" });
     try {
       expect(kept.volume()).toBeCloseTo(full / 2, 7);
@@ -37,11 +33,7 @@ describe("trimSurface (§14)", () => {
 
   it("keep:negative retains the other half", () => {
     const box = makeBox(oc, mm(40), mm(30), mm(20));
-    const plane = {
-      origin: [mm(20), 0, 0] as [number, number, number],
-      normal: [1, 0, 0] as [number, number, number],
-      xAxis: [0, 1, 0] as [number, number, number],
-    };
+    const plane = offsetPlane(planeYZ(), mm(20));
     const pos = trimSurface(oc, box, plane, { keep: "positive" });
     const neg = trimSurface(oc, box, plane, { keep: "negative" });
     try {

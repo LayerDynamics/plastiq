@@ -29,13 +29,7 @@ import {
  * `local[m]` corresponds to the global control point at index `span - deg + m`.
  * `knots` is the full knot vector (the recurrence reads it by global index).
  * Returns the evaluated homogeneous point. */
-function deBoor1D(
-  deg: number,
-  knots: number[],
-  local: Vec4[],
-  span: number,
-  u: number,
-): Vec4 {
+function deBoor1D(deg: number, knots: number[], local: Vec4[], span: number, u: number): Vec4 {
   // Working copy so the caller's array is untouched.
   const d: Vec4[] = local.map((p) => [p[0], p[1], p[2], p[3]] as Vec4);
   for (let r = 1; r <= deg; r++) {
@@ -101,9 +95,7 @@ function dersBasisFuns(
   deg: number,
   knots: number[],
 ): [number[], number[]] {
-  const ndu: number[][] = Array.from({ length: deg + 1 }, () =>
-    new Array<number>(deg + 1).fill(0),
-  );
+  const ndu: number[][] = Array.from({ length: deg + 1 }, () => new Array<number>(deg + 1).fill(0));
   const left = new Array<number>(deg + 1).fill(0);
   const right = new Array<number>(deg + 1).fill(0);
   (ndu[0] as number[])[0] = 1;
@@ -130,8 +122,8 @@ function dersBasisFuns(
   const derivs = new Array<number>(deg + 1).fill(0);
   const a: number[][] = [new Array<number>(deg + 1).fill(0), new Array<number>(deg + 1).fill(0)];
   for (let r = 0; r <= deg; r++) {
-    let s1 = 0;
-    let s2 = 1;
+    const s1 = 0;
+    const s2 = 1;
     (a[0] as number[])[0] = 1;
     // k = 1 (first derivative only).
     let d = 0;
@@ -154,9 +146,6 @@ function dersBasisFuns(
       d += (a[s2] as number[])[1]! * (ndu[r] as number[])[pk]!;
     }
     derivs[r] = d;
-    const t = s1;
-    s1 = s2;
-    s2 = t;
   }
   // Multiply the first derivative by the factor `deg`.
   for (let j = 0; j <= deg; j++) derivs[j] = (derivs[j] ?? 0) * deg;
@@ -167,11 +156,7 @@ function dersBasisFuns(
 /** The exact rational surface point and its two first partial derivatives at
  * `(u, v)` (The NURBS Book, Eq. 4.20 quotient rule applied to the homogeneous
  * B-spline surface derivatives). */
-function surfaceDerivs(
-  surf: NurbsSurface,
-  u: number,
-  v: number,
-): { S: Vec3; Su: Vec3; Sv: Vec3 } {
+function surfaceDerivs(surf: NurbsSurface, u: number, v: number): { S: Vec3; Su: Vec3; Sv: Vec3 } {
   const nU = numU(surf);
   const nV = numV(surf);
   const uspan = findSpan(nU, surf.degU, u, surf.knotsU);
@@ -236,11 +221,7 @@ function surfaceDerivs(
 }
 
 function cross(a: Vec3, b: Vec3): Vec3 {
-  return [
-    a[1] * b[2] - a[2] * b[1],
-    a[2] * b[0] - a[0] * b[2],
-    a[0] * b[1] - a[1] * b[0],
-  ];
+  return [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
 }
 
 function lengthOf(a: Vec3): number {

@@ -33,6 +33,23 @@ describe("voxelStore — open/close lifecycle", () => {
     expect(s.tool).toBe("add");
     expect(s.past).toEqual([]);
     expect(s.future).toEqual([]);
+    expect(s.brushStrength).toBe(0.6);
+    expect(s.mirrorAxes).toEqual([false, false, false]);
+  });
+
+  it("stores brush dimensions and independent X/Y/Z mirror planes", () => {
+    useVoxelStore.getState().open(tinyDoc());
+    useVoxelStore.getState().setBrushRadius(2.5);
+    useVoxelStore.getState().setBrushStrength(-0.4);
+    useVoxelStore.getState().setMirrorAxis(0, true);
+    useVoxelStore.getState().setMirrorAxis(2, true);
+    const state = useVoxelStore.getState();
+    expect(state.brushRadius).toBe(2.5);
+    expect(state.brushStrength).toBe(-0.4);
+    expect(state.mirrorAxes).toEqual([true, false, true]);
+
+    state.close();
+    expect(useVoxelStore.getState().mirrorAxes).toEqual([false, false, false]);
   });
 
   it("close() clears the document and history", () => {

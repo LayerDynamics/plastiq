@@ -18,12 +18,7 @@ import type { VoxelDoc } from "../store/types.js";
 import { docToGrid } from "./doc.js";
 import { rayVoxelHit, rayWorkPlaneCell } from "./pick.js";
 import type { V3 } from "./grid.js";
-import {
-  applyBrushToDoc,
-  type BrushSpec,
-  type BrushType,
-  BRUSH_TYPES,
-} from "./brushes.js";
+import { applyBrushToDoc, type BrushSpec, type BrushType, BRUSH_TYPES } from "./brushes.js";
 import { computeDiff, revertDiff, applyDiff, isEmptyDiff, type SculptDiff } from "./sculptUndo.js";
 
 /**
@@ -66,7 +61,12 @@ function inBounds(doc: VoxelDoc, x: number, y: number, z: number): boolean {
  *           no voxel hit → the ground-plane cell under the ray (place on the floor).
  *  • erase: first occupied cell hit → that cell; no hit → nothing to erase.
  */
-export function sculptTarget(doc: VoxelDoc, tool: VoxelTool, origin: V3, dir: V3): SculptTarget | null {
+export function sculptTarget(
+  doc: VoxelDoc,
+  tool: VoxelTool,
+  origin: V3,
+  dir: V3,
+): SculptTarget | null {
   // Cell-tool path only; SDF brushes resolve a world centre via brushCenterAt.
   if (isBrushTool(tool)) return null;
   const grid = docToGrid(doc);
@@ -102,10 +102,17 @@ export function brushCenterAt(doc: VoxelDoc, origin: V3, dir: V3): V3 | null {
   const hit = rayVoxelHit(grid, origin, dir);
   const cell =
     hit?.cell ??
-    rayWorkPlaneCell(grid, origin, dir, { point: [doc.origin[0], doc.origin[1], doc.origin[2]], normal: [0, 0, 1] });
+    rayWorkPlaneCell(grid, origin, dir, {
+      point: [doc.origin[0], doc.origin[1], doc.origin[2]],
+      normal: [0, 0, 1],
+    });
   if (!cell) return null;
   const s = doc.voxelSize;
-  return [doc.origin[0] + (cell[0] + 0.5) * s, doc.origin[1] + (cell[1] + 0.5) * s, doc.origin[2] + (cell[2] + 0.5) * s];
+  return [
+    doc.origin[0] + (cell[0] + 0.5) * s,
+    doc.origin[1] + (cell[1] + 0.5) * s,
+    doc.origin[2] + (cell[2] + 0.5) * s,
+  ];
 }
 
 /** Occupancy edit for setCell: change `cells`, and for a v2 (SDF) doc flip the field sign too. */
@@ -142,8 +149,8 @@ function commitEdit(
 
 /** Default brush radius multiplier (× voxelSize) — a few cells wide. */
 export const DEFAULT_BRUSH_RADIUS_VOXELS = 3;
-/** Default brush strength multiplier (× voxelSize) for draw/clay/inflate. */
-export const DEFAULT_BRUSH_STRENGTH_VOXELS = 0.6;
+/** Default dimensionless brush strength multiplier for every SDF brush. */
+export const DEFAULT_BRUSH_STRENGTH = 0.6;
 
 export interface VoxelState {
   /** The open voxel document, or null when no voxel project is active. */
@@ -152,8 +159,10 @@ export interface VoxelState {
   tool: VoxelTool;
   /** World-space brush radius for SDF brushes (metres). */
   brushRadius: number;
-  /** Signed brush strength for SDF brushes (metres; negative subtracts). */
+  /** Signed dimensionless brush strength for SDF brushes (negative subtracts). */
   brushStrength: number;
+  /** Mirror each brush stroke across the sculpt volume's X/Y/Z centre planes. */
+  mirrorAxes: [boolean, boolean, boolean];
   /** Undo/redo as sparse diffs (edits only; open/close reset them). */
   past: SculptDiff[];
   future: SculptDiff[];
@@ -165,6 +174,7 @@ export interface VoxelState {
   setTool: (tool: VoxelTool) => void;
   setBrushRadius: (r: number) => void;
   setBrushStrength: (s: number) => void;
+  setMirrorAxis: (axis: 0 | 1 | 2, enabled: boolean) => void;
   /** Set the occupancy of one cell. Out-of-bounds or no-change edits are no-ops.
    * Pass `{ history: false }` for the follow-up cells of a drag-paint stroke so the
    * whole stroke folds into ONE undo step (the updateParams live-write pattern). */
@@ -175,7 +185,12 @@ export interface VoxelState {
   ) => void;
   /** Resolve + apply one sculpt ray (world-space origin/dir) with `tool`.
    * Returns the applied target, or null when the ray does nothing. */
-  sculptAt: (origin: V3, dir: V3, tool: VoxelTool, opts?: { history?: boolean }) => SculptTarget | null;
+  sculptAt: (
+    origin: V3,
+    dir: V3,
+    tool: VoxelTool,
+    opts?: { history?: boolean },
+  ) => SculptTarget | null;
   /** Apply an SDF brush (fully specified, incl. world centre). Returns the new doc or null. */
   applyBrush: (spec: BrushSpec, opts?: { history?: boolean }) => VoxelDoc | null;
   /** Resolve a brush ray to a world centre and apply `brush` there. Returns the new doc or null. */
@@ -194,18 +209,19 @@ export const useVoxelStore = create<VoxelState>((set, get) => ({
   doc: null,
   tool: "add",
   brushRadius: 0.006, // 3 × 2 mm default voxel
-  brushStrength: 0.0012,
+  brushStrength: DEFAULT_BRUSH_STRENGTH,
+  mirrorAxes: [false, false, false],
   past: [],
   future: [],
 
   open: (doc) => {
     const r = doc.voxelSize * DEFAULT_BRUSH_RADIUS_VOXELS;
-    const s = doc.voxelSize * DEFAULT_BRUSH_STRENGTH_VOXELS;
     set({
       doc: structuredClone(doc),
       tool: "add",
       brushRadius: r,
-      brushStrength: s,
+      brushStrength: DEFAULT_BRUSH_STRENGTH,
+      mirrorAxes: [false, false, false],
       past: [],
       future: [],
     });
@@ -216,7 +232,8 @@ export const useVoxelStore = create<VoxelState>((set, get) => ({
       doc: null,
       tool: "add",
       brushRadius: 0.006,
-      brushStrength: 0.0012,
+      brushStrength: DEFAULT_BRUSH_STRENGTH,
+      mirrorAxes: [false, false, false],
       past: [],
       future: [],
     }),
@@ -224,6 +241,12 @@ export const useVoxelStore = create<VoxelState>((set, get) => ({
   setTool: (tool) => set({ tool }),
   setBrushRadius: (r) => set({ brushRadius: Number.isFinite(r) && r > 0 ? r : get().brushRadius }),
   setBrushStrength: (s) => set({ brushStrength: Number.isFinite(s) ? s : get().brushStrength }),
+  setMirrorAxis: (axis, enabled) =>
+    set((state) => {
+      const mirrorAxes: [boolean, boolean, boolean] = [...state.mirrorAxes];
+      mirrorAxes[axis] = enabled;
+      return { mirrorAxes };
+    }),
 
   setCell: (cell, occupied, opts) =>
     set((s) => {
@@ -277,7 +300,11 @@ export const useVoxelStore = create<VoxelState>((set, get) => ({
       const diff = s.past[s.past.length - 1];
       if (!diff || !s.doc) return {};
       const prev = revertDiff(s.doc, diff);
-      return { doc: prev, past: s.past.slice(0, -1), future: [diff, ...s.future].slice(0, HISTORY_LIMIT) };
+      return {
+        doc: prev,
+        past: s.past.slice(0, -1),
+        future: [diff, ...s.future].slice(0, HISTORY_LIMIT),
+      };
     }),
 
   redo: () =>
@@ -285,6 +312,10 @@ export const useVoxelStore = create<VoxelState>((set, get) => ({
       const diff = s.future[0];
       if (!diff || !s.doc) return {};
       const next = applyDiff(s.doc, diff);
-      return { doc: next, past: [...s.past, diff].slice(-HISTORY_LIMIT), future: s.future.slice(1) };
+      return {
+        doc: next,
+        past: [...s.past, diff].slice(-HISTORY_LIMIT),
+        future: s.future.slice(1),
+      };
     }),
 }));
