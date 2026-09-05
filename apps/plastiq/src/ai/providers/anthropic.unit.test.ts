@@ -114,6 +114,77 @@ describe("R1.3 request building — tool_choice + thinking", () => {
     // no tools ⇒ nothing is forced ⇒ thinking is preserved
     expect(calls[0]!["thinking"]).toEqual({ type: "adaptive" });
   });
+
+  // Models listed in FORCED_TOOL_CHOICE_UNSUPPORTED 400 on `tool_choice: {type:"tool"|"any"}`
+  // whether or not thinking is on, so the forcing moves into the system prompt instead.
+  it("drops the forced tool_choice for claude-fable-5-1 and asks for the tool in the prompt", async () => {
+    const { calls, client } = captureClient();
+    const a = new AnthropicAdapter({
+      apiKey: "x",
+      model: "claude-fable-5-1",
+      thinking: true,
+      client,
+    });
+    await drain(
+      a.stream({ system: "SYSTEM", messages: msgs, tools, toolChoice: { tool: "build_part" } }),
+    );
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!["tool_choice"]).toBeUndefined();
+    expect(calls[0]!["tools"]).toBeDefined();
+    expect(calls[0]!["system"]).toBe(
+      "SYSTEM\n\nUse the `build_part` tool to answer; call it rather than replying in text.",
+    );
+    // the substituted turn still omits thinking — that is the request shape that was measured
+    expect(calls[0]!["thinking"]).toBeUndefined();
+  });
+
+  // The list is matched by PREFIX, so a dated snapshot id of the same model is covered too.
+  it("matches by prefix, and maps a dropped `required` to the any-tool sentence", async () => {
+    const { calls, client } = captureClient();
+    const a = new AnthropicAdapter({
+      apiKey: "x",
+      model: "claude-fable-5-1-20260901",
+      thinking: true,
+      client,
+    });
+    await drain(a.stream({ system: "SYSTEM", messages: msgs, tools, toolChoice: "required" }));
+    expect(calls[0]!["tool_choice"]).toBeUndefined();
+    expect(calls[0]!["system"]).toBe(
+      "SYSTEM\n\nRespond with a tool call rather than text whenever one of the tools applies.",
+    );
+  });
+
+  it("leaves `none` and unforced turns alone on an affected model", async () => {
+    const { calls, client } = captureClient();
+    const a = new AnthropicAdapter({
+      apiKey: "x",
+      model: "claude-fable-5-1",
+      thinking: true,
+      client,
+    });
+    await drain(a.stream({ system: "SYSTEM", messages: msgs, tools, toolChoice: "none" }));
+    expect(calls[0]!["tool_choice"]).toEqual({ type: "none" });
+    expect(calls[0]!["system"]).toBe("SYSTEM");
+    await drain(a.stream({ system: "SYSTEM", messages: msgs, tools }));
+    expect(calls[1]!["tool_choice"]).toBeUndefined();
+    expect(calls[1]!["system"]).toBe("SYSTEM");
+    expect(calls[1]!["thinking"]).toEqual({ type: "adaptive" });
+  });
+
+  it("leaves every other model's forced turn exactly as it was", async () => {
+    const { calls, client } = captureClient();
+    for (const model of ["claude-opus-4-8", "claude-sonnet-4-6", "claude-haiku-4-5"]) {
+      const a = new AnthropicAdapter({ apiKey: "x", model, thinking: true, client });
+      await drain(
+        a.stream({ system: "SYSTEM", messages: msgs, tools, toolChoice: { tool: "build_part" } }),
+      );
+    }
+    for (const call of calls) {
+      expect(call["tool_choice"]).toEqual({ type: "tool", name: "build_part" });
+      expect(call["system"]).toBe("SYSTEM");
+      expect(call["thinking"]).toBeUndefined();
+    }
+  });
 });
 
 describe("R1.3 streamed tool-call assembly", () => {
