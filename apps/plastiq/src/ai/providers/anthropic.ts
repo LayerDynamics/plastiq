@@ -29,6 +29,31 @@ export function toAnthropicTools(tools: { name: string; description: string; par
   }));
 }
 
+/** Models that reject a FORCED `tool_choice` outright — `any`/`tool` ⇒ 400 whether or not
+ * extended thinking is on. Dropping thinking (below) is not enough for these, so the forcing
+ * is expressed as an instruction instead.
+ *
+ * `claude-fable-5-1` is the only id the 400 was actually observed on. Dated snapshot ids of
+ * the same model (`claude-fable-5-1-YYYYMMDD`) are assumed to behave the same way — a GUESS
+ * that has not been tested; a distinct model that merely shares the prefix (`claude-fable-5-10`)
+ * is NOT matched. Add an id here only once the 400 has been seen on it. */
+const FORCED_TOOL_CHOICE_UNSUPPORTED = ["claude-fable-5-1"];
+
+function rejectsForcedToolChoice(model: string): boolean {
+  return FORCED_TOOL_CHOICE_UNSUPPORTED.some((m) => model === m || model.startsWith(`${m}-`));
+}
+
+/** The instruction that replaces a dropped forced `tool_choice`. It is a request, not a
+ * guarantee: the model may still answer in text. The named-tool sentence is Anthropic's
+ * documented substitute wording and is the one that was measured against claude-fable-5-1.
+ * The `any` sentence states the `required` contract unconditionally (a tool on every
+ * response) and was NOT exercised by that measurement. */
+function forceToolInstruction(tc: AToolChoice): string {
+  return tc.type === "tool"
+    ? `Use the \`${tc.name}\` tool to answer; call it rather than replying in text.`
+    : "Always respond with a tool call; do not reply in text.";
+}
+
 /** Map our tool-choice to Anthropic's `tool_choice`. `undefined`/`"auto"` ⇒ omit
  * (the model decides). `"required"` ⇒ `any` (force *some* tool); `"none"` ⇒ forbid
  * tools; `{ tool }` ⇒ force that specific tool. This is what makes `firstTool`
@@ -193,12 +218,29 @@ export class AnthropicAdapter implements ChatProvider {
 
   async *stream(req: ChatStreamRequest): AsyncIterable<StreamEvent> {
     // tool_choice is only valid alongside tools; omit it (auto) otherwise.
-    const toolChoice = req.tools.length > 0 ? toAnthropicToolChoice(req.toolChoice) : undefined;
+    const requested = req.tools.length > 0 ? toAnthropicToolChoice(req.toolChoice) : undefined;
+    // Newer models (see FORCED_TOOL_CHOICE_UNSUPPORTED) reject a forced tool_choice outright,
+    // so there is nothing to honor: drop it and state the requirement in the system prompt
+    // instead. Everywhere else the forcing is kept exactly as before.
+    const droppedForce =
+      requested &&
+      (requested.type === "any" || requested.type === "tool") &&
+      rejectsForcedToolChoice(this.model)
+        ? requested
+        : undefined;
+    const toolChoice = droppedForce ? undefined : requested;
+    const system = droppedForce
+      ? `${req.system}\n\n${forceToolInstruction(droppedForce)}`
+      : req.system;
     // Anthropic rejects extended thinking combined with FORCED tool use
     // (`any`/`tool` ⇒ 400). When a tool is forced (e.g. `firstTool` on turn 1),
     // honor the forced tool by dropping thinking for THIS turn only; unforced
-    // turns keep adaptive thinking.
-    const forcesTool = toolChoice?.type === "any" || toolChoice?.type === "tool";
+    // turns keep adaptive thinking. Note this reads `requested`, not `toolChoice`:
+    // a turn whose forcing was dropped above still drops thinking, so the request
+    // sent on the substitute path is the one that was actually verified against
+    // claude-fable-5-1 (no tool_choice AND no thinking block). Re-enabling adaptive
+    // thinking on that path may well work; it has not been measured, so we do not.
+    const forcesTool = requested?.type === "any" || requested?.type === "tool";
     const useThinking = this.thinking && !forcesTool;
     let stream: AsyncIterable<unknown>;
     try {
@@ -206,7 +248,7 @@ export class AnthropicAdapter implements ChatProvider {
         {
           model: this.model,
           max_tokens: this.maxTokens,
-          system: req.system,
+          system,
           messages: toAnthropicMessages(req.messages),
           ...(req.tools.length > 0 ? { tools: toAnthropicTools(req.tools) } : {}),
           ...(toolChoice ? { tool_choice: toolChoice } : {}),
