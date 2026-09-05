@@ -33,24 +33,25 @@ export function toAnthropicTools(tools: { name: string; description: string; par
  * extended thinking is on. Dropping thinking (below) is not enough for these, so the forcing
  * is expressed as an instruction instead.
  *
- * `claude-fable-5-1` is the only id the 400 was actually observed on. The prefix match is a
- * deliberate GUESS that dated snapshot ids of the same model behave the same way — it has not
- * been tested. Add an id here only once the 400 has been seen on it. */
+ * `claude-fable-5-1` is the only id the 400 was actually observed on. Dated snapshot ids of
+ * the same model (`claude-fable-5-1-YYYYMMDD`) are assumed to behave the same way — a GUESS
+ * that has not been tested; a distinct model that merely shares the prefix (`claude-fable-5-10`)
+ * is NOT matched. Add an id here only once the 400 has been seen on it. */
 const FORCED_TOOL_CHOICE_UNSUPPORTED = ["claude-fable-5-1"];
 
 function rejectsForcedToolChoice(model: string): boolean {
-  return FORCED_TOOL_CHOICE_UNSUPPORTED.some((m) => model.startsWith(m));
+  return FORCED_TOOL_CHOICE_UNSUPPORTED.some((m) => model === m || model.startsWith(`${m}-`));
 }
 
-/** The instruction that replaces a dropped forced `tool_choice` — Anthropic's documented
- * substitute wording, verbatim. It is a request, not a guarantee: the model may still answer
- * in text. The named-tool sentence is the one that was measured against claude-fable-5-1;
- * the `any` sentence is the documented wording for `tool_choice: {type:"any"}` and was NOT
- * exercised by that measurement. */
+/** The instruction that replaces a dropped forced `tool_choice`. It is a request, not a
+ * guarantee: the model may still answer in text. The named-tool sentence is Anthropic's
+ * documented substitute wording and is the one that was measured against claude-fable-5-1.
+ * The `any` sentence states the `required` contract unconditionally (a tool on every
+ * response) and was NOT exercised by that measurement. */
 function forceToolInstruction(tc: AToolChoice): string {
   return tc.type === "tool"
     ? `Use the \`${tc.name}\` tool to answer; call it rather than replying in text.`
-    : "Respond with a tool call rather than text whenever one of the tools applies.";
+    : "Always respond with a tool call; do not reply in text.";
 }
 
 /** Map our tool-choice to Anthropic's `tool_choice`. `undefined`/`"auto"` ⇒ omit

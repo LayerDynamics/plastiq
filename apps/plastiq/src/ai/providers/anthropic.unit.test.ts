@@ -138,8 +138,8 @@ describe("R1.3 request building — tool_choice + thinking", () => {
     expect(calls[0]!["thinking"]).toBeUndefined();
   });
 
-  // The list is matched by PREFIX, so a dated snapshot id of the same model is covered too.
-  it("matches by prefix, and maps a dropped `required` to the any-tool sentence", async () => {
+  // A dated snapshot id of a listed model (`<id>-YYYYMMDD`) is covered too.
+  it("matches a dated snapshot id, and maps a dropped `required` to the any-tool sentence", async () => {
     const { calls, client } = captureClient();
     const a = new AnthropicAdapter({
       apiKey: "x",
@@ -150,7 +150,7 @@ describe("R1.3 request building — tool_choice + thinking", () => {
     await drain(a.stream({ system: "SYSTEM", messages: msgs, tools, toolChoice: "required" }));
     expect(calls[0]!["tool_choice"]).toBeUndefined();
     expect(calls[0]!["system"]).toBe(
-      "SYSTEM\n\nRespond with a tool call rather than text whenever one of the tools applies.",
+      "SYSTEM\n\nAlways respond with a tool call; do not reply in text.",
     );
   });
 
@@ -173,7 +173,12 @@ describe("R1.3 request building — tool_choice + thinking", () => {
 
   it("leaves every other model's forced turn exactly as it was", async () => {
     const { calls, client } = captureClient();
-    for (const model of ["claude-opus-4-8", "claude-sonnet-4-6", "claude-haiku-4-5"]) {
+    for (const model of [
+      "claude-opus-4-8",
+      "claude-sonnet-4-6",
+      "claude-haiku-4-5",
+      "claude-fable-5-10",
+    ]) {
       const a = new AnthropicAdapter({ apiKey: "x", model, thinking: true, client });
       await drain(
         a.stream({ system: "SYSTEM", messages: msgs, tools, toolChoice: { tool: "build_part" } }),
